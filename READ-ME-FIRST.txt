@@ -1,0 +1,101 @@
+═══════════════════════════════════════════════════════════════════
+WIN WIN DIALER — v6.4 FINAL (recordings re-added)
+═══════════════════════════════════════════════════════════════════
+
+This is the complete, verified build with ALL features:
+  ✓ Dialer + Twilio click-to-call
+  ✓ 5-stage Pipeline (Hot/Underwriting/Offer/Contract/Closed)
+  ✓ Quick Qualifier popup (first hot/warm tag only)
+  ✓ Cash Buyers tab + email blast (Resend)
+  ✓ SMS drip campaigns + STOP keyword + inbox
+  ✓ Zillow + Street View quick links per card
+  ✓ CSV import with VA Notes + Recording URL auto-detection
+  ✓ Owner last name auto-derived
+  ✓ Audio recording uploads — tap link, opens in device player
+  ✓ 30-day auto-deletion of expired recordings
+
+
+═══════════════════════════════════════════════════════════════════
+DEPLOY STEPS (GitHub → Netlify)
+═══════════════════════════════════════════════════════════════════
+
+STEP 1: Run the database schema (one time)
+──────────────────────────────────────────
+  • Open Supabase → SQL Editor → New query
+  • Open supabase-schema-COMBINED.sql in any text editor
+  • Copy entire contents → paste into SQL Editor → Run
+  • Safe to re-run — uses IF NOT EXISTS everywhere
+
+  This also creates a private Storage bucket called "va-recordings"
+  (25 MB upload cap, audio mime types only).
+
+STEP 2: Upload to your GitHub repo
+──────────────────────────────────
+  • Go to your winwin-dialer repo on GitHub
+  • RECOMMENDED: delete all existing files first to ensure no stale
+    code lingers (use "..." menu on each file → Delete file → commit)
+  • Then "Add file" → "Upload files"
+  • Drag the CONTENTS of this folder (not the folder itself):
+        - READ-ME-FIRST.txt
+        - README.md
+        - index.html
+        - netlify.toml
+        - netlify/  (folder containing functions/api.js)
+        - sample-list.csv
+        - supabase-schema-COMBINED.sql
+  • Verify "netlify/" folder appears in the upload list, with
+    "functions/api.js" inside
+  • Commit message: "v6.4 full upload with recordings"
+  • Click "Commit changes"
+
+STEP 3: Netlify auto-deploys (~30-60 sec)
+─────────────────────────────────────────
+  • Watch the Deploys tab in Netlify → wait for "Published"
+  • Functions tab → should show "1 function" (api)
+
+STEP 4: Verify
+──────────────
+  • https://winwincalltoclose.netlify.app/api?action=ping
+    → should return: {"error":"Unauthorized"}
+  • Open https://winwincalltoclose.netlify.app → sign in
+
+
+═══════════════════════════════════════════════════════════════════
+HOW THE RECORDINGS WORK
+═══════════════════════════════════════════════════════════════════
+
+  Upload:
+    • On any dialer card, tap "📋 VA / pre-existing notes" to expand
+    • Tap "🎙 Upload recording" — pick an audio file from device
+    • 25 MB cap, common formats supported (mp3, m4a, wav, ogg, webm)
+
+  Playback:
+    • Tap the recording's filename
+    • Opens in the device's default media player
+      (iOS: QuickTime/Files · Android: default audio app · Desktop: browser audio)
+
+  Storage:
+    • Files live in private Supabase Storage
+    • Signed URLs expire 1hr after page load — refresh card to renew
+    • Auto-deletes after 30 days
+    • Manual delete via the ✕ button next to each recording
+
+  Cleanup:
+    • Runs automatically once every 24 hours when anyone opens the app
+    • Tracked in localStorage so it doesn't spam the server
+
+
+═══════════════════════════════════════════════════════════════════
+REQUIRED NETLIFY ENV VARS (should already be set from before)
+═══════════════════════════════════════════════════════════════════
+  ACCESS_PASSWORD                team shared password
+  SUPABASE_URL                   Supabase project URL
+  SUPABASE_SERVICE_ROLE_KEY      Supabase API → Legacy keys
+  TWILIO_ACCOUNT_SID             starts with AC...
+  TWILIO_API_KEY_SID             starts with SK...
+  TWILIO_API_KEY_SECRET          paired with the SID
+  TWILIO_AUTH_TOKEN              from Twilio dashboard
+  RESEND_API_KEY                 starts with re_... (for buyer emails)
+  RESEND_FROM_EMAIL              e.g. Tony <tony@yourdomain.com>
+  RESEND_REPLY_TO                optional
+═══════════════════════════════════════════════════════════════════
