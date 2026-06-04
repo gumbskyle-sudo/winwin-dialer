@@ -368,6 +368,13 @@ body.view-pipeline header .callerid{display:none}
   margin-left:6px;vertical-align:middle;letter-spacing:.3px;
 }
 
+/* ── VA lead badge ─────────────────────────────────────────── */
+.va-lead-tag{
+  display:inline-block;background:#dc2626;color:#fff;
+  font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;
+  margin-left:6px;vertical-align:middle;letter-spacing:.4px;
+}
+
 /* ── Property research links (Zillow + Street View) ─────────── */
 .research-links{
   display:flex;gap:6px;margin-top:5px;flex-wrap:wrap;
@@ -1245,7 +1252,7 @@ function renderPage(){
       <div class="card${called?' called':''}" data-id="${escapeHtml(p.id)}" style="${style}">
         <div class="card-top">
           <div class="card-info">
-            <div class="owners">${escapeHtml(p.owners||'(no name)')}${p.owner_last_name?` <span class="last-name-tag">${escapeHtml(p.owner_last_name)}</span>`:''}</div>
+            <div class="owners">${escapeHtml(p.owners||'(no name)')}${p.owner_last_name?` <span class="last-name-tag">${escapeHtml(p.owner_last_name)}</span>`:''}${p.va_lead?` <span class="va-lead-tag">VA</span>`:''}</div>
             <div class="property">${escapeHtml(p.property_address||'')}</div>
             ${p.mailing_address ? `<div class="mailing">Mail: ${escapeHtml(p.mailing_address)}</div>` : ''}
             ${p.property_address ? `<div class="research-links">
@@ -1770,11 +1777,13 @@ function autoMap(headers){
   });
   return {
     id:                find(/^id$/, /property\s*id/, /record\s*id/, /^uid$/),
-    owners:            find(/^owners?$/, /full\s*name/, /owner\s*name/, /^name$/, /first\s*name/, /^seller\s*name$/),
-    propertyAddress:   find(/property\s*address/, /site\s*address/, /^address$/, /^street$/, /property\s*street/),
+    owners:            find(/^seller\s*name$/, /^sellers?\s*name$/, /^owners?$/, /full\s*name/, /owner\s*name/, /^name$/),
+    propertyAddress:   find(/^property\s*address$/, /property\s*address/, /site\s*address/, /^address$/, /^street$/),
     mailingAddress:    find(/mailing\s*address/, /mail\s*address/, /owner\s*address/),
-    vaNotes:           find(/^va\s*notes?$/, /^notes?$/, /additional\s*notes?/, /pre.?call\s*notes?/, /^my\s*notes?$/),
-    recording:         find(/^recording$/, /call\s*recording/, /recording\s*url/, /recording\s*link/, /audio\s*url/),
+    email:             find(/^sellers?\s*email$/, /^email$/, /e-mail/),
+    vaNotes:           find(/^additional\s*notes?$/, /^va\s*notes?$/, /^notes?$/, /pre.?call\s*notes?/),
+    recording:         find(/^call\s*recording$/, /^recording$/, /recording\s*url/, /recording\s*link/, /audio\s*url/),
+    listName:          find(/^list\s*name$/, /^list$/, /batch/, /campaign/, /source/),
     phones: phoneCols,
   };
 }
@@ -1794,9 +1803,10 @@ function showCsvPreview(){
     <div style="font-weight:600">ID column</div>${sel('id', m.id)}
     <div style="font-weight:600">Owners</div>${sel('owners', m.owners)}
     <div style="font-weight:600">Property address</div>${sel('property', m.propertyAddress)}
-    <div style="font-weight:600">Mailing address</div>${sel('mailing', m.mailingAddress)}
+    <div style="font-weight:600">Email</div>${sel('email', m.email)}
     <div style="font-weight:600">VA / Pre-call notes</div>${sel('vanotes', m.vaNotes)}
     <div style="font-weight:600">Recording URL</div>${sel('recording', m.recording)}
+    <div style="font-weight:600">List name</div>${sel('listname', m.listName)}
     ${phoneRows}
     <div></div><div><button class="btn-ghost" id="addPhoneCol" style="font-size:12px;padding:5px 10px">+ Add phone column</button></div>
   `;
@@ -1827,9 +1837,10 @@ $('uploadGo').addEventListener('click', async () => {
   const idCol      = $('map-id').value;
   const ownersCol  = $('map-owners').value;
   const propCol    = $('map-property').value;
-  const mailCol    = $('map-mailing').value;
+  const emailCol   = $('map-email').value;
   const vaNotesCol = $('map-vanotes').value;
   const recordingCol = $('map-recording').value;
+  const listNameCol  = $('map-listname').value;
   const phoneCols  = Array.from(document.querySelectorAll('.map-phone-num')).map(s => s.value);
   const typeCols   = Array.from(document.querySelectorAll('.map-phone-type')).map(s => s.value);
   if(!phoneCols.some(Boolean)){ toast('Select at least one phone column','err'); return; }
@@ -1851,9 +1862,11 @@ $('uploadGo').addEventListener('click', async () => {
       id: idCol && r[idCol] ? String(r[idCol]) : ('row-'+(i+1)),
       owners: ownersCol ? r[ownersCol] : '',
       property_address: propCol ? r[propCol] : '',
-      mailing_address: mailCol ? r[mailCol] : '',
+      email: emailCol ? r[emailCol] : '',
       va_notes: vaNotesCol ? r[vaNotesCol] : '',
       recording_url: recordingCol ? r[recordingCol] : '',
+      list_name: listNameCol ? r[listNameCol] : '',
+      va_lead: true,
       phones,
     });
   });
