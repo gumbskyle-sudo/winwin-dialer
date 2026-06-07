@@ -1057,6 +1057,16 @@ function toast(msg, kind){
 }
 function escapeHtml(s){ return String(s==null?'':s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
+
+// Convert Google Drive share links to direct open URLs
+function convertDriveUrl(url){
+  if(!url) return url;
+  const m = url.match(/drive\.google\.com\/file\/d\/([^\/\?]+)/);
+  if(m) return 'https://drive.google.com/file/d/'+m[1]+'/view?usp=sharing';
+  const m2 = url.match(/drive\.google\.com\/open\?id=([^&]+)/);
+  if(m2) return 'https://drive.google.com/file/d/'+m2[1]+'/view?usp=sharing';
+  return url;
+}
 // ── API client ──────────────────────────────────────────────────
 async function api(action, opts){
   if(!password) throw new Error('Not signed in');
@@ -1319,10 +1329,11 @@ function renderPage(){
             🎙 Call Recording <span class="toggle-arrow">▼</span>
           </button>
           <div class="pre-call-content hide">
-            <audio controls style="width:100%;margin-top:4px">
-              <source src="${escapeHtml(p.recording_url)}">
-              <a href="${escapeHtml(p.recording_url)}" target="_blank">Open recording ↗</a>
-            </audio>
+            <a href="${escapeHtml(convertDriveUrl(p.recording_url))}" target="_blank" rel="noopener"
+               style="display:block;width:100%;padding:11px 14px;background:#059669;color:#fff;border-radius:8px;font-size:14px;font-weight:700;text-align:center;text-decoration:none;margin-top:2px">
+              ▶ Open &amp; Listen
+            </a>
+            <div style="font-size:11px;color:#6b7280;margin-top:6px;word-break:break-all">${escapeHtml(p.recording_url)}</div>
           </div>
         </div>` : ''}
         <div class="pre-call-section qualifier-inline">
