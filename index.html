@@ -1323,19 +1323,26 @@ function renderPage(){
           </button>
           <div class="pre-call-content hide">${escapeHtml(lead.va_notes)}</div>
         </div>` : ''}
-        ${(lead.recording_url||'').trim() ? `
         <div class="pre-call-section">
           <button class="pre-call-toggle" onclick="this.nextElementSibling.classList.toggle('hide');this.classList.toggle('open')">
             🎙 Call Recording <span class="toggle-arrow">▼</span>
           </button>
           <div class="pre-call-content hide">
-            <a href="${escapeHtml(convertDriveUrl(lead.recording_url))}" target="_blank" rel="noopener"
-               style="display:block;width:100%;padding:11px 14px;background:#059669;color:#fff;border-radius:8px;font-size:14px;font-weight:700;text-align:center;text-decoration:none;margin-top:2px">
+            <input type="url" class="recording-url-input" data-recurl data-id="${escapeHtml(p.id)}"
+              placeholder="Paste recording URL here…"
+              value="${escapeHtml(lead.recording_url||'')}"
+              style="width:100%;padding:9px 10px;border:1.5px solid #d1d5db;border-radius:7px;font-size:14px;margin-bottom:8px">
+            ${(lead.recording_url||'').trim() ? `
+            <a href="${escapeHtml(convertDriveUrl(lead.recording_url))}" target="_blank" rel="noopener" id="rec-link-${escapeHtml(p.id)}"
+               style="display:block;width:100%;padding:11px 14px;background:#059669;color:#fff;border-radius:8px;font-size:14px;font-weight:700;text-align:center;text-decoration:none;margin-bottom:6px">
               ▶ Open &amp; Listen
-            </a>
-            <div style="font-size:11px;color:#6b7280;margin-top:6px;word-break:break-all">${escapeHtml(lead.recording_url)}</div>
+            </a>` : `<a href="#" target="_blank" rel="noopener" id="rec-link-${escapeHtml(p.id)}"
+               style="display:none;width:100%;padding:11px 14px;background:#059669;color:#fff;border-radius:8px;font-size:14px;font-weight:700;text-align:center;text-decoration:none;margin-bottom:6px">
+              ▶ Open &amp; Listen
+            </a>`}
+            <button class="iq-save-btn" data-saverecurl="${escapeHtml(p.id)}" style="background:#1f6feb">Save Recording URL</button>
           </div>
-        </div>` : ''}
+        </div>
         <div class="pre-call-section qualifier-inline">
           <button class="pre-call-toggle" onclick="this.nextElementSibling.classList.toggle('hide');this.classList.toggle('open')">
             ✅ Qualifier Sheet <span class="toggle-arrow">▼</span>
@@ -3037,6 +3044,33 @@ document.getElementById('qualSave').addEventListener('click', async () => {
     toast('Save failed: '+e.message, 'err');
     saveBtn.disabled = false;
     saveBtn.textContent = 'Save qualifier';
+  }
+});
+
+// ── Save recording URL from card input ──────────────────────────
+document.addEventListener('click', async e => {
+  const btn = e.target.closest('[data-saverecurl]');
+  if(!btn) return;
+  const pid = btn.dataset.saverecurl;
+  const input = btn.closest('.pre-call-content').querySelector('[data-recurl]');
+  const url = (input?.value || '').trim();
+  btn.disabled = true; btn.textContent = 'Saving…';
+  try {
+    await api('update-lead', {method:'POST', body:{ propertyId: pid, recordingUrl: url }});
+    const p = properties.find(x => x.id === pid);
+    if(p && p.lead) p.lead.recording_url = url;
+    // Update the open link
+    const link = document.getElementById('rec-link-'+pid);
+    if(link){
+      if(url){ link.href = convertDriveUrl(url); link.style.display='block'; }
+      else { link.style.display='none'; }
+    }
+    toast('Recording URL saved ✓','ok');
+    btn.textContent = 'Saved ✓';
+    setTimeout(()=>{ btn.disabled=false; btn.textContent='Save Recording URL'; }, 2000);
+  } catch(err){
+    toast('Save failed: '+err.message,'err');
+    btn.disabled=false; btn.textContent='Save Recording URL';
   }
 });
 
