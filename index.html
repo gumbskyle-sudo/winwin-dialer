@@ -1323,17 +1323,17 @@ function renderPage(){
           </button>
           <div class="pre-call-content hide">${escapeHtml(lead.va_notes)}</div>
         </div>` : ''}
-        ${p.recording_url ? `
+        ${(lead.recording_url||'').trim() ? `
         <div class="pre-call-section">
           <button class="pre-call-toggle" onclick="this.nextElementSibling.classList.toggle('hide');this.classList.toggle('open')">
             🎙 Call Recording <span class="toggle-arrow">▼</span>
           </button>
           <div class="pre-call-content hide">
-            <a href="${escapeHtml(convertDriveUrl(p.recording_url))}" target="_blank" rel="noopener"
+            <a href="${escapeHtml(convertDriveUrl(lead.recording_url))}" target="_blank" rel="noopener"
                style="display:block;width:100%;padding:11px 14px;background:#059669;color:#fff;border-radius:8px;font-size:14px;font-weight:700;text-align:center;text-decoration:none;margin-top:2px">
               ▶ Open &amp; Listen
             </a>
-            <div style="font-size:11px;color:#6b7280;margin-top:6px;word-break:break-all">${escapeHtml(p.recording_url)}</div>
+            <div style="font-size:11px;color:#6b7280;margin-top:6px;word-break:break-all">${escapeHtml(lead.recording_url)}</div>
           </div>
         </div>` : ''}
         <div class="pre-call-section qualifier-inline">
