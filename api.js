@@ -560,7 +560,7 @@ exports.handler = async (event) => {
         const LIMIT = 50000;
         const { json: props }  = await supa(`/properties?select=id,owners,owner_last_name,property_address,mailing_address,imported_at&order=imported_at.asc,id.asc&limit=${LIMIT}`);
         const { json: phones } = await supa(`/phones?select=property_id,e164,display,type&order=property_id.asc,id.asc&limit=${LIMIT}`);
-        const { json: leads }  = await supa(`/leads?select=property_id,called,lead_status,notes,va_notes,sms_consent,sms_cell,recording_url&limit=${LIMIT}`);
+        const { json: leads }  = await supa(`/leads?select=property_id,called,lead_status,notes,va_notes,recording_url,sms_consent,sms_cell&limit=${LIMIT}`);
         const phonesBy = {};
         for (const p of phones || []) (phonesBy[p.property_id] ||= []).push(p);
         const leadsBy = {};
@@ -681,15 +681,11 @@ exports.handler = async (event) => {
         for (const p of deduped) {
           const va = (p.va_notes || '').trim();
           const rec = (p.recording_url || '').trim();
-          let combinedNotes = va;
-          if (rec) {
-            const recLine = `\n\n🎙 Call recording: ${rec}`;
-            combinedNotes = combinedNotes ? combinedNotes + recLine : recLine.trimStart();
-          }
-          if (combinedNotes) {
+          if (va || rec) {
             leadRows.push({
               property_id: p.id,
-              va_notes: combinedNotes,
+              va_notes: va,
+              recording_url: rec,
               updated_at: new Date().toISOString(),
             });
           }
@@ -1404,4 +1400,3 @@ exports.handler = async (event) => {
     return err(e.message || String(e), e.code && e.code >= 400 && e.code < 600 ? e.code : 500);
   }
 };
-
