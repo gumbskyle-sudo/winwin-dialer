@@ -374,6 +374,17 @@ body.view-pipeline header .callerid{display:none}
   font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;
   margin-left:6px;vertical-align:middle;letter-spacing:.4px;
 }
+/* ── VA notes preview (visible before mark as called) ───────── */
+.va-notes-preview{
+  background:#fefce8;border:1px solid #fde047;border-radius:8px;
+  padding:8px 10px;font-size:13px;color:#713f12;margin-bottom:8px;
+  line-height:1.5;white-space:pre-wrap;word-break:break-word;
+}
+/* ── Recording player preview ───────────────────────────────── */
+.recording-preview{
+  background:#f0fdf4;border:1px solid #86efac;border-radius:8px;
+  padding:8px 10px;margin-bottom:8px;
+}
 
 /* ── Property research links (Zillow + Street View) ─────────── */
 .research-links{
@@ -1252,7 +1263,7 @@ function renderPage(){
       <div class="card${called?' called':''}" data-id="${escapeHtml(p.id)}" style="${style}">
         <div class="card-top">
           <div class="card-info">
-            <div class="owners">${escapeHtml(p.owners||'(no name)')}${p.owner_last_name?` <span class="last-name-tag">${escapeHtml(p.owner_last_name)}</span>`:''}${p.va_lead?` <span class="va-lead-tag">VA</span>`:''}</div>
+            <div class="owners">${escapeHtml(p.owners||'(no name)')}${p.va_lead?` <span class="va-lead-tag">VA</span>`:''}</div>
             <div class="property">${escapeHtml(p.property_address||'')}</div>
             ${p.mailing_address ? `<div class="mailing">Mail: ${escapeHtml(p.mailing_address)}</div>` : ''}
             ${p.property_address ? `<div class="research-links">
@@ -1265,6 +1276,8 @@ function renderPage(){
             <span class="idx-num">#${idx}</span>
           </div>
         </div>
+        ${(lead.va_notes||'').trim() ? `<div class="va-notes-preview">📋 <strong>VA Notes:</strong> ${escapeHtml(lead.va_notes)}</div>` : ''}
+        ${p.recording_url ? `<div class="recording-preview"><span style="font-size:11px;color:#6b7280;font-weight:600">🎙 Call Recording</span><audio controls style="width:100%;margin-top:4px"><source src="${escapeHtml(p.recording_url)}"><a href="${escapeHtml(p.recording_url)}" target="_blank">Open recording</a></audio></div>` : ''}
         <div class="phones">${phoneHtml || '<div class="muted" style="font-size:12px">No phone numbers</div>'}</div>
         <button class="mark-btn${called?' is-called':''}" data-mark data-id="${escapeHtml(p.id)}">${called?'✓ Called — tap to undo':'Mark as called'}</button>
         <div class="call-info">
