@@ -560,7 +560,7 @@ exports.handler = async (event) => {
         const LIMIT = 50000;
         const { json: props }  = await supa(`/properties?select=id,owners,owner_last_name,property_address,mailing_address,imported_at&order=imported_at.asc,id.asc&limit=${LIMIT}`);
         const { json: phones } = await supa(`/phones?select=property_id,e164,display,type&order=property_id.asc,id.asc&limit=${LIMIT}`);
-        const { json: leads }  = await supa(`/leads?select=property_id,called,lead_status,notes,va_notes,sms_consent,sms_cell&limit=${LIMIT}`);
+        const { json: leads }  = await supa(`/leads?select=property_id,called,lead_status,notes,va_notes,sms_consent,sms_cell,recording_url&limit=${LIMIT}`);
         const phonesBy = {};
         for (const p of phones || []) (phonesBy[p.property_id] ||= []).push(p);
         const leadsBy = {};
@@ -1404,3 +1404,4 @@ exports.handler = async (event) => {
     return err(e.message || String(e), e.code && e.code >= 400 && e.code < 600 ? e.code : 500);
   }
 };
+
