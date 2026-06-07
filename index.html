@@ -385,6 +385,36 @@ body.view-pipeline header .callerid{display:none}
   background:#f0fdf4;border:1px solid #86efac;border-radius:8px;
   padding:8px 10px;margin-bottom:8px;
 }
+/* ── Pre-call collapsible sections ─────────────────────────── */
+.pre-call-section{margin-bottom:8px}
+.pre-call-toggle{
+  width:100%;text-align:left;background:#f3f4f6;border:1px solid #d1d5db;
+  border-radius:8px;padding:9px 12px;font-size:13px;font-weight:600;
+  color:#1a1d23;cursor:pointer;display:flex;justify-content:space-between;align-items:center;
+}
+.pre-call-toggle.open{border-color:#d97706;background:#fffbeb;color:#92400e}
+.qualifier-inline .pre-call-toggle.open{border-color:#059669;background:#ecfdf5;color:#065f46}
+.toggle-arrow{font-size:10px;transition:transform .2s}
+.pre-call-toggle.open .toggle-arrow{transform:rotate(180deg)}
+.pre-call-content{
+  background:#fff;border:1px solid #e5e7eb;border-top:none;
+  border-radius:0 0 8px 8px;padding:10px 12px;font-size:13px;
+  color:#374151;white-space:pre-wrap;word-break:break-word;line-height:1.6;
+}
+/* ── Inline qualifier form ───────────────────────────────────── */
+.iq-field{margin-bottom:10px}
+.iq-field label{display:block;font-size:11px;font-weight:600;color:#78350f;margin-bottom:3px}
+.iq-field input,.iq-field select,.iq-field textarea{
+  width:100%;padding:8px 10px;border:1.5px solid #d1d5db;border-radius:7px;
+  font-size:14px;background:#fff;color:#1a1d23;
+}
+.iq-field textarea{min-height:56px;resize:vertical}
+.iq-save-btn{
+  width:100%;padding:10px;background:#059669;color:#fff;border:none;
+  border-radius:8px;font-size:14px;font-weight:700;cursor:pointer;margin-top:4px;
+}
+.iq-save-btn:hover{background:#047857}
+.iq-save-btn:disabled{opacity:.5}
 
 /* ── Property research links (Zillow + Street View) ─────────── */
 .research-links{
@@ -1276,8 +1306,48 @@ function renderPage(){
             <span class="idx-num">#${idx}</span>
           </div>
         </div>
-        ${(lead.va_notes||'').trim() ? `<div class="va-notes-preview">📋 <strong>VA Notes:</strong> ${escapeHtml(lead.va_notes)}</div>` : ''}
-        ${p.recording_url ? `<div class="recording-preview"><span style="font-size:11px;color:#6b7280;font-weight:600">🎙 Call Recording</span><audio controls style="width:100%;margin-top:4px"><source src="${escapeHtml(p.recording_url)}"><a href="${escapeHtml(p.recording_url)}" target="_blank">Open recording</a></audio></div>` : ''}
+        ${(lead.va_notes||'').trim() ? `
+        <div class="pre-call-section">
+          <button class="pre-call-toggle" onclick="this.nextElementSibling.classList.toggle('hide');this.classList.toggle('open')">
+            📋 VA Notes <span class="toggle-arrow">▼</span>
+          </button>
+          <div class="pre-call-content hide">${escapeHtml(lead.va_notes)}</div>
+        </div>` : ''}
+        ${p.recording_url ? `
+        <div class="pre-call-section">
+          <button class="pre-call-toggle" onclick="this.nextElementSibling.classList.toggle('hide');this.classList.toggle('open')">
+            🎙 Call Recording <span class="toggle-arrow">▼</span>
+          </button>
+          <div class="pre-call-content hide">
+            <audio controls style="width:100%;margin-top:4px">
+              <source src="${escapeHtml(p.recording_url)}">
+              <a href="${escapeHtml(p.recording_url)}" target="_blank">Open recording ↗</a>
+            </audio>
+          </div>
+        </div>` : ''}
+        <div class="pre-call-section qualifier-inline">
+          <button class="pre-call-toggle" onclick="this.nextElementSibling.classList.toggle('hide');this.classList.toggle('open')">
+            ✅ Qualifier Sheet <span class="toggle-arrow">▼</span>
+          </button>
+          <div class="pre-call-content hide">
+            <div class="inline-qual-form" data-qual-pid="${escapeHtml(p.id)}">
+              ${QUICK_QUAL_FIELDS.map(f => {
+                const id = `iq_${escapeHtml(p.id)}_${f.key}`;
+                const val = (lead[f.key]||'');
+                let input = '';
+                if(f.type==='select'){
+                  input=`<select id="${id}" data-iqkey="${f.key}" data-pid="${escapeHtml(p.id)}">${f.options.map(o=>`<option value="${escapeHtml(o)}"${o===val?' selected':''}>${o||'— pick one —'}</option>`).join('')}</select>`;
+                } else if(f.type==='textarea'){
+                  input=`<textarea id="${id}" data-iqkey="${f.key}" data-pid="${escapeHtml(p.id)}" placeholder="${escapeHtml(f.placeholder||'')}">${escapeHtml(val)}</textarea>`;
+                } else {
+                  input=`<input type="${f.type}" id="${id}" data-iqkey="${f.key}" data-pid="${escapeHtml(p.id)}" placeholder="${escapeHtml(f.placeholder||'')}" value="${escapeHtml(val)}">`;
+                }
+                return `<div class="iq-field"><label>${escapeHtml(f.label)}${f.required?'<span style="color:#dc2626;margin-left:2px">*</span>':''}</label>${input}</div>`;
+              }).join('')}
+              <button class="iq-save-btn" data-iqsave="${escapeHtml(p.id)}">Save Qualifier</button>
+            </div>
+          </div>
+        </div>
         <div class="phones">${phoneHtml || '<div class="muted" style="font-size:12px">No phone numbers</div>'}</div>
         <button class="mark-btn${called?' is-called':''}" data-mark data-id="${escapeHtml(p.id)}">${called?'✓ Called — tap to undo':'Mark as called'}</button>
         <div class="call-info">
@@ -2956,6 +3026,33 @@ document.getElementById('qualSave').addEventListener('click', async () => {
     toast('Save failed: '+e.message, 'err');
     saveBtn.disabled = false;
     saveBtn.textContent = 'Save qualifier';
+  }
+});
+
+// ── Inline qualifier save (on card before mark as called) ───────
+document.addEventListener('click', async e => {
+  const btn = e.target.closest('[data-iqsave]');
+  if(!btn) return;
+  const pid = btn.dataset.iqsave;
+  const p = properties.find(x => x.id === pid);
+  if(!p) return;
+  const form = btn.closest('.inline-qual-form');
+  const inputs = form.querySelectorAll('[data-iqkey]');
+  const qualData = {};
+  inputs.forEach(inp => { qualData[inp.dataset.iqkey] = inp.value; });
+  btn.disabled = true; btn.textContent = 'Saving…';
+  try {
+    // Merge into lead data and save
+    await api('update-lead', {method:'POST', body:{ propertyId: pid, ...qualData }});
+    // Update local
+    if(!p.lead) p.lead = {};
+    Object.assign(p.lead, qualData);
+    toast('Qualifier saved ✓','ok');
+    btn.textContent = 'Saved ✓';
+    setTimeout(()=>{ btn.disabled=false; btn.textContent='Save Qualifier'; },2000);
+  } catch(err) {
+    toast('Save failed: '+err.message,'err');
+    btn.disabled=false; btn.textContent='Save Qualifier';
   }
 });
 
