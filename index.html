@@ -61,6 +61,16 @@ header{background:#1a1d23;color:#fff;padding:12px 14px;position:sticky;top:0;z-i
 .callerid .dot.warn{background:#f59e0b}
 
 main{padding:12px;max-width:720px;margin:0 auto;padding-bottom:100px}
+.search-bar-wrap{position:relative;margin-bottom:12px}
+.search-bar-wrap input{
+  width:100%;padding:11px 36px 11px 14px;border:1.5px solid #d1d5db;border-radius:10px;
+  font-size:15px;background:#fff;color:#1a1d23;
+}
+.search-bar-wrap input:focus{outline:none;border-color:#1f6feb}
+.search-bar-wrap button{
+  position:absolute;right:8px;top:50%;transform:translateY(-50%);
+  background:none;border:none;color:#9ca3af;font-size:16px;cursor:pointer;padding:4px 8px;
+}
 
 /* ── Pagination ── */
 .page-nav{display:flex;justify-content:space-between;align-items:center;padding:10px 4px;font-size:14px;font-weight:500}
@@ -783,6 +793,10 @@ body.view-inbox header .callerid{display:none}
 </header>
 
 <main>
+  <div class="search-bar-wrap">
+    <input type="text" id="leadSearch" placeholder="🔍 Search by name, address, or phone…" autocomplete="off">
+    <button id="leadSearchClear" class="hide">✕</button>
+  </div>
   <div id="cards"></div>
   <div class="page-nav" id="pageNav"></div>
 
@@ -1157,6 +1171,7 @@ function showApp(){
 
 // ── State ───────────────────────────────────────────────────────
 let properties = [];   // [{id, owners, property_address, mailing_address, phones, lead}]
+let savedContracts = []; // [{url, filename}] — uploaded contracts available to send
 let ownedNumbers = [];
 let activeProfileId   = parseInt(localStorage.getItem(LS.profileId), 10) || null;
 let activeProfileName = localStorage.getItem(LS.profileName) || '';
@@ -1168,6 +1183,19 @@ let openDealData = null;
 let logRows = [];
 const PAGE_SIZE = 20;
 let page = 1;
+let searchQuery = '';
+
+function getFilteredProperties(){
+  if(!searchQuery.trim()) return properties;
+  const q = searchQuery.trim().toLowerCase();
+  return properties.filter(p => {
+    const owners = (p.owners||'').toLowerCase();
+    const addr = (p.property_address||'').toLowerCase();
+    const phones = (p.phones||[]).map(ph => (ph.e164||'').replace(/\D/g,'')).join(' ');
+    const qDigits = q.replace(/\D/g,'');
+    return owners.includes(q) || addr.includes(q) || (qDigits.length>=3 && phones.includes(qDigits));
+  });
+}
 let activeCall = null;
 const noteSaveTimers = {};
 
@@ -1278,10 +1306,21 @@ function renderPage(){
     $('pageNav').innerHTML = '';
     return;
   }
-  const totalPages = Math.max(1, Math.ceil(properties.length / PAGE_SIZE));
+  const filtered = getFilteredProperties();
+  if(searchQuery.trim() && !filtered.length){
+    $('cards').innerHTML = `
+      <div class="empty-state">
+        <div class="icon">🔍</div>
+        <h2>No matches</h2>
+        <p>No leads found for "${escapeHtml(searchQuery)}"</p>
+      </div>`;
+    $('pageNav').innerHTML = '';
+    return;
+  }
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   page = Math.max(1, Math.min(page, totalPages));
   const start = (page-1) * PAGE_SIZE;
-  const slice = properties.slice(start, start+PAGE_SIZE);
+  const slice = filtered.slice(start, start+PAGE_SIZE);
 
   const out = [];
   slice.forEach((p, i) => {
@@ -1366,6 +1405,67 @@ function renderPage(){
             </div>
           </div>
         </div>
+        <div class="pre-call-section">
+          <button class="pre-call-toggle" onclick="this.nextElementSibling.classList.toggle('hide');this.classList.toggle('open')">
+            📄 Send Contract <span class="toggle-arrow">▼</span>
+          </button>
+          <div class="pre-call-content hide">
+            <div class="contract-send-form" data-contract-pid="${escapeHtml(p.id)}">
+              <div class="iq-field">
+                <label>To Email</label>
+                <input type="email" data-contract-email placeholder="Seller's email" value="${escapeHtml(p.email||lead.email||'')}">
+              </div>
+              <div class="iq-field">
+                <label>Subject</label>
+                <input type="text" data-contract-subject value="Contract for ${escapeHtml(p.property_address||'your property')}">
+              </div>
+              <div class="iq-field">
+                <label>Message</label>
+                <textarea data-contract-message rows="4">Hi ${escapeHtml(p.owners||'there')},\n\nPlease find your contract via the link below.\n\nLet me know if you have any questions.\n\nBest regards</textarea>
+              </div>
+              <div class="iq-field">
+                <label>Contract PDF</label>
+                <div style="display:flex;gap:8px;align-items:center">
+                  <select data-contract-select style="flex:1;padding:8px 10px;border:1.5px solid #d1d5db;border-radius:7px;font-size:14px">
+                    <option value="">— pick an uploaded contract —</option>
+                  </select>
+                  <label style="background:#f3f4f6;border:1.5px solid #d1d5db;border-radius:7px;padding:8px 10px;font-size:13px;cursor:pointer;white-space:nowrap">
+                    + Upload new
+                    <input type="file" accept=".pdf,.doc,.docx" data-contract-file style="display:none">
+                  </label>
+                </div>
+                <div data-contract-filename style="font-size:11px;color:#6b7280;margin-top:4px"></div>
+              </div>
+              <button class="iq-save-btn" data-sendcontract="${escapeHtml(p.id)}" style="background:#7c3aed">📤 Send Contract</button>
+            </div>
+          </div>
+        </div>
+        <div class="pre-call-section">
+          <button class="pre-call-toggle" onclick="this.nextElementSibling.classList.toggle('hide');this.classList.toggle('open')">
+            ✍️ Send Purchase &amp; Sale Agreement (e-sign) <span class="toggle-arrow">▼</span>
+          </button>
+          <div class="pre-call-content hide">
+            <div class="esign-form" data-esign-pid="${escapeHtml(p.id)}" data-esign-template="PURCHASE_SALE_TEMPLATE_ID">
+              <div class="iq-field">
+                <label>Seller Name</label>
+                <input type="text" data-esign-name value="${escapeHtml(p.owners||'')}">
+              </div>
+              <div class="iq-field">
+                <label>Seller Email</label>
+                <input type="email" data-esign-email placeholder="Seller's email" value="${escapeHtml(p.email||lead.email||'')}">
+              </div>
+              <div class="iq-field">
+                <label>Purchase Price</label>
+                <input type="text" data-esign-price placeholder="$0">
+              </div>
+              <div class="iq-field">
+                <label>Closing Date</label>
+                <input type="date" data-esign-closing>
+              </div>
+              <button class="iq-save-btn" data-sendesign="${escapeHtml(p.id)}" style="background:#0891b2">✍️ Send for Signature</button>
+            </div>
+          </div>
+        </div>
         <div class="phones">${phoneHtml || '<div class="muted" style="font-size:12px">No phone numbers</div>'}</div>
         <button class="mark-btn${called?' is-called':''}" data-mark data-id="${escapeHtml(p.id)}">${called?'✓ Called — tap to undo':'Mark as called'}</button>
         <div class="call-info">
@@ -1383,7 +1483,7 @@ function renderPage(){
 
   $('pageNav').innerHTML = `
     <button id="prevPage"${page<=1?' disabled':''}>← Prev</button>
-    <span class="page-label">Page ${page} of ${totalPages} · ${start+1}–${Math.min(start+slice.length, properties.length)} of ${properties.length}</span>
+    <span class="page-label">Page ${page} of ${totalPages} · ${start+1}–${Math.min(start+slice.length, filtered.length)} of ${filtered.length}</span>
     <button id="nextPage"${page>=totalPages?' disabled':''}>Next →</button>`;
   $('prevPage')?.addEventListener('click', ()=>{ page--; renderPage(); window.scrollTo({top:0,behavior:'smooth'}); });
   $('nextPage')?.addEventListener('click', ()=>{ page++; renderPage(); window.scrollTo({top:0,behavior:'smooth'}); });
@@ -1393,6 +1493,27 @@ function renderPage(){
 $('hideCalled').addEventListener('change', e => {
   document.body.classList.toggle('hide-called', e.target.checked);
 });
+
+// ── Search bar ────────────────────────────────────────────────
+let searchDebounce = null;
+$('leadSearch').addEventListener('input', e => {
+  clearTimeout(searchDebounce);
+  const val = e.target.value;
+  $('leadSearchClear').classList.toggle('hide', !val);
+  searchDebounce = setTimeout(() => {
+    searchQuery = val;
+    page = 1;
+    renderPage();
+  }, 200);
+});
+$('leadSearchClear').addEventListener('click', () => {
+  $('leadSearch').value = '';
+  $('leadSearchClear').classList.add('hide');
+  searchQuery = '';
+  page = 1;
+  renderPage();
+});
+
 document.addEventListener('click', e => {
   // Mark called
   const mark = e.target.closest('[data-mark]');
@@ -1976,7 +2097,8 @@ $('uploadGo').addEventListener('click', async () => {
   btn.disabled = true; btn.textContent = 'Importing…';
   try {
     const r = await api('import-properties', {method:'POST', body:{properties: out, replace}});
-    const dupMsg = r.dupesCollapsed ? ` · ${r.dupesCollapsed} duplicates merged` : '';
+    const totalDupes = (r.dupesCollapsed||0) + (r.dupeAddressesSkipped||0);
+    const dupMsg = totalDupes ? ` · ${totalDupes} duplicate${totalDupes===1?'':'s'} merged` : '';
     toast(`Imported ${r.imported} properties · ${r.phones} phones${dupMsg}`,'ok');
     $('uploadModal').classList.remove('open');
     csvParsed = null;
@@ -2252,13 +2374,38 @@ function renderDealDetail(){
   // Activity (notes + calls)
   body.appendChild(renderActivity(openDealData.notes, openDealData.calls));
 
-  // Wire up field auto-save (on blur)
+  // Wire up field auto-save — saves as you type (debounced) AND on blur,
+  // so a value is never lost if you click "next stage" before tabbing away.
+  // Also updates the in-memory deal object immediately so the field never
+  // appears to "reset" even before the network save completes.
+  const dealFieldKeyMap = {
+    owners:'owners', ownerLastName:'owner_last_name', sourceList:'source_list',
+    propertyAddress:'property_address', mailingAddress:'mailing_address',
+    bed:'bed', bath:'bath', sqft:'sqft', yearBuilt:'year_built',
+    arv:'arv', repairs:'repairs', sellerAsking:'seller_asking', yourOffer:'your_offer',
+    maoPercent:'mao_percent', purchaseClosingCosts:'purchase_closing_costs',
+    holdingMonthly:'holding_monthly', holdingMonths:'holding_months',
+    sellingCostsPct:'selling_costs_pct', resalePrice:'resale_price',
+    assignmentFee:'assignment_fee', buyerClosingCosts:'buyer_closing_costs',
+  };
   body.querySelectorAll('[data-deal-field]').forEach(inp => {
+    inp.addEventListener('input', () => {
+      const key = dealFieldKeyMap[inp.dataset.dealField];
+      if(key && openDealData) openDealData.deal[key] = inp.value;
+      saveFieldDebounced(inp.dataset.dealField, inp.value);
+    });
     inp.addEventListener('blur', () => saveField(inp.dataset.dealField, inp.value));
   });
   body.querySelectorAll('[data-fin-field]').forEach(inp => {
+    const handler = () => {
+      const key = dealFieldKeyMap[inp.dataset.finField];
+      if(key && openDealData) openDealData.deal[key] = inp.value;
+      saveFieldDebounced(inp.dataset.finField, inp.value);
+      recalcFinancials();
+    };
+    inp.addEventListener('input', handler);
+    inp.addEventListener('change', handler);
     inp.addEventListener('blur', () => saveField(inp.dataset.finField, inp.value));
-    inp.addEventListener('input', () => recalcFinancials());
   });
 }
 
@@ -2293,13 +2440,14 @@ function renderFinancials(d){
 
 function recalcFinancials(){
   if(!openDealData) return;
-  const get = k => {
+  const get = (k, fallback=null) => {
     const inp = document.querySelector(`[data-fin-field="${k}"]`);
-    const v = inp ? parseFloat(inp.value) : NaN;
-    return isFinite(v) ? v : null;
+    if(!inp) return fallback;
+    const v = parseFloat(inp.value);
+    return isFinite(v) ? v : fallback;
   };
-  const arv = get('arv'), repairs = get('repairs') || 0;
-  const maoPct = get('maoPercent') || 70;
+  const arv = get('arv', 0), repairs = get('repairs', 0);
+  const maoPct = get('maoPercent', 70);
   const maoEl = $('maoVal');
   if(maoEl){
     if(arv){
@@ -2309,11 +2457,11 @@ function recalcFinancials(){
   }
   const profitEl = $('profitVal');
   if(profitEl){
-    const offer = get('yourOffer') || 0;
-    const purchaseCC = get('purchaseClosingCosts') || 0;
-    const holdMo = get('holdingMonthly') || 0, holdN = get('holdingMonths') || 0;
-    const sellPct = get('sellingCostsPct') || 0;
-    const resale = get('resalePrice') || arv || 0;
+    const offer = get('yourOffer', 0);
+    const purchaseCC = get('purchaseClosingCosts', 0);
+    const holdMo = get('holdingMonthly', 0), holdN = get('holdingMonths', 0);
+    const sellPct = get('sellingCostsPct', 0);
+    const resale = get('resalePrice', 0) || arv || 0;
     const sellingCosts = resale * (sellPct/100);
     const profit = resale - offer - repairs - purchaseCC - (holdMo*holdN) - sellingCosts;
     profitEl.textContent = isFinite(profit) && resale ? '$'+Math.round(profit).toLocaleString() : '—';
@@ -2495,6 +2643,7 @@ async function changeStage(newStage){
   if(!openDealData) return;
   const prev = openDealData.deal.stage;
   if(prev === newStage) return;
+  await flushPendingFieldSaves();
   try {
     await api('update-deal',{method:'POST', body:{
       id: openDealId, stage: newStage, _previousStage: prev, actingProfileId: activeProfileId,
@@ -2513,11 +2662,28 @@ async function changeDealType(t){
   } catch(e){ toast('Failed: '+e.message,'err'); }
 }
 const fieldSaveTimers = {};
+const pendingFieldValues = {}; // field -> latest value not yet confirmed saved
 async function saveField(field, value){
   if(!openDealData) return;
+  delete pendingFieldValues[field];
   try {
     await api('update-deal',{method:'POST', body:{id:openDealId, [field]:value}});
   } catch(e){ toast('Save failed: '+e.message,'err'); }
+}
+function saveFieldDebounced(field, value){
+  pendingFieldValues[field] = value;
+  clearTimeout(fieldSaveTimers[field]);
+  fieldSaveTimers[field] = setTimeout(() => saveField(field, value), 600);
+}
+// Flush any pending (not-yet-saved) field edits immediately — call this
+// before navigating away from a deal (e.g. changing stage) so nothing is lost.
+async function flushPendingFieldSaves(){
+  const entries = Object.entries(pendingFieldValues);
+  if(!entries.length) return;
+  await Promise.all(entries.map(([field, value]) => {
+    clearTimeout(fieldSaveTimers[field]);
+    return saveField(field, value);
+  }));
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -2772,9 +2938,12 @@ async function loadDealBuyerSends(){
     container.innerHTML = '<div style="font-size:10px;color:#6b7280;letter-spacing:1px;font-weight:600;margin-bottom:6px">SENT TO</div>';
     j.sends.forEach(s => {
       const buyer = allBuyers.find(b => b.id === s.buyer_id);
-      const row = el(`<div style="font-size:12px;padding:5px 0;border-bottom:1px solid #f3f4f6;display:flex;justify-content:space-between">
-        <span>${escapeHtml(buyer?buyer.name:'Buyer #'+s.buyer_id)} <span style="color:#9ca3af;font-size:10px">${escapeHtml(s.status)}</span></span>
-        <span style="color:#9ca3af;font-size:11px">${formatRelTime(new Date(s.created_at))}</span>
+      const row = el(`<div style="font-size:12px;padding:8px 0;border-bottom:1px solid #f3f4f6">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <span>${escapeHtml(buyer?buyer.name:'Buyer #'+s.buyer_id)} <span style="color:#9ca3af;font-size:10px">${escapeHtml(s.status)}</span></span>
+          <span style="color:#9ca3af;font-size:11px">${formatRelTime(new Date(s.created_at))}</span>
+        </div>
+        <button class="btn-ghost" data-send-assignment="${s.buyer_id}" style="font-size:11px;padding:5px 10px;margin-top:6px">✍️ Send Assignment Agreement</button>
       </div>`);
       container.appendChild(row);
     });
@@ -3044,6 +3213,152 @@ document.getElementById('qualSave').addEventListener('click', async () => {
     toast('Save failed: '+e.message, 'err');
     saveBtn.disabled = false;
     saveBtn.textContent = 'Save qualifier';
+  }
+});
+
+// ── Contract: populate dropdowns when section opens ─────────────
+document.addEventListener('click', e => {
+  const toggle = e.target.closest('.pre-call-toggle');
+  if(!toggle) return;
+  const content = toggle.nextElementSibling;
+  const sel = content?.querySelector('[data-contract-select]');
+  if(!sel) return;
+  // Populate with saved contracts
+  sel.innerHTML = '<option value="">— pick an uploaded contract —</option>' +
+    savedContracts.map(c => `<option value="${escapeHtml(c.url)}">${escapeHtml(c.filename)}</option>`).join('');
+});
+
+// ── Contract: handle new file selection ─────────────────────────
+document.addEventListener('change', async e => {
+  const fileInput = e.target.closest('[data-contract-file]');
+  if(!fileInput || !fileInput.files[0]) return;
+  const file = fileInput.files[0];
+  const form = fileInput.closest('.contract-send-form');
+  const filenameEl = form.querySelector('[data-contract-filename]');
+  filenameEl.textContent = 'Uploading…';
+  try {
+    const base64 = await new Promise((res,rej) => {
+      const r = new FileReader();
+      r.onload = () => res(r.result.split(',')[1]);
+      r.onerror = rej;
+      r.readAsDataURL(file);
+    });
+    const result = await api('upload-contract', {method:'POST', body:{
+      dataBase64: base64,
+      filename: file.name,
+      mimeType: file.type || 'application/pdf',
+    }});
+    // Save to local list and select it
+    savedContracts.push({ url: result.url, filename: result.filename });
+    const sel = form.querySelector('[data-contract-select]');
+    const opt = document.createElement('option');
+    opt.value = result.url; opt.textContent = result.filename; opt.selected = true;
+    sel.appendChild(opt);
+    filenameEl.textContent = '✓ ' + result.filename;
+    toast('Contract uploaded ✓','ok');
+  } catch(err) {
+    filenameEl.textContent = 'Upload failed: ' + err.message;
+    toast('Upload failed: '+err.message,'err');
+  }
+});
+
+// ── Contract: send email ─────────────────────────────────────────
+document.addEventListener('click', async e => {
+  const btn = e.target.closest('[data-sendcontract]');
+  if(!btn) return;
+  const pid = btn.dataset.sendcontract;
+  const form = btn.closest('.contract-send-form');
+  const toEmail      = form.querySelector('[data-contract-email]').value.trim();
+  const subject      = form.querySelector('[data-contract-subject]').value.trim();
+  const message      = form.querySelector('[data-contract-message]').value.trim();
+  const contractUrl  = form.querySelector('[data-contract-select]').value;
+  const p = properties.find(x => x.id === pid);
+  if(!toEmail)       { toast('Please enter the seller\'s email','err'); return; }
+  if(!contractUrl)   { toast('Please select or upload a contract','err'); return; }
+  btn.disabled = true; btn.textContent = 'Sending…';
+  try {
+    await api('send-contract', {method:'POST', body:{
+      toEmail,
+      subject,
+      message,
+      contractUrl,
+      sellerName: p?.owners || 'there',
+      propertyAddress: p?.property_address || '',
+    }});
+    toast('Contract sent to ' + toEmail + ' ✓','ok');
+    btn.textContent = 'Sent ✓';
+    setTimeout(()=>{ btn.disabled=false; btn.textContent='📤 Send Contract'; }, 3000);
+  } catch(err) {
+    toast('Send failed: '+err.message,'err');
+    btn.disabled=false; btn.textContent='📤 Send Contract';
+  }
+});
+
+// ── Send Assignment Agreement to a winning buyer ─────────────────
+document.addEventListener('click', async e => {
+  const btn = e.target.closest('[data-send-assignment]');
+  if(!btn) return;
+  const buyerId = btn.dataset.sendAssignment;
+  const buyer = allBuyers.find(b => b.id === buyerId);
+  if(!buyer){ toast('Buyer not found','err'); return; }
+  if(!buyer.email){ toast('This buyer has no email on file','err'); return; }
+  const ASSIGNMENT_TEMPLATE_ID = 'ASSIGNMENT_TEMPLATE_ID'; // ← replace with real SignWell template ID
+  if(ASSIGNMENT_TEMPLATE_ID === 'ASSIGNMENT_TEMPLATE_ID'){
+    toast('No SignWell template ID configured yet — add it in the code once your template is ready','err');
+    return;
+  }
+  const d = openDealData?.deal;
+  btn.disabled = true; btn.textContent = 'Sending…';
+  try {
+    await api('send-for-signature', {method:'POST', body:{
+      templateId: ASSIGNMENT_TEMPLATE_ID,
+      signerName: buyer.name,
+      signerEmail: buyer.email,
+      documentName: `Assignment Agreement — ${buyer.name}`,
+      subject: 'Please sign your Assignment Agreement',
+      fields: { property_address: d?.property_address || '', assignment_fee: d?.assignment_fee || '' },
+    }});
+    toast('Assignment agreement sent ✓ — ' + buyer.email,'ok');
+    btn.textContent = 'Sent ✓';
+    setTimeout(()=>{ btn.disabled=false; btn.textContent='✍️ Send Assignment Agreement'; }, 3000);
+  } catch(err) {
+    toast('Send failed: '+err.message,'err');
+    btn.disabled=false; btn.textContent='✍️ Send Assignment Agreement';
+  }
+});
+
+// ── Send for e-signature (Purchase & Sale Agreement) ─────────────
+document.addEventListener('click', async e => {
+  const btn = e.target.closest('[data-sendesign]');
+  if(!btn) return;
+  const form = btn.closest('.esign-form');
+  const templateId = form.dataset.esignTemplate;
+  const name  = form.querySelector('[data-esign-name]').value.trim();
+  const email = form.querySelector('[data-esign-email]').value.trim();
+  const price = form.querySelector('[data-esign-price]').value.trim();
+  const closing = form.querySelector('[data-esign-closing]').value.trim();
+  if(!email){ toast("Please enter the seller's email",'err'); return; }
+  if(!name){ toast("Please enter the seller's name",'err'); return; }
+  if(!templateId || templateId === 'PURCHASE_SALE_TEMPLATE_ID'){
+    toast('No SignWell template ID configured yet — add it in the code once your template is ready','err');
+    return;
+  }
+  btn.disabled = true; btn.textContent = 'Sending…';
+  try {
+    await api('send-for-signature', {method:'POST', body:{
+      templateId,
+      signerName: name,
+      signerEmail: email,
+      documentName: `Purchase & Sale Agreement — ${name}`,
+      subject: 'Please sign your Purchase & Sale Agreement',
+      fields: { purchase_price: price, closing_date: closing },
+    }});
+    toast('Sent for signature ✓ — ' + email,'ok');
+    btn.textContent = 'Sent ✓';
+    setTimeout(()=>{ btn.disabled=false; btn.textContent='✍️ Send for Signature'; }, 3000);
+  } catch(err) {
+    toast('Send failed: '+err.message,'err');
+    btn.disabled=false; btn.textContent='✍️ Send for Signature';
   }
 });
 
