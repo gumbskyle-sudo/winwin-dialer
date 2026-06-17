@@ -437,6 +437,8 @@ body.view-pipeline header .callerid{display:none}
 }
 .research-link.zillow{background:#dcfce7;color:#166534;border:1px solid #bbf7d0}
 .research-link.zillow:hover{background:#bbf7d0}
+.research-link.realtor{background:#fee2e2;color:#991b1b;border:1px solid #fecaca}
+.research-link.realtor:hover{background:#fecaca}
 .research-link.maps{background:#dbeafe;color:#1e40af;border:1px solid #bfdbfe}
 .research-link.maps:hover{background:#bfdbfe}
 
@@ -1347,6 +1349,7 @@ function renderPage(){
             ${p.mailing_address ? `<div class="mailing">Mail: ${escapeHtml(p.mailing_address)}</div>` : ''}
             ${p.property_address ? `<div class="research-links">
               <a href="https://www.zillow.com/homes/${encodeURIComponent(p.property_address)}_rb/" target="_blank" rel="noopener" class="research-link zillow">🏠 Zillow</a>
+              <a href="https://www.realtor.com/realestateandhomes-search/${encodeURIComponent(p.property_address.replace(/,/g,'').replace(/\s+/g,'_'))}" target="_blank" rel="noopener" class="research-link realtor">🏡 Realtor.com</a>
               <a href="https://www.google.com/maps/place/?q=${encodeURIComponent(p.property_address)}" target="_blank" rel="noopener" class="research-link maps">🗺 Street View</a>
             </div>` : ''}
           </div>
@@ -2431,7 +2434,7 @@ function renderFinancials(d){
       `}
     </div>
     <div class="dd-calc" id="maoCalc"><span class="lbl">MAO</span><span class="val" id="maoVal">—</span></div>
-    ${isFlip ? '<div class="dd-calc good" id="profitCalc"><span class="lbl">Projected profit</span><span class="val" id="profitVal">—</span></div>' : ''}
+    <div class="dd-calc good" id="profitCalc"><span class="lbl">${isFlip ? 'Projected profit' : 'Assignment profit'}</span><span class="val" id="profitVal">—</span></div>
   </div>`);
   // Initial calc
   setTimeout(() => recalcFinancials(), 0);
@@ -2457,14 +2460,24 @@ function recalcFinancials(){
   }
   const profitEl = $('profitVal');
   if(profitEl){
-    const offer = get('yourOffer', 0);
-    const purchaseCC = get('purchaseClosingCosts', 0);
-    const holdMo = get('holdingMonthly', 0), holdN = get('holdingMonths', 0);
-    const sellPct = get('sellingCostsPct', 0);
-    const resale = get('resalePrice', 0) || arv || 0;
-    const sellingCosts = resale * (sellPct/100);
-    const profit = resale - offer - repairs - purchaseCC - (holdMo*holdN) - sellingCosts;
-    profitEl.textContent = isFinite(profit) && resale ? '$'+Math.round(profit).toLocaleString() : '—';
+    const isFlip = openDealData.deal.deal_type === 'flip';
+    if(isFlip){
+      // Fix & flip profit: resale price minus purchase price, repairs, holding, closing, and selling costs
+      const offer = get('yourOffer', 0);
+      const purchaseCC = get('purchaseClosingCosts', 0);
+      const holdMo = get('holdingMonthly', 0), holdN = get('holdingMonths', 0);
+      const sellPct = get('sellingCostsPct', 0);
+      const resale = get('resalePrice', 0) || arv || 0;
+      const sellingCosts = resale * (sellPct/100);
+      const profit = resale - offer - repairs - purchaseCC - (holdMo*holdN) - sellingCosts;
+      profitEl.textContent = isFinite(profit) && resale ? '$'+Math.round(profit).toLocaleString() : '—';
+    } else {
+      // Assignment profit: the assignment fee you collect, minus your own buyer-side closing costs
+      const assignmentFee = get('assignmentFee', 0);
+      const buyerCC = get('buyerClosingCosts', 0);
+      const profit = assignmentFee - buyerCC;
+      profitEl.textContent = (assignmentFee || buyerCC) ? '$'+Math.round(profit).toLocaleString() : '—';
+    }
   }
 }
 
@@ -2485,7 +2498,7 @@ function renderComps(comps, deal){
     </div>
   </div>`);
   const list = card.querySelector('#compList');
-  // Always include auto-generated Zillow link for this property
+  // Always include auto-generated Zillow + Realtor.com links for this property
   const propAddr = deal.property_address;
   if(propAddr){
     const z = el(`<div class="dd-link-row">
@@ -2493,6 +2506,11 @@ function renderComps(comps, deal){
       <a href="https://www.zillow.com/homes/${encodeURIComponent(propAddr)}_rb/" target="_blank" rel="noopener">Zillow page for this property →</a>
     </div>`);
     list.appendChild(z);
+    const r = el(`<div class="dd-link-row">
+      <i class="ti ti-link icon" aria-hidden="true"></i>
+      <a href="https://www.realtor.com/realestateandhomes-search/${encodeURIComponent(propAddr.replace(/,/g,'').replace(/\s+/g,'_'))}" target="_blank" rel="noopener">Realtor.com page for this property →</a>
+    </div>`);
+    list.appendChild(r);
   }
   if(!comps.length && !propAddr){
     list.innerHTML = '<div class="muted" style="font-size:12px;padding:4px 0">No comps yet</div>';
