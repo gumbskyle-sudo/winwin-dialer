@@ -329,6 +329,65 @@ async function handleTwilioInbound(event) {
   return { statusCode: 200, headers: { 'Content-Type': 'text/xml' }, body: '<?xml version="1.0" encoding="UTF-8"?><Response></Response>' };
 }
 
+// ── Twilio inbound VOICE webhook (callback forwarding) ─────────
+// When a seller calls back the Twilio number, look up the most recent
+// outbound call placed TO that seller's number, find which team member
+// (profile) placed it and what cell number it was bridged to, and forward
+// the inbound call straight to that person. Falls back to a configured
+// default number if no matching history is found.
+const TEAM_FORWARD_NUMBERS = {
+  // name -> E.164 cell number (kept here as a simple, no-DB-required map;
+  // profiles.phone in Supabase is the source of truth when present —
+  // this is just the fallback / seed list)
+  Kyle: '+15162734255',
+  Paul: '+15162707064',
+  Mark: '+12022130776',
+};
+
+async function handleTwilioVoiceInbound(event) {
+  const params = parseFormEncoded(event.body || '');
+  if (process.env.TWILIO_AUTH_TOKEN) {
+    if (!verifyTwilioSignature(event, params)) {
+      return { statusCode: 403, body: 'invalid signature' };
+    }
+  }
+  const from = params.From || ''; // the seller's number calling in
+  const to   = params.To   || ''; // your Twilio number they called
+
+  let forwardTo = null;
+
+  try {
+    // Find the most recent outbound call we placed TO this caller's number.
+    const { json: calls } = await supa(
+      `/calls?to_number=eq.${encodeURIComponent(from)}&select=profile_id,from_number,started_at&order=started_at.desc&limit=1`
+    );
+    const lastCall = Array.isArray(calls) && calls[0];
+    if (lastCall && lastCall.profile_id) {
+      const { json: profiles } = await supa(`/profiles?id=eq.${encodeURIComponent(lastCall.profile_id)}&select=name,phone`);
+      const profile = Array.isArray(profiles) && profiles[0];
+      if (profile && profile.phone) {
+        forwardTo = profile.phone;
+      } else if (profile && profile.name && TEAM_FORWARD_NUMBERS[profile.name]) {
+        forwardTo = TEAM_FORWARD_NUMBERS[profile.name];
+      }
+    }
+  } catch (e) { /* fall through to default below */ }
+
+  if (!forwardTo) {
+    // No match found — use the configured default forwarding number.
+    forwardTo = await getAppConfig('default_voice_forward_number');
+  }
+
+  if (!forwardTo) {
+    // Nothing configured at all — let the caller know rather than hanging up silently.
+    const twiml = '<?xml version="1.0" encoding="UTF-8"?><Response><Say>Thanks for calling. No one is available to take your call right now. Please leave a message after the tone.</Say><Record maxLength="120" /></Response>';
+    return { statusCode: 200, headers: { 'Content-Type': 'text/xml' }, body: twiml };
+  }
+
+  const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Dial callerId="${escapeXml(to)}" timeout="25" answerOnBridge="true"><Number>${escapeXml(forwardTo)}</Number></Dial></Response>`;
+  return { statusCode: 200, headers: { 'Content-Type': 'text/xml' }, body: twiml };
+}
+
 // ── Twilio status callback (delivery status updates) ────────
 async function handleTwilioStatus(event) {
   const params = parseFormEncoded(event.body || '');
@@ -525,6 +584,9 @@ exports.handler = async (event) => {
   // really came from Twilio.
   if (action === 'twilio-inbound') {
     return await handleTwilioInbound(event);
+  }
+  if (action === 'twilio-voice-inbound') {
+    return await handleTwilioVoiceInbound(event);
   }
   if (action === 'twilio-status') {
     return await handleTwilioStatus(event);
@@ -894,12 +956,20 @@ exports.handler = async (event) => {
         if (!name) return err('name required');
         if (name.length > 40) return err('name too long');
         try {
-          const { json } = await supa('/profiles', 'POST', [{ name }]);
+          const row = { name };
+          if (body.phone) row.phone = body.phone;
+          const { json } = await supa('/profiles', 'POST', [row]);
           return ok({ profile: json[0] });
         } catch (e) {
           if (String(e.message).match(/duplicate|unique/i)) return err('That name is already taken', 409);
           throw e;
         }
+      }
+
+      case 'update-profile-phone': {
+        if (!body.profileId) return err('profileId required');
+        await supa(`/profiles?id=eq.${encodeURIComponent(body.profileId)}`, 'PATCH', { phone: body.phone || '' });
+        return ok({ ok: true });
       }
 
       // ════════════════════════════════════════════════════════
