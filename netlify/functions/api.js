@@ -345,6 +345,18 @@ const TEAM_FORWARD_NUMBERS = {
 };
 
 async function handleTwilioVoiceInbound(event) {
+  // Top-level guard: any unhandled error returns valid TwiML so Twilio
+  // never plays its generic "callback error" message.
+  try {
+    return await _handleTwilioVoiceInboundInner(event);
+  } catch (e) {
+    console.error('handleTwilioVoiceInbound error:', e.message);
+    const twiml = '<?xml version="1.0" encoding="UTF-8"?><Response><Say voice="alice">Sorry, we are having a technical issue. Please try again in a moment.</Say></Response>';
+    return { statusCode: 200, headers: { 'Content-Type': 'text/xml' }, body: twiml };
+  }
+}
+
+async function _handleTwilioVoiceInboundInner(event) {
   const params = parseFormEncoded(event.body || '');
   if (process.env.TWILIO_AUTH_TOKEN) {
     if (!verifyTwilioSignature(event, params)) {
@@ -394,6 +406,8 @@ async function handleTwilioVoiceInbound(event) {
   } catch (e) { /* fall through */ }
 
   if (!forwardTo) forwardTo = await getAppConfig('default_voice_forward_number');
+  // Final hardcoded fallback — forwards to Kyle if nothing else resolves
+  if (!forwardTo) forwardTo = '+15162734255';
 
   if (!forwardTo) {
     const twiml = '<?xml version="1.0" encoding="UTF-8"?><Response><Say voice="alice">Thanks for calling. No one is available right now. Please leave a message after the tone.</Say><Record maxLength="120" /></Response>';
