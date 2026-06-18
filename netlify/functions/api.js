@@ -558,7 +558,7 @@ exports.handler = async (event) => {
       case 'list-properties': {
         // Supabase default limit is 1000; raise it for larger lists.
         const LIMIT = 50000;
-        const { json: props }  = await supa(`/properties?select=id,owners,owner_last_name,property_address,mailing_address,imported_at&order=imported_at.asc,id.asc&limit=${LIMIT}`);
+        const { json: props }  = await supa(`/properties?select=id,owners,owner_last_name,property_address,mailing_address,email,imported_at&order=imported_at.asc,id.asc&limit=${LIMIT}`);
         const { json: phones } = await supa(`/phones?select=property_id,e164,display,type&order=property_id.asc,id.asc&limit=${LIMIT}`);
         const { json: leads }  = await supa(`/leads?select=property_id,called,lead_status,notes,va_notes,recording_url,sms_consent,sms_cell&limit=${LIMIT}`);
         const phonesBy = {};
@@ -583,14 +583,35 @@ exports.handler = async (event) => {
           await supa('/properties?id=not.is.null', 'DELETE');
         }
 
+        // Normalize an address for comparison: lowercase, strip punctuation,
+        // collapse whitespace (exact-ish matching is safer than over-aggressive fuzzy logic)
+        const normAddr = (a) => String(a || '')
+          .toLowerCase()
+          .replace(/[.,#]/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim();
+
         // ── Dedupe: merge rows with the same ID (last write wins for fields,
         //    union phones). Any row missing a usable ID gets a synthetic one.
+        //    Rows sharing the same normalized address within this batch are
+        //    also merged together, even if their IDs differ.
         let dupesCollapsed = 0;
+        let dupeAddressesSkipped = 0;
         const byId = new Map();
+        const seenAddrInBatch = new Map(); // normAddr -> id (first occurrence in this batch)
         let synthCounter = 0;
         for (const raw of list) {
           let id = raw && raw.id != null ? String(raw.id).trim() : '';
           if (!id) id = 'row-' + (++synthCounter);
+
+          const addrKey = normAddr(raw.property_address);
+
+          // If this address was already seen in this batch under a different id,
+          // merge into that existing record instead of creating a new one.
+          if (addrKey && seenAddrInBatch.has(addrKey)) {
+            id = seenAddrInBatch.get(addrKey);
+          }
+
           if (byId.has(id)) {
             // Merge: combine phones (dedup by e164), prefer non-empty fields from later rows
             const existing = byId.get(id);
@@ -605,6 +626,7 @@ exports.handler = async (event) => {
             if (!existing.owners && raw.owners) existing.owners = raw.owners;
             if (!existing.property_address && raw.property_address) existing.property_address = raw.property_address;
             if (!existing.mailing_address && raw.mailing_address) existing.mailing_address = raw.mailing_address;
+            if (!existing.email && raw.email) existing.email = raw.email;
             if (!existing.va_notes && raw.va_notes) existing.va_notes = raw.va_notes;
             if (!existing.recording_url && raw.recording_url) existing.recording_url = raw.recording_url;
             dupesCollapsed++;
@@ -614,13 +636,38 @@ exports.handler = async (event) => {
               owners: raw.owners || '',
               property_address: raw.property_address || '',
               mailing_address: raw.mailing_address || '',
+              email: raw.email || '',
               va_notes: raw.va_notes || '',
               recording_url: raw.recording_url || '',
+              va_lead: !!raw.va_lead,
               phones: Array.isArray(raw.phones) ? [...raw.phones] : [],
             });
+            if (addrKey) seenAddrInBatch.set(addrKey, id);
           }
         }
-        const deduped = Array.from(byId.values());
+        let deduped = Array.from(byId.values());
+
+        // ── Cross-check against properties already in the DB. If an address
+        //    already exists, merge into that existing row instead of creating
+        //    a duplicate property (so re-uploads / overlapping lists don't
+        //    create copies).
+        const addrToExistingId = new Map();
+        {
+          const { json: existingProps } = await supa('/properties?select=id,property_address&limit=20000');
+          for (const ep of existingProps) {
+            const k = normAddr(ep.property_address);
+            if (k && !addrToExistingId.has(k)) addrToExistingId.set(k, ep.id);
+          }
+        }
+        deduped = deduped.map(p => {
+          const k = normAddr(p.property_address);
+          const existingId = k ? addrToExistingId.get(k) : null;
+          if (existingId && existingId !== p.id) {
+            p.id = existingId;
+            dupeAddressesSkipped++;
+          }
+          return p;
+        });
 
         // Upsert properties
         // Helper: derive owner_last_name from owners string
@@ -647,6 +694,7 @@ exports.handler = async (event) => {
           owner_last_name: parseLastName(p.owners),
           property_address: p.property_address,
           mailing_address: p.mailing_address,
+          email: p.email || '',
         }));
         for (let i = 0; i < propRows.length; i += 500) {
           await supa('/properties?on_conflict=id', 'POST', propRows.slice(i, i + 500), { Prefer: 'resolution=merge-duplicates,return=minimal' });
@@ -694,7 +742,7 @@ exports.handler = async (event) => {
           await supa('/leads?on_conflict=property_id', 'POST', leadRows.slice(i, i + 500), { Prefer: 'resolution=merge-duplicates,return=minimal' });
         }
 
-        return ok({ imported: propRows.length, phones: phoneRows.length, dupesCollapsed, leadsWithNotes: leadRows.length });
+        return ok({ imported: propRows.length, phones: phoneRows.length, dupesCollapsed, dupeAddressesSkipped, leadsWithNotes: leadRows.length });
       }
 
       // Update lead state. Body: {propertyId, called, leadStatus, notes}
@@ -1392,6 +1440,167 @@ exports.handler = async (event) => {
         if (typeof body.from_number === 'string') await setAppConfig('sms_from_number', body.from_number);
         if (typeof body.business_name === 'string') await setAppConfig('sms_business_name', body.business_name);
         return ok({ ok: true });
+      }
+
+      // ════════════════════════════════════════════════════════
+      // CONTRACTS — upload + email via Zoho
+      // ════════════════════════════════════════════════════════
+
+      case 'upload-contract': {
+        if (!body.dataBase64) return err('dataBase64 required');
+        if (!body.filename)   return err('filename required');
+        const mime = body.mimeType || 'application/pdf';
+        const ext  = (body.filename.match(/\.([a-z0-9]+)$/i) || [,'pdf'])[1].toLowerCase();
+        const safeName = body.filename.replace(/[^a-zA-Z0-9._-]/g,'_');
+        const path = `${Date.now()}_${Math.random().toString(36).slice(2,8)}_${safeName}`;
+        const up = await uploadToStorage('contracts', path, body.dataBase64, mime);
+        if (up.error) return err(up.error);
+        const publicUrl = `${process.env.SUPABASE_URL}/storage/v1/object/public/contracts/${encodeURIComponent(path)}`;
+        return ok({ url: publicUrl, filename: body.filename });
+      }
+
+      case 'send-contract': {
+        if (!body.toEmail)      return err('toEmail required');
+        if (!body.contractUrl)  return err('contractUrl required');
+        if (!body.sellerName)   return err('sellerName required');
+
+        const ZOHO_USER = 'leadmanager@zohomail.com';
+        const ZOHO_PASS = process.env.ZOHO_APP_PASSWORD || 'i0ZQgzZKQVTN';
+
+        const subject  = body.subject  || `Contract for ${body.propertyAddress || 'your property'}`;
+        const message  = body.message  || `Hi ${body.sellerName},\n\nPlease find your contract attached via the link below.\n\n${body.contractUrl}\n\nLet me know if you have any questions.\n\nBest regards`;
+
+        // Send via Zoho SMTP using fetch to smtp2http or nodemailer-style raw SMTP
+        // We use Zoho's SMTP via a lightweight raw SMTP approach with node's net/tls
+        const nodemailer = require('nodemailer');
+        const transporter = nodemailer.createTransport({
+          host: 'smtp.zoho.com',
+          port: 465,
+          secure: true,
+          auth: { user: ZOHO_USER, pass: ZOHO_PASS },
+        });
+
+        await transporter.sendMail({
+          from: `WinWin Dialer <${ZOHO_USER}>`,
+          to: body.toEmail,
+          subject,
+          text: message,
+          html: `<p>${message.replace(/\n/g,'<br>')}</p>
+                 <p><a href="${body.contractUrl}" style="background:#1a56db;color:#fff;padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:bold">📄 Open Contract</a></p>`,
+        });
+
+        return ok({ sent: true });
+      }
+
+      // ════════════════════════════════════════════════════════
+      // E-SIGNATURE — SignWell (Purchase & Sale + Assignment)
+      // ════════════════════════════════════════════════════════
+
+      case 'send-for-signature': {
+        if (!body.templateId)   return err('templateId required');
+        if (!body.signerEmail)  return err('signerEmail required');
+        if (!body.signerName)   return err('signerName required');
+
+        const SIGNWELL_KEY = process.env.SIGNWELL_API_KEY || 'YWNjZXNzOjhjOTYxY2I3NDlhMmIzNjAxOTI0ZTVlM2QwY2IzNTA4';
+
+        const payload = {
+          template_id: body.templateId,
+          name: body.documentName || `Contract — ${body.signerName}`,
+          subject: body.subject || 'Please sign your contract',
+          message: body.message || `Hi ${body.signerName}, please review and sign the attached document.`,
+          recipients: [
+            {
+              id: '1',
+              name: body.signerName,
+              email: body.signerEmail,
+              placeholder_name: body.placeholderName || 'Signer 1',
+            },
+          ],
+          draft: false,
+          test_mode: body.testMode === true,
+        };
+
+        // Pre-fill template fields (e.g. purchase price, address, closing date)
+        if (body.fields && typeof body.fields === 'object') {
+          payload.template_fields = Object.entries(body.fields).map(([api_id, value]) => ({ api_id, value }));
+        }
+
+        const resp = await fetch('https://www.signwell.com/api/v1/document_templates/' + encodeURIComponent(body.templateId) + '/documents', {
+          method: 'POST',
+          headers: {
+            'X-Api-Key': SIGNWELL_KEY,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(payload),
+        });
+        const json = await resp.json();
+        if (!resp.ok) return err(json.message || json.error || 'SignWell request failed', resp.status);
+
+        return ok({ document: json });
+      }
+
+      case 'check-signature-status': {
+        if (!body.documentId) return err('documentId required');
+        const SIGNWELL_KEY = process.env.SIGNWELL_API_KEY || 'YWNjZXNzOjhjOTYxY2I3NDlhMmIzNjAxOTI0ZTVlM2QwY2IzNTA4';
+        const resp = await fetch('https://www.signwell.com/api/v1/documents/' + encodeURIComponent(body.documentId), {
+          headers: { 'X-Api-Key': SIGNWELL_KEY },
+        });
+        const json = await resp.json();
+        if (!resp.ok) return err(json.message || 'Status check failed', resp.status);
+        return ok({ status: json.status, document: json });
+      }
+
+      // ════════════════════════════════════════════════════════
+      // COMPARABLES — PropertyReach
+      // ════════════════════════════════════════════════════════
+
+      case 'get-comparables': {
+        if (!body.address) return err('address required');
+
+        const PROPERTYREACH_KEY = process.env.PROPERTYREACH_API_KEY || 'test_Od67q03Md5PMJ1xykK9UBhKZbEQe3YlfTk6';
+
+        // Parse "123 Main St, Springfield, NY 11735" into street/city/state/zip.
+        // PropertyReach's target object accepts these as separate fields.
+        const parts = String(body.address).split(',').map(s => s.trim()).filter(Boolean);
+        const target = {};
+        if (parts.length >= 3) {
+          target.streetAddress = parts[0];
+          target.city = parts[1];
+          const stateZip = parts.slice(2).join(' ').trim();
+          const m = stateZip.match(/^([A-Za-z]{2})\s*([0-9]{5})?/);
+          if (m) {
+            target.state = m[1].toUpperCase();
+            if (m[2]) target.zip = m[2];
+          } else {
+            target.state = stateZip;
+          }
+        } else {
+          target.streetAddress = body.address;
+        }
+
+        const reqBody = {
+          target,
+          filter: {
+            distanceFromSubject: body.radiusMiles || 0.5,
+            comparableSource: 'Both',
+          },
+        };
+
+        const resp = await fetch('https://api.propertyreach.com/v1/comparables', {
+          method: 'POST',
+          headers: {
+            'x-api-key': PROPERTYREACH_KEY,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(reqBody),
+        });
+        const json2 = await resp.json();
+        if (!resp.ok) return err((json2 && json2.meta && json2.meta.message) || 'Comparables request failed', resp.status);
+
+        return ok({
+          properties: (json2 && json2.properties) || [],
+          resultCount: (json2 && json2.meta && json2.meta.resultCount) || 0,
+        });
       }
 
       default:
