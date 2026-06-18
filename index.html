@@ -1914,7 +1914,7 @@ $('exportCsv').addEventListener('click', () => {
 });
 
 // ── Settings ────────────────────────────────────────────────────
-$('settingsSave').addEventListener('click', () => {
+$('settingsSave').addEventListener('click', async () => {
   forwardPhone = toE164($('settingsForwardPhone').value.trim());
   backend = $('settingsBackendUrl').value.trim() || '/api';
   localStorage.setItem(LS.forward, forwardPhone);
@@ -1922,6 +1922,13 @@ $('settingsSave').addEventListener('click', () => {
   refreshCallerStrip();
   $('settingsModal').classList.remove('open');
   toast('Saved','ok');
+  // Also save this number on the active profile so inbound seller
+  // callbacks can be routed back to the right person automatically.
+  if(activeProfileId && forwardPhone){
+    try {
+      await api('update-profile-phone', {method:'POST', body:{ profileId: activeProfileId, phone: forwardPhone }});
+    } catch(e){ /* non-fatal — outbound calling still works either way */ }
+  }
 });
 $('signOut').addEventListener('click', () => {
   if(!confirm('Sign out? You will need the team password to get back in.')) return;
