@@ -1074,12 +1074,14 @@ function toast(msg, kind){
 function escapeHtml(s){ return String(s==null?'':s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
 
-// Build a Redfin search URL from a full address string. Redfin's public
-// search page reliably resolves a plain address query to the matching
-// property page, so no fragile address-segment parsing is needed.
+// Build a link that reliably lands on the matching Redfin listing page.
+// Linking directly to redfin.com/search can get intercepted by the Redfin
+// mobile app and redirected to its home screen instead of resolving the
+// address. Routing through a Google search for "<address> redfin" avoids
+// that app-deep-link hijack and opens the real listing in the browser.
 function buildRedfinUrl(fullAddress){
   if(!fullAddress) return 'https://www.redfin.com/';
-  return `https://www.redfin.com/search?q=${encodeURIComponent(fullAddress)}`;
+  return `https://www.google.com/search?q=${encodeURIComponent(fullAddress + ' redfin')}`;
 }
 
 // Convert Google Drive share links to direct open URLs
