@@ -437,8 +437,8 @@ body.view-pipeline header .callerid{display:none}
 }
 .research-link.zillow{background:#dcfce7;color:#166534;border:1px solid #bbf7d0}
 .research-link.zillow:hover{background:#bbf7d0}
-.research-link.realtor{background:#fee2e2;color:#991b1b;border:1px solid #fecaca}
-.research-link.realtor:hover{background:#fecaca}
+.research-link.redfin{background:#fee2e2;color:#991b1b;border:1px solid #fecaca}
+.research-link.redfin:hover{background:#fecaca}
 .research-link.maps{background:#dbeafe;color:#1e40af;border:1px solid #bfdbfe}
 .research-link.maps:hover{background:#bfdbfe}
 
@@ -1074,6 +1074,14 @@ function toast(msg, kind){
 function escapeHtml(s){ return String(s==null?'':s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
 
+// Build a Redfin search URL from a full address string. Redfin's public
+// search page reliably resolves a plain address query to the matching
+// property page, so no fragile address-segment parsing is needed.
+function buildRedfinUrl(fullAddress){
+  if(!fullAddress) return 'https://www.redfin.com/';
+  return `https://www.redfin.com/search?q=${encodeURIComponent(fullAddress)}`;
+}
+
 // Convert Google Drive share links to direct open URLs
 function convertDriveUrl(url){
   if(!url) return url;
@@ -1349,7 +1357,7 @@ function renderPage(){
             ${p.mailing_address ? `<div class="mailing">Mail: ${escapeHtml(p.mailing_address)}</div>` : ''}
             ${p.property_address ? `<div class="research-links">
               <a href="https://www.zillow.com/homes/${encodeURIComponent(p.property_address)}_rb/" target="_blank" rel="noopener" class="research-link zillow">🏠 Zillow</a>
-              <a href="https://www.realtor.com/realestateandhomes-search/${encodeURIComponent(p.property_address.replace(/,/g,'').replace(/\s+/g,'_'))}" target="_blank" rel="noopener" class="research-link realtor">🏡 Realtor.com</a>
+              <a href="${buildRedfinUrl(p.property_address)}" target="_blank" rel="noopener" class="research-link redfin">🟥 Redfin</a>
               <a href="https://www.google.com/maps/place/?q=${encodeURIComponent(p.property_address)}" target="_blank" rel="noopener" class="research-link maps">🗺 Street View</a>
             </div>` : ''}
           </div>
@@ -2498,7 +2506,7 @@ function renderComps(comps, deal){
     </div>
   </div>`);
   const list = card.querySelector('#compList');
-  // Always include auto-generated Zillow + Realtor.com links for this property
+  // Always include auto-generated Zillow + Redfin links for this property
   const propAddr = deal.property_address;
   if(propAddr){
     const z = el(`<div class="dd-link-row">
@@ -2508,7 +2516,7 @@ function renderComps(comps, deal){
     list.appendChild(z);
     const r = el(`<div class="dd-link-row">
       <i class="ti ti-link icon" aria-hidden="true"></i>
-      <a href="https://www.realtor.com/realestateandhomes-search/${encodeURIComponent(propAddr.replace(/,/g,'').replace(/\s+/g,'_'))}" target="_blank" rel="noopener">Realtor.com page for this property →</a>
+      <a href="${buildRedfinUrl(propAddr)}" target="_blank" rel="noopener">Redfin page for this property →</a>
     </div>`);
     list.appendChild(r);
   }
