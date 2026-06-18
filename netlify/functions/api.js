@@ -1594,8 +1594,22 @@ exports.handler = async (event) => {
           },
           body: JSON.stringify(reqBody),
         });
-        const json2 = await resp.json();
-        if (!resp.ok) return err((json2 && json2.meta && json2.meta.message) || 'Comparables request failed', resp.status);
+        const rawText = await resp.text();
+        let json2 = null;
+        if (rawText) {
+          try { json2 = JSON.parse(rawText); }
+          catch (parseErr) {
+            // PropertyReach returned something that isn't JSON (e.g. an HTML
+            // error page, plain text, or a truncated/empty body). Surface a
+            // useful message instead of crashing on .json().
+            return err(
+              'PropertyReach returned an unexpected response (status ' + resp.status + '): ' +
+              rawText.slice(0, 200),
+              resp.status >= 400 ? resp.status : 502
+            );
+          }
+        }
+        if (!resp.ok) return err((json2 && json2.meta && json2.meta.message) || ('Comparables request failed (status ' + resp.status + ')'), resp.status);
 
         return ok({
           properties: (json2 && json2.properties) || [],
