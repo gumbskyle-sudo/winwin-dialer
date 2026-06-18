@@ -791,6 +791,7 @@ body.view-inbox header .callerid{display:none}
   </div>
   <div class="header-controls">
     <label><input type="checkbox" id="hideCalled">&nbsp;Hide called</label>
+    <button class="header-link" data-open="manualDialModal">☎ Dial a number</button>
     <button class="header-link" data-open="numbersModal">📞 Numbers</button>
     <button class="header-link" data-open="logModal">📊 Log</button>
     <button class="header-link" data-open="uploadModal">⬆ Upload List</button>
@@ -908,6 +909,26 @@ body.view-inbox header .callerid{display:none}
         <tbody></tbody>
       </table></div>
       <div class="csv-export"><button class="btn-ghost" id="exportCsv">⬇ Export CSV</button></div>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="manualDialModal">
+  <div class="modal-box">
+    <div class="modal-head">
+      <h3>☎ Dial a number</h3>
+      <button class="modal-close" data-close="manualDialModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="field">
+        <label>Phone number</label>
+        <input type="tel" id="manualDialNumber" placeholder="(555) 123-4567" autocomplete="off">
+      </div>
+      <div class="field">
+        <label>Name / note (optional)</label>
+        <input type="text" id="manualDialLabel" placeholder="e.g. Title company, lender, etc.">
+      </div>
+      <button class="btn-primary" id="manualDialGo" style="width:100%;margin-top:8px">📞 Call</button>
     </div>
   </div>
 </div>
@@ -1646,6 +1667,44 @@ async function placeCall(p, ph, btn){
     toast('Call failed: '+err.message,'err');
   }
 }
+// ── Manual "dial a number" (not tied to a lead card) ─────────────
+async function placeManualCall(toNumber, label){
+  if(activeCall){ toast('A call is already in progress','err'); return; }
+  if(!forwardPhone){ toast('Set your phone in Settings first','err'); openModal('settingsModal'); return; }
+  if(!activeCallerId){ toast('Buy a phone number first','err'); openModal('numbersModal'); return; }
+  const e164 = toE164(toNumber);
+  if(!e164){ toast('Enter a valid phone number','err'); return; }
+  const goBtn = $('manualDialGo');
+  goBtn.disabled = true; goBtn.textContent = 'Dialing…';
+  showDrawer({name:label||'Manual call', num:e164, state:'Initializing', from:fmtPhone(activeCallerId)});
+  try {
+    const r = await api('make-call',{method:'POST', body:{
+      to: e164,
+      from: activeCallerId,
+      forwardTo: toE164(forwardPhone),
+      profileId: activeProfileId,
+    }});
+    activeCall = { sid:r.sid, btn:null, propertyId:null, startedAt:Date.now() };
+    setDrawerState('Ringing your phone','ringing');
+    activeCall.tickTimer = setInterval(updateDrawerTimer, 1000);
+    pollCallStatus(r.sid);
+    $('manualDialModal').classList.remove('open');
+    $('manualDialNumber').value = '';
+    $('manualDialLabel').value = '';
+  } catch(err){
+    hideDrawer();
+    toast('Call failed: '+err.message,'err');
+  } finally {
+    goBtn.disabled = false; goBtn.textContent = '📞 Call';
+  }
+}
+$('manualDialGo').addEventListener('click', () => {
+  placeManualCall($('manualDialNumber').value.trim(), $('manualDialLabel').value.trim());
+});
+$('manualDialNumber').addEventListener('keydown', e => {
+  if(e.key === 'Enter') $('manualDialGo').click();
+});
+
 async function pollCallStatus(sid){
   if(!activeCall || activeCall.sid !== sid) return;
   try {
