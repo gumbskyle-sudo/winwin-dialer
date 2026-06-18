@@ -1550,6 +1550,59 @@ exports.handler = async (event) => {
         return ok({ status: json.status, document: json });
       }
 
+      // ════════════════════════════════════════════════════════
+      // COMPARABLES — PropertyReach
+      // ════════════════════════════════════════════════════════
+
+      case 'get-comparables': {
+        if (!body.address) return err('address required');
+
+        const PROPERTYREACH_KEY = process.env.PROPERTYREACH_API_KEY || 'test_Od67q03Md5PMJ1xykK9UBhKZbEQe3YlfTk6';
+
+        // Parse "123 Main St, Springfield, NY 11735" into street/city/state/zip.
+        // PropertyReach's target object accepts these as separate fields.
+        const parts = String(body.address).split(',').map(s => s.trim()).filter(Boolean);
+        const target = {};
+        if (parts.length >= 3) {
+          target.streetAddress = parts[0];
+          target.city = parts[1];
+          const stateZip = parts.slice(2).join(' ').trim();
+          const m = stateZip.match(/^([A-Za-z]{2})\s*([0-9]{5})?/);
+          if (m) {
+            target.state = m[1].toUpperCase();
+            if (m[2]) target.zip = m[2];
+          } else {
+            target.state = stateZip;
+          }
+        } else {
+          target.streetAddress = body.address;
+        }
+
+        const reqBody = {
+          target,
+          filter: {
+            distanceFromSubject: body.radiusMiles || 0.5,
+            comparableSource: 'Both',
+          },
+        };
+
+        const resp = await fetch('https://api.propertyreach.com/v1/comparables', {
+          method: 'POST',
+          headers: {
+            'x-api-key': PROPERTYREACH_KEY,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(reqBody),
+        });
+        const json2 = await resp.json();
+        if (!resp.ok) return err((json2 && json2.meta && json2.meta.message) || 'Comparables request failed', resp.status);
+
+        return ok({
+          properties: (json2 && json2.properties) || [],
+          resultCount: (json2 && json2.meta && json2.meta.resultCount) || 0,
+        });
+      }
+
       default:
         return err('Unknown action: ' + action, 404);
     }
