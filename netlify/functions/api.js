@@ -351,43 +351,71 @@ async function handleTwilioVoiceInbound(event) {
       return { statusCode: 403, body: 'invalid signature' };
     }
   }
-  const from = params.From || ''; // the seller's number calling in
-  const to   = params.To   || ''; // your Twilio number they called
 
-  let forwardTo = null;
+  const qs   = event.queryStringParameters || {};
+  const from = params.From || '';
+  const to   = params.To   || '';
 
-  try {
-    // Find the most recent outbound call we placed TO this caller's number.
-    const { json: calls } = await supa(
-      `/calls?to_number=eq.${encodeURIComponent(from)}&select=profile_id,from_number,started_at&order=started_at.desc&limit=1`
-    );
-    const lastCall = Array.isArray(calls) && calls[0];
-    if (lastCall && lastCall.profile_id) {
-      const { json: profiles } = await supa(`/profiles?id=eq.${encodeURIComponent(lastCall.profile_id)}&select=name,phone`);
-      const profile = Array.isArray(profiles) && profiles[0];
-      if (profile && profile.phone) {
-        forwardTo = profile.phone;
-      } else if (profile && profile.name && TEAM_FORWARD_NUMBERS[profile.name]) {
-        forwardTo = TEAM_FORWARD_NUMBERS[profile.name];
-      }
-    }
-  } catch (e) { /* fall through to default below */ }
-
-  if (!forwardTo) {
-    // No match found — use the configured default forwarding number.
-    forwardTo = await getAppConfig('default_voice_forward_number');
-  }
-
-  if (!forwardTo) {
-    // Nothing configured at all — let the caller know rather than hanging up silently.
-    const twiml = '<?xml version="1.0" encoding="UTF-8"?><Response><Say>Thanks for calling. No one is available to take your call right now. Please leave a message after the tone.</Say><Record maxLength="120" /></Response>';
+  // ── Whisper endpoint — played ONLY to the team member answering ──
+  // The seller never hears this. No keypress needed — connects instantly.
+  if (qs.whisper === '1') {
+    const name = decodeURIComponent(qs.name || 'a seller');
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Say voice="alice">Call from ${name}</Say></Response>`;
     return { statusCode: 200, headers: { 'Content-Type': 'text/xml' }, body: twiml };
   }
 
-  const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Dial callerId="${escapeXml(to)}" timeout="25" answerOnBridge="true"><Number>${escapeXml(forwardTo)}</Number></Dial></Response>`;
+  let forwardTo  = null;
+  let sellerName = null;
+
+  try {
+    const { json: calls } = await supa(
+      `/calls?to_number=eq.${encodeURIComponent(from)}&select=profile_id,property_id,started_at&order=started_at.desc&limit=1`
+    );
+    const lastCall = Array.isArray(calls) && calls[0];
+
+    if (lastCall) {
+      if (lastCall.profile_id) {
+        const { json: profiles } = await supa(`/profiles?id=eq.${encodeURIComponent(lastCall.profile_id)}&select=name,phone`);
+        const profile = Array.isArray(profiles) && profiles[0];
+        if (profile) {
+          if (profile.phone) {
+            forwardTo = profile.phone;
+          } else if (TEAM_FORWARD_NUMBERS[profile.name]) {
+            forwardTo = TEAM_FORWARD_NUMBERS[profile.name];
+          }
+        }
+      }
+      if (lastCall.property_id) {
+        const { json: props } = await supa(`/properties?id=eq.${encodeURIComponent(lastCall.property_id)}&select=owners`);
+        const prop = Array.isArray(props) && props[0];
+        if (prop && prop.owners) sellerName = prop.owners.trim();
+      }
+    }
+  } catch (e) { /* fall through */ }
+
+  if (!forwardTo) forwardTo = await getAppConfig('default_voice_forward_number');
+
+  if (!forwardTo) {
+    const twiml = '<?xml version="1.0" encoding="UTF-8"?><Response><Say voice="alice">Thanks for calling. No one is available right now. Please leave a message after the tone.</Say><Record maxLength="120" /></Response>';
+    return { statusCode: 200, headers: { 'Content-Type': 'text/xml' }, body: twiml };
+  }
+
+  // Whisper URL — played only in the team member's ear after they answer
+  const baseUrl    = 'https://winwincalltoclose.netlify.app/api';
+  const whisperUrl = `${baseUrl}?action=twilio-voice-inbound&whisper=1&name=${encodeURIComponent(sellerName || 'a seller')}`;
+
+  // Seller hears "Connecting" once then silence until bridged (< 5 sec).
+  // Team member hears seller name only in their ear — no keypress needed.
+  const twiml = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="alice">Connecting</Say>
+  <Dial callerId="${to}" timeout="30" answerOnBridge="true">
+    <Number url="${whisperUrl}">${forwardTo}</Number>
+  </Dial>
+</Response>`;
+
   return { statusCode: 200, headers: { 'Content-Type': 'text/xml' }, body: twiml };
 }
-
 // ── Twilio status callback (delivery status updates) ────────
 async function handleTwilioStatus(event) {
   const params = parseFormEncoded(event.body || '');
