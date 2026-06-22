@@ -61,7 +61,11 @@ header{background:#1a1d23;color:#fff;padding:12px 14px;position:sticky;top:0;z-i
 .callerid .dot.warn{background:#f59e0b}
 
 main{padding:12px;max-width:720px;margin:0 auto;padding-bottom:100px}
-.search-bar-wrap{position:relative;margin-bottom:12px}
+.search-bar-wrap{position:relative;margin-bottom:8px}
+.filter-row{display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap}
+.filter-chip{padding:6px 12px;border-radius:20px;border:1.5px solid #d1d5db;background:#fff;font-size:12px;font-weight:600;color:#374151;cursor:pointer}
+.filter-chip.active{background:#1f6feb;color:#fff;border-color:#1f6feb}
+.filter-chip.filter-clear{background:#fee2e2;color:#991b1b;border-color:#fecaca}
 .search-bar-wrap input{
   width:100%;padding:11px 36px 11px 14px;border:1.5px solid #d1d5db;border-radius:10px;
   font-size:15px;background:#fff;color:#1a1d23;
@@ -453,6 +457,19 @@ body.view-pipeline header .callerid{display:none}
 
 /* ── VA Notes block on cards ───────────────────────────────── */
 .va-notes-block{margin-top:8px;background:#f9fafb;border-radius:7px;padding:8px 10px}
+/* ── Lead tools (highlight + assign) ───────────────────────── */
+.lead-tools{margin-top:10px;padding-top:10px;border-top:1px solid #f3f4f6}
+.lead-tools-row{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.lead-tools-label{font-size:12px;color:#6b7280;font-weight:600;min-width:80px;flex-shrink:0}
+.highlight-dots{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.hl-dot{width:22px;height:22px;border-radius:50%;border:2px solid transparent;cursor:pointer;transition:transform .1s;flex-shrink:0}
+.hl-dot:active{transform:scale(.9)}
+.hl-dot.hl-active{border-color:#1a1d23;transform:scale(1.15)}
+.hl-red{background:#ef4444}.hl-yellow{background:#f59e0b}.hl-green{background:#10b981}
+.hl-blue{background:#3b82f6}.hl-purple{background:#8b5cf6}
+.hl-clear{background:#f3f4f6;color:#9ca3af;font-size:11px;width:auto;padding:2px 6px;border-radius:10px;border:1px solid #e5e7eb}
+.assign-sel{flex:1;padding:7px 10px;border:1.5px solid #d1d5db;border-radius:7px;font-size:13px;background:#fff;color:#1a1d23}
+.assigned-badge{font-size:11px;color:#1f6feb;background:#eff6ff;border-radius:6px;padding:3px 8px;display:inline-block}
 .va-notes-block summary{
   cursor:pointer;font-size:12px;color:#374151;font-weight:600;user-select:none;
   list-style:none;padding:2px 0;
@@ -808,6 +825,11 @@ body.view-inbox header .callerid{display:none}
   <div class="search-bar-wrap">
     <input type="text" id="leadSearch" placeholder="🔍 Search by name, address, or phone…" autocomplete="off">
     <button id="leadSearchClear" class="hide">✕</button>
+  </div>
+  <div class="filter-row" id="filterRow">
+    <button class="filter-chip" id="filterMyLeads">👤 My leads</button>
+    <button class="filter-chip" id="filterHighlighted">🎨 Highlighted</button>
+    <button class="filter-chip filter-clear hide" id="filterClear">✕ Clear filter</button>
   </div>
   <div id="cards"></div>
   <div class="page-nav" id="pageNav"></div>
@@ -1216,17 +1238,28 @@ let logRows = [];
 const PAGE_SIZE = 20;
 let page = 1;
 let searchQuery = '';
+let assignFilter = ''; // profile id to filter by, '' = show all
+let highlightFilter = false; // show only highlighted leads
 
 function getFilteredProperties(){
-  if(!searchQuery.trim()) return properties;
-  const q = searchQuery.trim().toLowerCase();
-  return properties.filter(p => {
-    const owners = (p.owners||'').toLowerCase();
-    const addr = (p.property_address||'').toLowerCase();
-    const phones = (p.phones||[]).map(ph => (ph.e164||'').replace(/\D/g,'')).join(' ');
-    const qDigits = q.replace(/\D/g,'');
-    return owners.includes(q) || addr.includes(q) || (qDigits.length>=3 && phones.includes(qDigits));
-  });
+  let list = properties;
+  if(searchQuery.trim()){
+    const q = searchQuery.trim().toLowerCase();
+    list = list.filter(p => {
+      const owners = (p.owners||'').toLowerCase();
+      const addr = (p.property_address||'').toLowerCase();
+      const phones = (p.phones||[]).map(ph => (ph.e164||'').replace(/\D/g,'')).join(' ');
+      const qDigits = q.replace(/\D/g,'');
+      return owners.includes(q) || addr.includes(q) || (qDigits.length>=3 && phones.includes(qDigits));
+    });
+  }
+  if(assignFilter){
+    list = list.filter(p => (p.lead||{}).assigned_to === assignFilter);
+  }
+  if(highlightFilter){
+    list = list.filter(p => !!(p.lead||{}).highlight);
+  }
+  return list;
 }
 let activeCall = null;
 const noteSaveTimers = {};
@@ -1360,8 +1393,20 @@ function renderPage(){
     const lead = p.lead || {called:false, lead_status:'', notes:''};
     const called = lead.called || !!lead.lead_status;
     const sc = lead.lead_status ? STATUS_COLORS[lead.lead_status] : null;
-    const style = sc ? `border-color:${sc.border};background:${sc.bg}` : (called ? 'border-color:#047857;background:#ecfdf5' : '');
+    const highlight = lead.highlight || '';
+    const highlightStyles = {
+      red:    { border:'#ef4444', bg:'#fef2f2' },
+      yellow: { border:'#f59e0b', bg:'#fffbeb' },
+      green:  { border:'#10b981', bg:'#ecfdf5' },
+      blue:   { border:'#3b82f6', bg:'#eff6ff' },
+      purple: { border:'#8b5cf6', bg:'#f5f3ff' },
+    };
+    const hl = highlightStyles[highlight];
+    const style = sc ? `border-color:${sc.border};background:${sc.bg}` :
+                  hl ? `border-color:${hl.border};background:${hl.bg};border-width:3px` :
+                  called ? 'border-color:#047857;background:#ecfdf5' : '';
     const pipBg = sc ? sc.pip : 'transparent';
+    const assignedProfile = lead.assigned_to ? allProfiles.find(pr => pr.id === lead.assigned_to) : null;
     const phoneHtml = (p.phones||[]).map((ph,j) => `
       <button class="phone" data-call data-pid="${escapeHtml(p.id)}" data-phidx="${j}">
         <span class="num">${escapeHtml(fmtPhone(ph.e164))}</span>
@@ -1510,6 +1555,25 @@ function renderPage(){
             <textarea class="va-notes-ta" data-vanotes data-id="${escapeHtml(p.id)}" rows="4" placeholder="Paste VA notes, prior call summaries, recording links…">${escapeHtml(lead.va_notes||'')}</textarea>
             <div data-recordings-container="${escapeHtml(p.id)}" id="rec-card-${escapeHtml(p.id)}" style="margin-top:8px"></div>
           </details>
+          <div class="lead-tools">
+            <div class="lead-tools-row">
+              <span class="lead-tools-label">🎨 Highlight</span>
+              <div class="highlight-dots">
+                ${['red','yellow','green','blue','purple'].map(c =>
+                  `<button class="hl-dot hl-${c}${highlight===c?' hl-active':''}" data-highlight="${c}" data-hlid="${escapeHtml(p.id)}" title="${c}"></button>`
+                ).join('')}
+                ${highlight ? `<button class="hl-dot hl-clear" data-highlight="" data-hlid="${escapeHtml(p.id)}" title="Clear">✕</button>` : ''}
+              </div>
+            </div>
+            <div class="lead-tools-row">
+              <span class="lead-tools-label">👤 Assign to</span>
+              <select class="assign-sel" data-assignsel data-id="${escapeHtml(p.id)}">
+                <option value="">— Unassigned —</option>
+                ${allProfiles.map(pr => `<option value="${escapeHtml(pr.id)}"${lead.assigned_to===pr.id?' selected':''}>${escapeHtml(pr.name)}</option>`).join('')}
+              </select>
+            </div>
+            ${assignedProfile ? `<div class="assigned-badge">Assigned to <strong>${escapeHtml(assignedProfile.name)}</strong></div>` : ''}
+          </div>
         </div>
       </div>`);
   });
@@ -1545,6 +1609,33 @@ $('leadSearchClear').addEventListener('click', () => {
   $('leadSearchClear').classList.add('hide');
   searchQuery = '';
   page = 1;
+  renderPage();
+});
+
+// ── Filter buttons ────────────────────────────────────────────
+function updateFilterUI(){
+  $('filterMyLeads').classList.toggle('active', !!assignFilter);
+  $('filterHighlighted').classList.toggle('active', highlightFilter);
+  $('filterClear').classList.toggle('hide', !assignFilter && !highlightFilter);
+}
+$('filterMyLeads').addEventListener('click', () => {
+  assignFilter = assignFilter ? '' : (activeProfileId || '');
+  if(!assignFilter) assignFilter = '';
+  page = 1;
+  updateFilterUI();
+  renderPage();
+});
+$('filterHighlighted').addEventListener('click', () => {
+  highlightFilter = !highlightFilter;
+  page = 1;
+  updateFilterUI();
+  renderPage();
+});
+$('filterClear').addEventListener('click', () => {
+  assignFilter = '';
+  highlightFilter = false;
+  page = 1;
+  updateFilterUI();
   renderPage();
 });
 
@@ -3512,6 +3603,40 @@ document.addEventListener('click', e => {
     panel.dataset.loaded = '1';
     loadPropertyReachComps(panel, addr);
   }
+});
+
+// ── Highlight dots ───────────────────────────────────────────────
+document.addEventListener('click', async e => {
+  const btn = e.target.closest('[data-highlight][data-hlid]');
+  if(!btn) return;
+  const pid   = btn.dataset.hlid;
+  const color = btn.dataset.highlight; // '' = clear
+  const p = properties.find(x => x.id === pid);
+  if(!p) return;
+  if(!p.lead) p.lead = {};
+  p.lead.highlight = color;
+  try {
+    await api('update-lead', {method:'POST', body:{ propertyId: pid, highlight: color }});
+  } catch(err){ toast('Save failed: '+err.message,'err'); }
+  renderPage();
+});
+
+// ── Assign to team member ────────────────────────────────────────
+document.addEventListener('change', async e => {
+  const sel = e.target.closest('[data-assignsel]');
+  if(!sel) return;
+  const pid = sel.dataset.id;
+  const profileId = sel.value || null;
+  const p = properties.find(x => x.id === pid);
+  if(!p) return;
+  if(!p.lead) p.lead = {};
+  p.lead.assigned_to = profileId;
+  try {
+    await api('update-lead', {method:'POST', body:{ propertyId: pid, assignedTo: profileId }});
+    const name = profileId ? (allProfiles.find(pr => pr.id === profileId)?.name || '') : '';
+    toast(name ? `Assigned to ${name}` : 'Unassigned', 'ok');
+  } catch(err){ toast('Save failed: '+err.message,'err'); }
+  renderPage();
 });
 
 // ── Save recording URL from card input ──────────────────────────
