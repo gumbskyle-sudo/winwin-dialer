@@ -1546,16 +1546,7 @@ function renderPage(){
           </div>
         </div>
         <div class="phones">${phoneHtml || '<div class="muted" style="font-size:12px">No phone numbers</div>'}</div>
-        <button class="mark-btn${called?' is-called':''}" data-mark data-id="${escapeHtml(p.id)}">${called?'✓ Called — tap to undo':'Mark as called'}</button>
-        <div class="call-info">
-          <select class="status-sel" data-status data-id="${escapeHtml(p.id)}">${statusOptions}</select>
-          <textarea class="notes-ta" data-notes data-id="${escapeHtml(p.id)}" rows="3" placeholder="Call notes — tap to type…">${escapeHtml(lead.notes||'')}</textarea>
-          <details class="va-notes-block"${(lead.va_notes||'').trim()?' open':''}>
-            <summary>📋 VA / pre-existing notes${(lead.va_notes||'').trim()?' ✓':''}</summary>
-            <textarea class="va-notes-ta" data-vanotes data-id="${escapeHtml(p.id)}" rows="4" placeholder="Paste VA notes, prior call summaries, recording links…">${escapeHtml(lead.va_notes||'')}</textarea>
-            <div data-recordings-container="${escapeHtml(p.id)}" id="rec-card-${escapeHtml(p.id)}" style="margin-top:8px"></div>
-          </details>
-          <div class="lead-tools">
+        <div class="lead-tools">
             <div class="lead-tools-row">
               <span class="lead-tools-label">🎨 Highlight</span>
               <div class="highlight-dots">
@@ -1574,6 +1565,16 @@ function renderPage(){
             </div>
             ${assignedProfile ? `<div class="assigned-badge">Assigned to <strong>${escapeHtml(assignedProfile.name)}</strong></div>` : ''}
           </div>
+        <button class="mark-btn${called?' is-called':''}" data-mark data-id="${escapeHtml(p.id)}">${called?'✓ Called — tap to undo':'Mark as called'}</button>
+        <div class="call-info">
+          <select class="status-sel" data-status data-id="${escapeHtml(p.id)}">${statusOptions}</select>
+          <textarea class="notes-ta" data-notes data-id="${escapeHtml(p.id)}" rows="3" placeholder="Call notes — tap to type…">${escapeHtml(lead.notes||'')}</textarea>
+          <details class="va-notes-block"${(lead.va_notes||'').trim()?' open':''}>
+            <summary>📋 VA / pre-existing notes${(lead.va_notes||'').trim()?' ✓':''}</summary>
+            <textarea class="va-notes-ta" data-vanotes data-id="${escapeHtml(p.id)}" rows="4" placeholder="Paste VA notes, prior call summaries, recording links…">${escapeHtml(lead.va_notes||'')}</textarea>
+            <div data-recordings-container="${escapeHtml(p.id)}" id="rec-card-${escapeHtml(p.id)}" style="margin-top:8px"></div>
+          </details>
+          <div class="lead-tools" style="display:none"><!-- moved above --></div>
         </div>
       </div>`);
   });
