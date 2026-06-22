@@ -613,114 +613,6 @@ async function cleanupExpiredRecordings() {
   return { deleted };
 }
 
-// ── Public website lead intake ────────────────────────────────
-// Creates a callable lead (property + phone + lead row) AND a hot
-// Pipeline deal tagged source "Website". No password required — this
-// is the one endpoint your public form is allowed to reach.
-function normalizeUSPhone(raw) {
-  const s = String(raw || '').trim();
-  const d = s.replace(/\D/g, '');
-  if (d.length === 10) return '+1' + d;
-  if (d.length === 11 && d[0] === '1') return '+' + d;
-  if (s.startsWith('+') && d.length >= 11) return '+' + d;
-  return null;
-}
-
-async function handleWebLead(event) {
-  if (event.httpMethod === 'OPTIONS') return { statusCode: 204, headers: corsHeaders(), body: '' };
-  if (event.httpMethod !== 'POST')    return err('Method not allowed', 405);
-
-  let body = {};
-  if (event.body) { try { body = JSON.parse(event.body); } catch {} }
-
-  // Honeypot: real people leave the hidden "website" field empty.
-  // Bots fill every field — so if it's filled, pretend success and drop it.
-  if (body.website) return ok({ ok: true });
-
-  const name     = String(body.name    || '').trim();
-  const phoneRaw = String(body.phone   || '').trim();
-  const address  = String(body.address || '').trim();
-  const email    = String(body.email   || '').trim();
-
-  if (!name || !phoneRaw || !address) return err('Please include your name, phone, and property address.', 422);
-
-  // Derive a last name from the seller's name (same rule as CSV import)
-  const parseLastName = (owners) => {
-    if (!owners || !owners.trim()) return '';
-    let candidate;
-    if (owners.includes(',')) {
-      candidate = owners.split(',')[0].trim();
-    } else {
-      const cleaned = owners.replace(/\s+AND\s+/gi, ' & ');
-      const firstSeg = cleaned.split('&')[0].trim();
-      const tokens = firstSeg.split(/\s+/);
-      candidate = tokens[tokens.length - 1] || '';
-    }
-    return candidate.charAt(0).toUpperCase() + candidate.slice(1).toLowerCase();
-  };
-
-  const e164 = normalizeUSPhone(phoneRaw);
-  const id   = 'web-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
-  const now  = new Date().toISOString();
-
-  // 1. Property (shows up in the Dialer, callable)
-  await supa('/properties?on_conflict=id', 'POST', [{
-    id,
-    owners: name,
-    owner_last_name: parseLastName(name),
-    property_address: address,
-    mailing_address: '',
-    email,
-  }], { Prefer: 'resolution=merge-duplicates,return=minimal' });
-
-  // 2. Phone number (so the team can click-to-call)
-  if (e164) {
-    await supa('/phones', 'POST', [{
-      property_id: id,
-      e164,
-      display: phoneRaw,
-      type: 'mobile',
-    }], { Prefer: 'return=minimal' });
-  }
-
-  // 3. Lead row — not yet called, tagged in notes
-  await supa('/leads?on_conflict=property_id', 'POST', [{
-    property_id: id,
-    called: false,
-    lead_status: '',
-    notes: '🌐 Website lead — submitted ' + now + (email ? ' · ' + email : ''),
-    updated_at: now,
-  }], { Prefer: 'resolution=merge-duplicates,return=minimal' });
-
-  // 4. Pipeline deal at "hot", tagged source = Website (best-effort)
-  try {
-    const { json } = await supa('/deals', 'POST', [{
-      property_id: id,
-      owners: name,
-      owner_last_name: parseLastName(name),
-      property_address: address,
-      mailing_address: '',
-      source_list: 'Website',
-      stage: 'hot',
-      deal_type: 'assignment',
-    }]);
-    const deal = json && json[0];
-    if (deal) {
-      await supa('/deal_notes', 'POST', [{
-        deal_id: deal.id,
-        body: 'New lead from website form.\n'
-            + 'Name: ' + name + '\n'
-            + 'Phone: ' + (e164 || phoneRaw) + '\n'
-            + (email ? 'Email: ' + email + '\n' : '')
-            + 'Address: ' + address,
-        kind: 'system',
-      }], { Prefer: 'return=minimal' });
-    }
-  } catch (e) { /* property + lead are already saved; deal is non-fatal */ }
-
-  return ok({ ok: true });
-}
-
 // ── Main handler ──────────────────────────────────────────────
 exports.handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') return { statusCode: 204, headers: corsHeaders(), body: '' };
@@ -741,14 +633,6 @@ exports.handler = async (event) => {
   if (action === 'twilio-status') {
     return await handleTwilioStatus(event);
   }
-
-  // ─ Public website lead intake bypasses the password gate ─────
-  // Your public landing-page form posts here. It is rate-limit-light
-  // and protected by a honeypot; it can ONLY create a new lead, nothing else.
-  if (action === 'web-lead') {
-    return await handleWebLead(event);
-  }
-
   // The drip processor can run via Netlify scheduled function or cron
   // hitting a special key — but to keep it simple, it's behind the
   // password gate like everything else and the admin can trigger it
@@ -780,7 +664,7 @@ exports.handler = async (event) => {
         const LIMIT = 50000;
         const { json: props }  = await supa(`/properties?select=id,owners,owner_last_name,property_address,mailing_address,email,imported_at&order=imported_at.asc,id.asc&limit=${LIMIT}`);
         const { json: phones } = await supa(`/phones?select=property_id,e164,display,type&order=property_id.asc,id.asc&limit=${LIMIT}`);
-        const { json: leads }  = await supa(`/leads?select=property_id,called,lead_status,notes,va_notes,recording_url,sms_consent,sms_cell&limit=${LIMIT}`);
+        const { json: leads }  = await supa(`/leads?select=property_id,called,lead_status,notes,va_notes,recording_url,highlight,assigned_to,sms_consent,sms_cell&limit=${LIMIT}`);
         const phonesBy = {};
         for (const p of phones || []) (phonesBy[p.property_id] ||= []).push(p);
         const leadsBy = {};
@@ -973,6 +857,8 @@ exports.handler = async (event) => {
         if ('leadStatus'   in body) patch.lead_status   = body.leadStatus || '';
         if ('notes'        in body) patch.notes         = body.notes || '';
         if ('recordingUrl' in body) patch.recording_url = body.recordingUrl || '';
+        if ('highlight'    in body) patch.highlight     = body.highlight || '';
+        if ('assignedTo'   in body) patch.assigned_to   = body.assignedTo || null;
         // Implied: any non-empty status means called
         if (patch.lead_status) patch.called = true;
         await supa('/leads?on_conflict=property_id', 'POST', [patch], { Prefer: 'resolution=merge-duplicates,return=minimal' });
