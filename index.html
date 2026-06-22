@@ -1254,7 +1254,7 @@ function getFilteredProperties(){
     });
   }
   if(assignFilter){
-    list = list.filter(p => (p.lead||{}).assigned_to === assignFilter);
+    list = list.filter(p => String((p.lead||{}).assigned_to) === String(assignFilter));
   }
   if(highlightFilter){
     list = list.filter(p => !!(p.lead||{}).highlight);
@@ -1406,7 +1406,7 @@ function renderPage(){
                   hl ? `border-color:${hl.border};background:${hl.bg};border-width:3px` :
                   called ? 'border-color:#047857;background:#ecfdf5' : '';
     const pipBg = sc ? sc.pip : 'transparent';
-    const assignedProfile = lead.assigned_to ? allProfiles.find(pr => pr.id === lead.assigned_to) : null;
+    const assignedProfile = lead.assigned_to != null ? allProfiles.find(pr => String(pr.id) === String(lead.assigned_to)) : null;
     const phoneHtml = (p.phones||[]).map((ph,j) => `
       <button class="phone" data-call data-pid="${escapeHtml(p.id)}" data-phidx="${j}">
         <span class="num">${escapeHtml(fmtPhone(ph.e164))}</span>
@@ -1560,7 +1560,7 @@ function renderPage(){
               <span class="lead-tools-label">👤 Assign to</span>
               <select class="assign-sel" data-assignsel data-id="${escapeHtml(p.id)}">
                 <option value="">— Unassigned —</option>
-                ${allProfiles.map(pr => `<option value="${escapeHtml(pr.id)}"${lead.assigned_to===pr.id?' selected':''}>${escapeHtml(pr.name)}</option>`).join('')}
+                ${allProfiles.map(pr => `<option value="${escapeHtml(pr.id)}"${String(lead.assigned_to)===String(pr.id)?' selected':''}>${escapeHtml(pr.name)}</option>`).join('')}
               </select>
             </div>
             ${assignedProfile ? `<div class="assigned-badge">Assigned to <strong>${escapeHtml(assignedProfile.name)}</strong></div>` : ''}
@@ -3627,14 +3627,14 @@ document.addEventListener('change', async e => {
   const sel = e.target.closest('[data-assignsel]');
   if(!sel) return;
   const pid = sel.dataset.id;
-  const profileId = sel.value || null;
+  const profileId = sel.value ? parseInt(sel.value, 10) : null;
   const p = properties.find(x => x.id === pid);
   if(!p) return;
   if(!p.lead) p.lead = {};
   p.lead.assigned_to = profileId;
   try {
     await api('update-lead', {method:'POST', body:{ propertyId: pid, assignedTo: profileId }});
-    const name = profileId ? (allProfiles.find(pr => pr.id === profileId)?.name || '') : '';
+    const name = profileId ? (allProfiles.find(pr => String(pr.id) === String(profileId))?.name || '') : '';
     toast(name ? `Assigned to ${name}` : 'Unassigned', 'ok');
   } catch(err){ toast('Save failed: '+err.message,'err'); }
   renderPage();
