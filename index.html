@@ -71,6 +71,20 @@ main{padding:12px;max-width:720px;margin:0 auto;padding-bottom:100px}
   font-size:15px;background:#fff;color:#1a1d23;
 }
 .search-bar-wrap input:focus{outline:none;border-color:#1f6feb}
+/* ── Realtor Search ─────────────────────────────────────────── */
+.realtor-search-bar{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}
+.realtor-search-bar input{flex:1;min-width:120px;padding:11px 14px;border:1.5px solid #d1d5db;border-radius:10px;font-size:15px}
+.realtor-search-bar select{padding:11px 10px;border:1.5px solid #d1d5db;border-radius:10px;font-size:14px;background:#fff}
+.realtor-card{background:#fff;border:1.5px solid #e5e7eb;border-radius:12px;padding:14px;margin-bottom:10px;display:flex;gap:12px;align-items:flex-start}
+.realtor-photo{width:48px;height:48px;border-radius:50%;object-fit:cover;flex-shrink:0;background:#f3f4f6}
+.realtor-photo-placeholder{width:48px;height:48px;border-radius:50%;background:#e5e7eb;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0}
+.realtor-info{flex:1;min-width:0}
+.realtor-name{font-size:15px;font-weight:700;color:#1a1d23}
+.realtor-brokerage{font-size:12px;color:#6b7280;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.realtor-stats{font-size:11px;color:#9ca3af;margin-top:4px}
+.realtor-actions{display:flex;flex-direction:column;gap:6px;flex-shrink:0}
+.realtor-call-btn{background:#1f6feb;color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap}
+.realtor-call-btn:hover{background:#1a56db}
 .search-bar-wrap button{
   position:absolute;right:8px;top:50%;transform:translateY(-50%);
   background:none;border:none;color:#9ca3af;font-size:16px;cursor:pointer;padding:4px 8px;
@@ -514,6 +528,10 @@ body.view-pipeline header .callerid{display:none}
 body.view-buyers #cards,body.view-buyers #pageNav,body.view-buyers #pipelineView,body.view-buyers #inboxView{display:none}
 body.view-buyers #buyersView{display:block}
 body.view-buyers header .callerid{display:none}
+/* ── Realtors tab ─────────────────────────────────────────── */
+#realtorsView{display:none}
+body.view-realtors #cards,body.view-realtors #pageNav,body.view-realtors #pipelineView,body.view-realtors #inboxView,body.view-realtors #buyersView,body.view-realtors .search-bar-wrap,body.view-realtors .filter-row{display:none}
+body.view-realtors #realtorsView{display:block}
 
 .buyers-toolbar{display:flex;align-items:center;justify-content:space-between;margin:0 0 12px;flex-wrap:wrap;gap:8px}
 .buyers-actions{display:flex;gap:6px;align-items:center}
@@ -805,6 +823,7 @@ body.view-inbox header .callerid{display:none}
     <button class="view-tab" data-view="pipeline">📋 Pipeline <span id="pipeBadge" style="font-size:10px;opacity:.6"></span></button>
     <button class="view-tab" data-view="inbox">💬 Inbox <span id="inboxBadge" style="font-size:10px;opacity:.6"></span></button>
     <button class="view-tab" data-view="buyers">💰 Buyers <span id="buyersBadge" style="font-size:10px;opacity:.6"></span></button>
+    <button class="view-tab" data-view="realtors">🏡 Realtors</button>
   </div>
   <div class="header-controls">
     <label><input type="checkbox" id="hideCalled">&nbsp;Hide called</label>
@@ -933,6 +952,20 @@ body.view-inbox header .callerid{display:none}
       <div class="csv-export"><button class="btn-ghost" id="exportCsv">⬇ Export CSV</button></div>
     </div>
   </div>
+</div>
+
+<div id="realtorsView">
+  <div class="realtor-search-bar">
+    <input type="text" id="realtorZip" placeholder="Enter zip code (e.g. 11735)" maxlength="10" autocomplete="off">
+    <select id="realtorCount">
+      <option value="25">25 agents</option>
+      <option value="50" selected>50 agents</option>
+      <option value="100">100 agents</option>
+    </select>
+    <button class="btn-primary" id="realtorSearchBtn">🔍 Search</button>
+  </div>
+  <div id="realtorStatus" style="font-size:13px;color:#6b7280;padding:8px 0;min-height:24px"></div>
+  <div id="realtorResults"></div>
 </div>
 
 <div class="modal" id="manualDialModal">
@@ -1639,6 +1672,58 @@ $('filterClear').addEventListener('click', () => {
   updateFilterUI();
   renderPage();
 });
+
+// ── Realtor Search ───────────────────────────────────────────────
+$('realtorSearchBtn').addEventListener('click', searchRealtors);
+$('realtorZip').addEventListener('keydown', e => { if(e.key==='Enter') searchRealtors(); });
+
+async function searchRealtors(){
+  const zip = $('realtorZip').value.trim();
+  if(!zip){ toast('Enter a zip code first','err'); return; }
+  const maxResults = parseInt($('realtorCount').value || 50);
+  const statusEl = $('realtorStatus');
+  const resultsEl = $('realtorResults');
+  $('realtorSearchBtn').disabled = true;
+  $('realtorSearchBtn').textContent = 'Searching…';
+  statusEl.textContent = 'Searching Realtor.com for agents in ' + zip + '… (this may take 15–30 seconds)';
+  resultsEl.innerHTML = '';
+  try {
+    const data = await api('search-realtors', {method:'POST', body:{ zipCode: zip, maxResults }});
+    const agents = data.agents || [];
+    if(!agents.length){
+      statusEl.textContent = 'No agents found for zip code ' + zip;
+    } else {
+      statusEl.textContent = `Found ${agents.length} agent${agents.length===1?'':'s'} in ${zip}`;
+      resultsEl.innerHTML = agents.map((a,i) => `
+        <div class="realtor-card">
+          ${a.photo
+            ? `<img src="${escapeHtml(a.photo)}" class="realtor-photo" onerror="this.style.display='none'">`
+            : `<div class="realtor-photo-placeholder">🏡</div>`}
+          <div class="realtor-info">
+            <div class="realtor-name">${escapeHtml(a.name)}</div>
+            <div class="realtor-brokerage">${escapeHtml(a.brokerage||'Independent')}</div>
+            <div class="realtor-stats">${[
+              a.listings ? a.listings+' active' : '',
+              a.sold ? a.sold+' sold' : '',
+              a.email ? '✉ '+a.email : ''
+            ].filter(Boolean).join(' · ')}</div>
+          </div>
+          <div class="realtor-actions">
+            ${a.phone
+              ? `<button class="realtor-call-btn" data-realtor-call="${escapeHtml(a.phone)}" data-realtor-name="${escapeHtml(a.name)}">📞 ${escapeHtml(a.phone)}</button>`
+              : `<span style="font-size:11px;color:#9ca3af">No phone</span>`}
+          </div>
+        </div>
+      `).join('');
+    }
+  } catch(e) {
+    statusEl.textContent = 'Search failed: ' + e.message;
+    toast('Search failed: '+e.message,'err');
+  } finally {
+    $('realtorSearchBtn').disabled = false;
+    $('realtorSearchBtn').textContent = '🔍 Search';
+  }
+}
 
 document.addEventListener('click', e => {
   // Mark called
@@ -3604,6 +3689,17 @@ document.addEventListener('click', e => {
     panel.dataset.loaded = '1';
     loadPropertyReachComps(panel, addr);
   }
+});
+
+// ── Dial a realtor from search results ──────────────────────────
+document.addEventListener('click', e => {
+  const btn = e.target.closest('[data-realtor-call]');
+  if(!btn) return;
+  const phone = btn.dataset.realtorCall;
+  const name  = btn.dataset.realtorName || 'Realtor';
+  $('manualDialNumber').value = phone;
+  $('manualDialLabel').value  = name;
+  openModal('manualDialModal');
 });
 
 // ── Highlight dots ───────────────────────────────────────────────
