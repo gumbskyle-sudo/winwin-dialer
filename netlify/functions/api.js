@@ -339,9 +339,10 @@ const TEAM_FORWARD_NUMBERS = {
   // name -> E.164 cell number (kept here as a simple, no-DB-required map;
   // profiles.phone in Supabase is the source of truth when present —
   // this is just the fallback / seed list)
-  Kyle: '+15162734255',
-  Paul: '+15162707064',
-  Mark: '+12022130776',
+  Kyle:   '+15162734255',
+  Paul:   '+15162707064',
+  Mark:   '+12022130776',
+  Khalid: '+15165956250',
 };
 
 async function handleTwilioVoiceInbound(event) {
@@ -1729,6 +1730,57 @@ exports.handler = async (event) => {
           properties: (json2 && json2.properties) || [],
           resultCount: (json2 && json2.meta && json2.meta.resultCount) || 0,
         });
+      }
+
+      // ════════════════════════════════════════════════════════
+      // REALTOR SEARCH — Apify (Realtor.com Agents Scraper)
+      // ════════════════════════════════════════════════════════
+
+      case 'search-realtors': {
+        if (!body.zipCode) return err('zipCode required');
+        const APIFY_TOKEN = process.env.APIFY_API_TOKEN || 'apify_api_BzvtdXSFSTGcWCqj6yK784P6cDJkEJ1zJKzm';
+        const maxResults = Math.min(parseInt(body.maxResults || 50), 100);
+
+        // Start the Apify actor run synchronously and get results
+        const runResp = await fetch(
+          `https://api.apify.com/v2/acts/automation-lab~realtor-agents-scraper/run-sync-get-dataset-items?token=${APIFY_TOKEN}&timeout=60`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              location: body.zipCode,
+              listingType: 'both',
+              maxResults,
+            }),
+          }
+        );
+
+        const rawText = await runResp.text();
+        let agents = [];
+        try {
+          agents = JSON.parse(rawText);
+        } catch(e) {
+          return err('Apify returned unexpected response: ' + rawText.slice(0, 200), 502);
+        }
+
+        if (!runResp.ok) {
+          const msg = (Array.isArray(agents) ? '' : agents?.message) || 'Apify request failed';
+          return err(msg, runResp.status);
+        }
+
+        // Normalize to a clean list
+        const results = (Array.isArray(agents) ? agents : []).map(a => ({
+          name:      a.name || a.fullName || '',
+          phone:     a.phone || a.mobilePhone || a.officePhone || '',
+          email:     a.email || '',
+          brokerage: a.officeName || a.brokerage || '',
+          listings:  a.listingCount || 0,
+          sold:      a.soldCount || 0,
+          photo:     a.photo || a.profilePhoto || '',
+          profileUrl: a.profileUrl || '',
+        })).filter(a => a.name);
+
+        return ok({ agents: results, total: results.length });
       }
 
       default:
