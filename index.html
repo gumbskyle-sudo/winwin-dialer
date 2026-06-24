@@ -475,13 +475,6 @@ body.view-pipeline header .callerid{display:none}
 .lead-tools{margin-top:10px;padding-top:10px;border-top:1px solid #f3f4f6}
 .lead-tools-row{display:flex;align-items:center;gap:8px;margin-bottom:8px}
 .lead-tools-label{font-size:12px;color:#6b7280;font-weight:600;min-width:80px;flex-shrink:0}
-.highlight-dots{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
-.hl-dot{width:22px;height:22px;border-radius:50%;border:2px solid transparent;cursor:pointer;transition:transform .1s;flex-shrink:0}
-.hl-dot:active{transform:scale(.9)}
-.hl-dot.hl-active{border-color:#1a1d23;transform:scale(1.15)}
-.hl-red{background:#ef4444}.hl-yellow{background:#f59e0b}.hl-green{background:#10b981}
-.hl-blue{background:#3b82f6}.hl-purple{background:#8b5cf6}
-.hl-clear{background:#f3f4f6;color:#9ca3af;font-size:11px;width:auto;padding:2px 6px;border-radius:10px;border:1px solid #e5e7eb}
 .assign-sel{flex:1;padding:7px 10px;border:1.5px solid #d1d5db;border-radius:7px;font-size:13px;background:#fff;color:#1a1d23}
 .assigned-badge{font-size:11px;color:#1f6feb;background:#eff6ff;border-radius:6px;padding:3px 8px;display:inline-block}
 .va-notes-block summary{
@@ -847,7 +840,6 @@ body.view-inbox header .callerid{display:none}
   </div>
   <div class="filter-row" id="filterRow">
     <button class="filter-chip" id="filterMyLeads">👤 My leads</button>
-    <button class="filter-chip" id="filterHighlighted">🎨 Highlighted</button>
     <button class="filter-chip filter-clear hide" id="filterClear">✕ Clear filter</button>
   </div>
   <div id="cards"></div>
@@ -1272,7 +1264,6 @@ const PAGE_SIZE = 20;
 let page = 1;
 let searchQuery = '';
 let assignFilter = ''; // profile id to filter by, '' = show all
-let highlightFilter = false; // show only highlighted leads
 
 function getFilteredProperties(){
   let list = properties;
@@ -1288,9 +1279,6 @@ function getFilteredProperties(){
   }
   if(assignFilter){
     list = list.filter(p => String((p.lead||{}).assigned_to) === String(assignFilter));
-  }
-  if(highlightFilter){
-    list = list.filter(p => !!(p.lead||{}).highlight);
   }
   return list;
 }
@@ -1426,17 +1414,7 @@ function renderPage(){
     const lead = p.lead || {called:false, lead_status:'', notes:''};
     const called = lead.called || !!lead.lead_status;
     const sc = lead.lead_status ? STATUS_COLORS[lead.lead_status] : null;
-    const highlight = lead.highlight || '';
-    const highlightStyles = {
-      red:    { border:'#ef4444', bg:'#fef2f2' },
-      yellow: { border:'#f59e0b', bg:'#fffbeb' },
-      green:  { border:'#10b981', bg:'#ecfdf5' },
-      blue:   { border:'#3b82f6', bg:'#eff6ff' },
-      purple: { border:'#8b5cf6', bg:'#f5f3ff' },
-    };
-    const hl = highlightStyles[highlight];
     const style = sc ? `border-color:${sc.border};background:${sc.bg}` :
-                  hl ? `border-color:${hl.border};background:${hl.bg};border-width:3px` :
                   called ? 'border-color:#047857;background:#ecfdf5' : '';
     const pipBg = sc ? sc.pip : 'transparent';
     const assignedProfile = lead.assigned_to != null ? allProfiles.find(pr => String(pr.id) === String(lead.assigned_to)) : null;
@@ -1581,15 +1559,6 @@ function renderPage(){
         <div class="phones">${phoneHtml || '<div class="muted" style="font-size:12px">No phone numbers</div>'}</div>
         <div class="lead-tools">
             <div class="lead-tools-row">
-              <span class="lead-tools-label">🎨 Highlight</span>
-              <div class="highlight-dots">
-                ${['red','yellow','green','blue','purple'].map(c =>
-                  `<button class="hl-dot hl-${c}${highlight===c?' hl-active':''}" data-highlight="${c}" data-hlid="${escapeHtml(p.id)}" title="${c}"></button>`
-                ).join('')}
-                ${highlight ? `<button class="hl-dot hl-clear" data-highlight="" data-hlid="${escapeHtml(p.id)}" title="Clear">✕</button>` : ''}
-              </div>
-            </div>
-            <div class="lead-tools-row">
               <span class="lead-tools-label">👤 Assign to</span>
               <select class="assign-sel" data-assignsel data-id="${escapeHtml(p.id)}">
                 <option value="">— Unassigned —</option>
@@ -1649,8 +1618,7 @@ $('leadSearchClear').addEventListener('click', () => {
 // ── Filter buttons ────────────────────────────────────────────
 function updateFilterUI(){
   $('filterMyLeads').classList.toggle('active', !!assignFilter);
-  $('filterHighlighted').classList.toggle('active', highlightFilter);
-  $('filterClear').classList.toggle('hide', !assignFilter && !highlightFilter);
+  $('filterClear').classList.toggle('hide', !assignFilter);
 }
 $('filterMyLeads').addEventListener('click', () => {
   assignFilter = assignFilter ? '' : (activeProfileId || '');
@@ -1659,15 +1627,8 @@ $('filterMyLeads').addEventListener('click', () => {
   updateFilterUI();
   renderPage();
 });
-$('filterHighlighted').addEventListener('click', () => {
-  highlightFilter = !highlightFilter;
-  page = 1;
-  updateFilterUI();
-  renderPage();
-});
 $('filterClear').addEventListener('click', () => {
   assignFilter = '';
-  highlightFilter = false;
   page = 1;
   updateFilterUI();
   renderPage();
@@ -2450,6 +2411,7 @@ function switchView(v){
   document.body.classList.toggle('view-pipeline', v === 'pipeline');
   document.body.classList.toggle('view-inbox', v === 'inbox');
   document.body.classList.toggle('view-buyers', v === 'buyers');
+  document.body.classList.toggle('view-realtors', v === 'realtors');
   document.querySelectorAll('.view-tab').forEach(t => t.classList.toggle('active', t.dataset.view === v));
   if(v === 'pipeline') loadPipeline();
   if(v === 'inbox') loadInbox();
@@ -3700,22 +3662,6 @@ document.addEventListener('click', e => {
   $('manualDialNumber').value = phone;
   $('manualDialLabel').value  = name;
   openModal('manualDialModal');
-});
-
-// ── Highlight dots ───────────────────────────────────────────────
-document.addEventListener('click', async e => {
-  const btn = e.target.closest('[data-highlight][data-hlid]');
-  if(!btn) return;
-  const pid   = btn.dataset.hlid;
-  const color = btn.dataset.highlight; // '' = clear
-  const p = properties.find(x => x.id === pid);
-  if(!p) return;
-  if(!p.lead) p.lead = {};
-  p.lead.highlight = color;
-  try {
-    await api('update-lead', {method:'POST', body:{ propertyId: pid, highlight: color }});
-  } catch(err){ toast('Save failed: '+err.message,'err'); }
-  renderPage();
 });
 
 // ── Assign to team member ────────────────────────────────────────
