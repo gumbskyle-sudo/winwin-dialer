@@ -1781,7 +1781,7 @@ exports.handler = async (event) => {
           reviewCount:a.reviewCount || a.totalReviews || 0,
           photo:      a.photo || a.profilePhoto || a.photoUrl || '',
           profileUrl: a.profileUrl || a.url || a.realtorUrl || '',
-        })).filter(a => a.name && a.rating >= 4);
+        })).filter(a => a.name && (a.rating === 0 || a.rating >= 4));
 
         // Shuffle using page as seed so each "refresh" gives a different 20
         const seed = page * 7919;
