@@ -2334,6 +2334,7 @@ function bestMatch(headers, hint){
 }
 
 function applyTemplate(templateKey){
+  if(!csvParsed) return;
   currentUploadTemplate = templateKey;
   document.querySelectorAll('.upload-template-btn').forEach(btn => {
     const active = btn.dataset.template === templateKey;
@@ -2365,10 +2366,16 @@ function applyTemplate(templateKey){
   ).join('') + phoneRows + `
     <div></div><div><button class="btn-ghost" id="addPhoneCol" style="font-size:12px;padding:5px 10px">+ Add phone column</button></div>`;
 
-  $('addPhoneCol').addEventListener('click', () => {
-    phonesForMap.push({num:'', type:''});
-    applyTemplate(currentUploadTemplate);
-  });
+  const addBtn = $('addPhoneCol');
+  if(addBtn){
+    addBtn.addEventListener('click', () => {
+      phonesForMap.push({num:'', type:''});
+      // Re-render with the current phones list preserved
+      const extendedTmpl = Object.assign({}, tmpl, { phones: phonesForMap.map(p => p.num || '') });
+      UPLOAD_TEMPLATES['__extended__'] = extendedTmpl;
+      applyTemplate('__extended__');
+    });
+  }
   updateUploadStats();
   $('uploadPreview').classList.remove('hide');
 }
