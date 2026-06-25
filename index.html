@@ -74,11 +74,6 @@ main{padding:12px;max-width:720px;margin:0 auto;padding-bottom:100px}
 /* ── Realtor Search ─────────────────────────────────────────── */
 .realtor-search-bar{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}
 .realtor-search-bar input{flex:1;min-width:120px;padding:11px 14px;border:1.5px solid #d1d5db;border-radius:10px;font-size:15px}
-.realtor-search-bar select{padding:11px 10px;border:1.5px solid #d1d5db;border-radius:10px;font-size:14px;background:#fff}
-.realtor-filters{background:#f9fafb;border:1.5px solid #e5e7eb;border-radius:10px;padding:10px 14px;margin-bottom:12px;display:grid;grid-template-columns:1fr 1fr;gap:8px}
-.realtor-filter-row{display:flex;flex-direction:column;gap:4px}
-.realtor-filter-label{font-size:11px;font-weight:600;color:#6b7280}
-.realtor-filters select{padding:7px 8px;border:1.5px solid #d1d5db;border-radius:7px;font-size:13px;background:#fff}
 .realtor-card{background:#fff;border:1.5px solid #e5e7eb;border-radius:12px;padding:14px;margin-bottom:10px;display:flex;gap:12px;align-items:flex-start}
 .realtor-photo{width:48px;height:48px;border-radius:50%;object-fit:cover;flex-shrink:0;background:#f3f4f6}
 .realtor-photo-placeholder{width:48px;height:48px;border-radius:50%;background:#e5e7eb;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0}
@@ -955,40 +950,10 @@ body.view-inbox header .callerid{display:none}
     <input type="text" id="realtorZip" placeholder="Enter zip code (e.g. 11735)" maxlength="10" autocomplete="off">
     <button class="btn-primary" id="realtorSearchBtn">🔍 Search</button>
   </div>
-  <div class="realtor-filters">
-    <div class="realtor-filter-row">
-      <label class="realtor-filter-label">Max sales this year</label>
-      <select id="realtorMaxSold">
-        <option value="">Any</option>
-        <option value="5">Under 5</option>
-        <option value="15" selected>Under 15</option>
-        <option value="30">Under 30</option>
-      </select>
-    </div>
-    <div class="realtor-filter-row">
-      <label class="realtor-filter-label">Min rating</label>
-      <select id="realtorMinRating">
-        <option value="">Any</option>
-        <option value="3">3+ stars</option>
-        <option value="4" selected>4+ stars</option>
-        <option value="4.5">4.5+ stars</option>
-      </select>
-    </div>
-    <div class="realtor-filter-row">
-      <label class="realtor-filter-label">Max experience</label>
-      <select id="realtorMaxExp">
-        <option value="">Any</option>
-        <option value="3">Under 3 yrs</option>
-        <option value="7" selected>Under 7 yrs</option>
-        <option value="15">Under 15 yrs</option>
-      </select>
-    </div>
-    <div class="realtor-filter-row">
-      <label class="realtor-filter-label">Investor friendly</label>
-      <input type="checkbox" id="realtorInvestor" checked style="width:18px;height:18px;cursor:pointer">
-    </div>
+  <div id="realtorStatus" style="font-size:13px;color:#6b7280;padding:8px 0;min-height:24px;display:flex;align-items:center;gap:10px">
+    <span id="realtorStatusText"></span>
+    <button id="realtorShuffleBtn" class="btn-ghost hide" style="font-size:12px;padding:5px 12px">🔀 Shuffle</button>
   </div>
-  <div id="realtorStatus" style="font-size:13px;color:#6b7280;padding:8px 0;min-height:24px"></div>
   <div id="realtorResults"></div>
 </div>
 
@@ -1667,36 +1632,39 @@ $('filterClear').addEventListener('click', () => {
 });
 
 // ── Realtor Search ───────────────────────────────────────────────
-$('realtorSearchBtn').addEventListener('click', searchRealtors);
-$('realtorZip').addEventListener('keydown', e => { if(e.key==='Enter') searchRealtors(); });
+$('realtorSearchBtn').addEventListener('click', () => searchRealtors(false));
+$('realtorZip').addEventListener('keydown', e => { if(e.key==='Enter') searchRealtors(false); });
+$('realtorShuffleBtn').addEventListener('click', () => searchRealtors(true));
 
-async function searchRealtors(){
+let realtorPage = 0;
+let lastRealtorZip = '';
+
+async function searchRealtors(shuffle){
   const zip = $('realtorZip').value.trim();
   if(!zip){ toast('Enter a zip code first','err'); return; }
-  const filters = {};
-  const maxSold = $('realtorMaxSold').value;
-  const minRating = $('realtorMinRating').value;
-  const maxExp = $('realtorMaxExp').value;
-  const investorFriendly = $('realtorInvestor').checked;
-  if(maxSold) filters.maxSold = parseInt(maxSold);
-  if(minRating) filters.minRating = parseFloat(minRating);
-  if(maxExp) filters.maxYearsExp = parseInt(maxExp);
-  if(investorFriendly) filters.investorFriendly = true;
+  if(zip !== lastRealtorZip){ realtorPage = 0; lastRealtorZip = zip; }
+  else if(shuffle){ realtorPage++; }
 
-  const statusEl = $('realtorStatus');
+  const statusText = $('realtorStatusText');
+  const shuffleBtn = $('realtorShuffleBtn');
   const resultsEl = $('realtorResults');
   $('realtorSearchBtn').disabled = true;
   $('realtorSearchBtn').textContent = 'Searching…';
-  statusEl.textContent = 'Searching Realtor.com for agents in ' + zip + '… (this may take 15–30 seconds)';
+  shuffleBtn.disabled = true;
+  statusText.textContent = realtorPage === 0
+    ? 'Searching Realtor.com for 4★+ agents in ' + zip + '…'
+    : 'Shuffling to new agents…';
   resultsEl.innerHTML = '';
   try {
-    const data = await api('search-realtors', {method:'POST', body:{ zipCode: zip, filters }});
+    const data = await api('search-realtors', {method:'POST', body:{ zipCode: zip, page: realtorPage }});
     const agents = data.agents || [];
     if(!agents.length){
-      statusEl.textContent = 'No agents matched your filters for zip code ' + zip + '. Try loosening the filters.';
+      statusText.textContent = 'No 4+ star agents found in ' + zip;
+      shuffleBtn.classList.add('hide');
     } else {
-      statusEl.textContent = `Found ${agents.length} agent${agents.length===1?'':'s'} in ${zip} matching your filters`;
-      resultsEl.innerHTML = agents.map((a,i) => `
+      statusText.textContent = `Showing 4★+ agents in ${zip}${data.total > 20 ? ' · ' + data.total + ' total' : ''}`;
+      shuffleBtn.classList.remove('hide');
+      resultsEl.innerHTML = agents.map((a) => `
         <div class="realtor-card">
           ${a.photo
             ? `<img src="${escapeHtml(a.photo)}" class="realtor-photo" onerror="this.style.display='none'">`
@@ -1705,10 +1673,9 @@ async function searchRealtors(){
             <div class="realtor-name">${escapeHtml(a.name)}</div>
             <div class="realtor-brokerage">${escapeHtml(a.brokerage||'Independent')}</div>
             <div class="realtor-stats">${[
+              a.rating ? `⭐ ${a.rating}${a.reviewCount?' ('+a.reviewCount+' reviews)':''}` : '',
               a.sold ? `${a.sold} sold` : '',
               a.listings ? `${a.listings} active` : '',
-              a.rating ? `⭐ ${a.rating}${a.reviewCount?' ('+a.reviewCount+')':''}` : '',
-              a.yearsExp ? `${a.yearsExp} yrs exp` : '',
               a.email ? `✉ ${a.email}` : ''
             ].filter(Boolean).join(' · ')}</div>
           </div>
@@ -1723,11 +1690,12 @@ async function searchRealtors(){
       `).join('');
     }
   } catch(e) {
-    statusEl.textContent = 'Search failed: ' + e.message;
+    statusText.textContent = 'Search failed: ' + e.message;
     toast('Search failed: '+e.message,'err');
   } finally {
     $('realtorSearchBtn').disabled = false;
     $('realtorSearchBtn').textContent = '🔍 Search';
+    shuffleBtn.disabled = false;
   }
 }
 
