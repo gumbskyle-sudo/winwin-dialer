@@ -993,6 +993,13 @@ body.view-inbox header .callerid{display:none}
       </label>
       <div id="uploadPreview" class="hide">
         <div style="font-size:13px;margin:14px 0 6px;font-weight:600">Detected: <span id="uploadFileName"></span></div>
+        <div style="margin-bottom:10px">
+          <div style="font-size:11px;font-weight:600;color:#6b7280;margin-bottom:6px">COLUMN TEMPLATE</div>
+          <div style="display:flex;gap:8px">
+            <button class="upload-template-btn active" data-template="va" style="flex:1;padding:8px;border:2px solid #1f6feb;background:#eff6ff;color:#1e40af;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer">📋 VA Leads</button>
+            <button class="upload-template-btn" data-template="propertyreach" style="flex:1;padding:8px;border:2px solid #d1d5db;background:#fff;color:#374151;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer">🏠 PropertyReach</button>
+          </div>
+        </div>
         <div style="font-size:12px;color:#6b7280;margin-bottom:8px">Map your CSV columns to the dialer fields. Phone columns can be repeated (Phone1, Phone2, etc.) — they're combined automatically.</div>
         <div class="col-map" id="colMap"></div>
         <div style="background:#fef3c7;border:1px solid #fde68a;border-radius:7px;padding:10px;font-size:12px;color:#92400e;margin-bottom:10px">
@@ -1325,6 +1332,13 @@ function openModal(id){
   if(id==='uploadModal'){
     $('uploadPreview').classList.add('hide');
     $('csvFile').value = '';
+    currentUploadTemplate = 'va';
+    document.querySelectorAll('.upload-template-btn').forEach(b => {
+      const active = b.dataset.template === 'va';
+      b.style.borderColor = active ? '#1f6feb' : '#d1d5db';
+      b.style.background  = active ? '#eff6ff' : '#fff';
+      b.style.color       = active ? '#1e40af' : '#374151';
+    });
     // Reset color picker to "none"
     document.querySelectorAll('.list-color-btn').forEach(b => {
       b.style.borderColor = b.dataset.listcolor === 'none' ? '#1a1d23' : 'transparent';
@@ -1515,8 +1529,7 @@ function renderPage(){
                 let input = '';
                 if(f.type==='select'){
                   input=`<select id="${id}" data-iqkey="${f.key}" data-pid="${escapeHtml(p.id)}">${f.options.map(o=>`<option value="${escapeHtml(o)}"${o===val?' selected':''}>${o||'— pick one —'}</option>`).join('')}</select>`;
-                } else if(f.type==='textarea'){
-                  input=`<textarea id="${id}" data-iqkey="${f.key}" data-pid="${escapeHtml(p.id)}" placeholder="${escapeHtml(f.placeholder||'')}">${escapeHtml(val)}</textarea>`;
+                } else if(f.type==='textarea'){input=`<textarea id="${id}" data-iqkey="${f.key}" data-pid="${escapeHtml(p.id)}" placeholder="${escapeHtml(f.placeholder||'')}">${escapeHtml(val)}</textarea>`;
                 } else {
                   input=`<input type="${f.type}" id="${id}" data-iqkey="${f.key}" data-pid="${escapeHtml(p.id)}" placeholder="${escapeHtml(f.placeholder||'')}" value="${escapeHtml(val)}">`;
                 }
@@ -2279,29 +2292,102 @@ function autoMap(headers){
 
 function showCsvPreview(){
   $('uploadFileName').textContent = csvParsed.fileName + ' · ' + csvParsed.rows.length + ' rows';
-  const m = csvParsed.mapping;
-  const opts = ['<option value="">— skip —</option>'].concat(csvParsed.headers.map(h => `<option value="${escapeHtml(h)}">${escapeHtml(h)}</option>`)).join('');
-  const sel = (id, val) => `<select id="map-${id}">${opts.replace(`value="${escapeHtml(val||'')}"`, `value="${escapeHtml(val||'')}" selected`)}</select>`;
-  const phoneRows = (m.phones.length ? m.phones : [{num:'',type:''}]).map((p,i) => `
+  applyTemplate(currentUploadTemplate);
+}
+
+// ── Upload templates ─────────────────────────────────────────────
+let currentUploadTemplate = 'va';
+
+const UPLOAD_TEMPLATES = {
+  va: {
+    label: 'VA Leads',
+    // Maps dialer field -> exact column name hint from VA format
+    fields: {
+      id: '',
+      owners: 'Seller name',
+      property: 'Property address',
+      email: 'Sellers Email',
+      vanotes: 'Additional Notes',
+      recording: 'Call recording',
+      listname: 'List name',
+    },
+    // Phone columns in order
+    phones: ['Sellers phone number'],
+  },
+  propertyreach: {
+    label: 'PropertyReach',
+    fields: {
+      id: 'APN',
+      owners: 'Owner 1 First Name',
+      property: 'Address',
+      email: 'Owner 1 Email 1',
+      vanotes: '',
+      recording: '',
+      listname: '',
+    },
+    phones: [
+      'Owner 1 Phone 1','Owner 1 Phone 2','Owner 1 Phone 3',
+      'Owner 2 Phone 1','Owner 2 Phone 2','Owner 2 Phone 3',
+    ],
+  },
+};
+
+function bestMatch(headers, hint){
+  if(!hint) return '';
+  // Exact match first
+  const exact = headers.find(h => h.toLowerCase().trim() === hint.toLowerCase().trim());
+  if(exact) return exact;
+  // Partial match
+  const partial = headers.find(h => h.toLowerCase().includes(hint.toLowerCase()));
+  return partial || '';
+}
+
+function applyTemplate(templateKey){
+  currentUploadTemplate = templateKey;
+  // Update button styles
+  document.querySelectorAll('.upload-template-btn').forEach(btn => {
+    const active = btn.dataset.template === templateKey;
+    btn.style.borderColor  = active ? '#1f6feb' : '#d1d5db';
+    btn.style.background   = active ? '#eff6ff' : '#fff';
+    btn.style.color        = active ? '#1e40af' : '#374151';
+  });
+
+  const tmpl   = UPLOAD_TEMPLATES[templateKey];
+  const headers = csvParsed.headers;
+  const opts   = ['<option value="">— skip —</option>'].concat(headers.map(h => `<option value="${escapeHtml(h)}">${escapeHtml(h)}</option>`)).join('');
+  const sel    = (id, hint) => {
+    const val = bestMatch(headers, hint);
+    return `<select id="map-${id}">${opts.replace(`value="${escapeHtml(val)}"`, `value="${escapeHtml(val)}" selected`)}</select>`;
+  };
+
+  // Build phone rows from template
+  const tmplPhones = (tmpl.phones || []).map(hint => ({
+    num: bestMatch(headers, hint),
+    type: '',
+  })).filter(p => p.num); // only include ones that actually matched
+  const phonesForMap = tmplPhones.length ? tmplPhones : [{num:'',type:''}];
+
+  const phoneRows = phonesForMap.map((p,i) => `
     <div style="font-weight:600">Phone ${i+1}</div>
     <div style="display:flex;gap:6px;flex-wrap:wrap">
-      <select class="map-phone-num" data-i="${i}">${opts.replace(`value="${escapeHtml(p.num||'')}"`, `value="${escapeHtml(p.num||'')}" selected`)}</select>
-      <select class="map-phone-type" data-i="${i}">${opts.replace(`value="${escapeHtml(p.type||'')}"`, `value="${escapeHtml(p.type||'')}" selected`)}</select>
+      <select class="map-phone-num" data-i="${i}">${opts.replace(`value="${escapeHtml(p.num)}"`, `value="${escapeHtml(p.num)}" selected`)}</select>
+      <select class="map-phone-type" data-i="${i}">${opts.replace(`value="${escapeHtml(p.type)}"`, `value="${escapeHtml(p.type)}" selected`)}</select>
     </div>`).join('');
+
   $('colMap').innerHTML = `
-    <div style="font-weight:600">ID column</div>${sel('id', m.id)}
-    <div style="font-weight:600">Owners</div>${sel('owners', m.owners)}
-    <div style="font-weight:600">Property address</div>${sel('property', m.propertyAddress)}
-    <div style="font-weight:600">Email</div>${sel('email', m.email)}
-    <div style="font-weight:600">VA / Pre-call notes</div>${sel('vanotes', m.vaNotes)}
-    <div style="font-weight:600">Recording URL</div>${sel('recording', m.recording)}
-    <div style="font-weight:600">List name</div>${sel('listname', m.listName)}
+    <div style="font-weight:600">ID column</div>${sel('id', tmpl.fields.id)}
+    <div style="font-weight:600">Owners</div>${sel('owners', tmpl.fields.owners)}
+    <div style="font-weight:600">Property address</div>${sel('property', tmpl.fields.property)}
+    <div style="font-weight:600">Email</div>${sel('email', tmpl.fields.email)}
+    <div style="font-weight:600">VA / Pre-call notes</div>${sel('vanotes', tmpl.fields.vanotes)}
+    <div style="font-weight:600">Recording URL</div>${sel('recording', tmpl.fields.recording)}
+    <div style="font-weight:600">List name</div>${sel('listname', tmpl.fields.listname)}
     ${phoneRows}
     <div></div><div><button class="btn-ghost" id="addPhoneCol" style="font-size:12px;padding:5px 10px">+ Add phone column</button></div>
   `;
   $('addPhoneCol').addEventListener('click', () => {
-    csvParsed.mapping.phones.push({num:'', type:''});
-    showCsvPreview();
+    phonesForMap.push({num:'', type:''});
+    applyTemplate(currentUploadTemplate);
   });
   updateUploadStats();
   $('uploadPreview').classList.remove('hide');
@@ -2321,6 +2407,13 @@ $('colMap')?.addEventListener('change', updateUploadStats);
 document.addEventListener('change', e => { if(e.target.closest('.map-phone-num')) updateUploadStats(); });
 
 $('uploadCancel').addEventListener('click', () => { $('uploadPreview').classList.add('hide'); });
+
+// ── Upload template switcher ─────────────────────────────────────
+document.addEventListener('click', e => {
+  const btn = e.target.closest('.upload-template-btn');
+  if(!btn || !csvParsed) return;
+  applyTemplate(btn.dataset.template);
+});
 
 // ── List color picker ────────────────────────────────────────────
 document.addEventListener('click', e => {
@@ -2967,8 +3060,7 @@ function renderActivity(notes, calls){
     const icnMap = {call:'ti-phone-outgoing', note:'ti-message-2', system:'ti-sparkles', stage_change:'ti-arrow-right'};
     const icn = icnMap[it.kind] || 'ti-circle';
     const body = (it.kind==='note' && profile ? profile.name+': ' : '') + (it.body || '');
-    const row = el(`<div class="dd-act ${it.kind}">
-      <i class="ti ${icn} icn" aria-hidden="true"></i>
+    const row = el(`<div class="dd-act ${it.kind}"><i class="ti ${icn} icn" aria-hidden="true"></i>
       <div class="body">${escapeHtml(body)}<div class="meta">${formatRelTime(it.when)}</div></div>
     </div>`);
     list.appendChild(row);
