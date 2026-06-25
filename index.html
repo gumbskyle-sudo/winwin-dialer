@@ -993,7 +993,14 @@ body.view-inbox header .callerid{display:none}
       </label>
       <div id="uploadPreview" class="hide">
         <div style="font-size:13px;margin:14px 0 6px;font-weight:600">Detected: <span id="uploadFileName"></span></div>
-        <div style="font-size:12px;color:#6b7280;margin-bottom:8px">Map your CSV columns to the dialer fields. Phone columns can be repeated (Phone1, Phone2, etc.) — they're combined automatically.</div>
+        <div style="margin-bottom:10px">
+          <div style="font-size:11px;font-weight:600;color:#6b7280;margin-bottom:6px">COLUMN TEMPLATE</div>
+          <div style="display:flex;gap:8px">
+            <button class="upload-template-btn active" data-template="va" style="flex:1;padding:8px;border:2px solid #1f6feb;background:#eff6ff;color:#1e40af;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer">📋 VA Leads</button>
+            <button class="upload-template-btn" data-template="propertyreach" style="flex:1;padding:8px;border:2px solid #d1d5db;background:#fff;color:#374151;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer">🏠 PropertyReach</button>
+          </div>
+        </div>
+        <div style="font-size:12px;color:#6b7280;margin-bottom:8px">Map your CSV columns to the dialer fields. Phone columns can be repeated — they're combined automatically.</div>
         <div class="col-map" id="colMap"></div>
         <div style="background:#fef3c7;border:1px solid #fde68a;border-radius:7px;padding:10px;font-size:12px;color:#92400e;margin-bottom:10px">
           <label style="display:flex;gap:6px;align-items:center;cursor:pointer">
@@ -1325,7 +1332,13 @@ function openModal(id){
   if(id==='uploadModal'){
     $('uploadPreview').classList.add('hide');
     $('csvFile').value = '';
-    // Reset color picker to "none"
+    currentUploadTemplate = 'va';
+    document.querySelectorAll('.upload-template-btn').forEach(b => {
+      const active = b.dataset.template === 'va';
+      b.style.borderColor = active ? '#1f6feb' : '#d1d5db';
+      b.style.background  = active ? '#eff6ff' : '#fff';
+      b.style.color       = active ? '#1e40af' : '#374151';
+    });
     document.querySelectorAll('.list-color-btn').forEach(b => {
       b.style.borderColor = b.dataset.listcolor === 'none' ? '#1a1d23' : 'transparent';
     });
@@ -2277,34 +2290,92 @@ function autoMap(headers){
   };
 }
 
-function showCsvPreview(){
-  $('uploadFileName').textContent = csvParsed.fileName + ' · ' + csvParsed.rows.length + ' rows';
-  const m = csvParsed.mapping;
-  const opts = ['<option value="">— skip —</option>'].concat(csvParsed.headers.map(h => `<option value="${escapeHtml(h)}">${escapeHtml(h)}</option>`)).join('');
-  const sel = (id, val) => `<select id="map-${id}">${opts.replace(`value="${escapeHtml(val||'')}"`, `value="${escapeHtml(val||'')}" selected`)}</select>`;
-  const phoneRows = (m.phones.length ? m.phones : [{num:'',type:''}]).map((p,i) => `
+// ── Upload templates ─────────────────────────────────────────────
+let currentUploadTemplate = 'va';
+
+const UPLOAD_TEMPLATES = {
+  va: {
+    fields: [
+      { id:'owners',   label:'Owner name',          hint:'Seller name' },
+      { id:'property', label:'Property address',     hint:'Property address' },
+      { id:'email',    label:'Email',                hint:'Sellers Email' },
+      { id:'vanotes',  label:'VA / Pre-call notes',  hint:'Additional Notes' },
+      { id:'recording',label:'Call recording URL',   hint:'Call recording' },
+      { id:'listname', label:'List name',            hint:'List name' },
+    ],
+    phones: ['Sellers phone number'],
+  },
+  propertyreach: {
+    fields: [
+      { id:'id',       label:'Property ID (APN)',    hint:'APN' },
+      { id:'owners',   label:'Owner name',           hint:'Owner 1 First Name' },
+      { id:'property', label:'Property address',     hint:'Address' },
+      { id:'email',    label:'Email',                hint:'Owner 1 Email 1' },
+      { id:'beds',     label:'Bedrooms',             hint:'Bedrooms' },
+      { id:'baths',    label:'Bathrooms',            hint:'Bathrooms' },
+      { id:'sqft',     label:'Square footage',       hint:'Square Footage' },
+      { id:'yearbuilt',label:'Year built',           hint:'Year Built' },
+      { id:'lastprice',label:'Last sale amount',     hint:'Last Sale Amount' },
+      { id:'estvalue', label:'Est. property value',  hint:'Est Property Value' },
+    ],
+    phones: [
+      'Owner 1 Phone 1','Owner 1 Phone 2','Owner 1 Phone 3',
+      'Owner 2 Phone 1','Owner 2 Phone 2','Owner 2 Phone 3',
+    ],
+  },
+};
+
+function bestMatch(headers, hint){
+  if(!hint) return '';
+  const exact = headers.find(h => h.toLowerCase().trim() === hint.toLowerCase().trim());
+  if(exact) return exact;
+  const partial = headers.find(h => h.toLowerCase().includes(hint.toLowerCase()));
+  return partial || '';
+}
+
+function applyTemplate(templateKey){
+  currentUploadTemplate = templateKey;
+  document.querySelectorAll('.upload-template-btn').forEach(btn => {
+    const active = btn.dataset.template === templateKey;
+    btn.style.borderColor = active ? '#1f6feb' : '#d1d5db';
+    btn.style.background  = active ? '#eff6ff' : '#fff';
+    btn.style.color       = active ? '#1e40af' : '#374151';
+  });
+
+  const tmpl   = UPLOAD_TEMPLATES[templateKey];
+  const headers = csvParsed.headers;
+  const opts   = ['<option value="">— skip —</option>'].concat(headers.map(h => `<option value="${escapeHtml(h)}">${escapeHtml(h)}</option>`)).join('');
+  const sel    = (id, hint) => {
+    const val = bestMatch(headers, hint);
+    return `<select id="map-${id}">${opts.replace(`value="${escapeHtml(val)}"`, `value="${escapeHtml(val)}" selected`)}</select>`;
+  };
+
+  const tmplPhones = (tmpl.phones||[]).map(hint => ({ num: bestMatch(headers, hint), type:'' })).filter(p => p.num);
+  const phonesForMap = tmplPhones.length ? tmplPhones : [{num:'',type:''}];
+
+  const phoneRows = phonesForMap.map((p,i) => `
     <div style="font-weight:600">Phone ${i+1}</div>
     <div style="display:flex;gap:6px;flex-wrap:wrap">
-      <select class="map-phone-num" data-i="${i}">${opts.replace(`value="${escapeHtml(p.num||'')}"`, `value="${escapeHtml(p.num||'')}" selected`)}</select>
-      <select class="map-phone-type" data-i="${i}">${opts.replace(`value="${escapeHtml(p.type||'')}"`, `value="${escapeHtml(p.type||'')}" selected`)}</select>
+      <select class="map-phone-num" data-i="${i}">${opts.replace(`value="${escapeHtml(p.num)}"`, `value="${escapeHtml(p.num)}" selected`)}</select>
+      <select class="map-phone-type" data-i="${i}">${opts.replace(`value="${escapeHtml(p.type)}"`, `value="${escapeHtml(p.type)}" selected`)}</select>
     </div>`).join('');
-  $('colMap').innerHTML = `
-    <div style="font-weight:600">ID column</div>${sel('id', m.id)}
-    <div style="font-weight:600">Owners</div>${sel('owners', m.owners)}
-    <div style="font-weight:600">Property address</div>${sel('property', m.propertyAddress)}
-    <div style="font-weight:600">Email</div>${sel('email', m.email)}
-    <div style="font-weight:600">VA / Pre-call notes</div>${sel('vanotes', m.vaNotes)}
-    <div style="font-weight:600">Recording URL</div>${sel('recording', m.recording)}
-    <div style="font-weight:600">List name</div>${sel('listname', m.listName)}
-    ${phoneRows}
-    <div></div><div><button class="btn-ghost" id="addPhoneCol" style="font-size:12px;padding:5px 10px">+ Add phone column</button></div>
-  `;
+
+  $('colMap').innerHTML = tmpl.fields.map(f =>
+    `<div style="font-weight:600">${escapeHtml(f.label)}</div>${sel(f.id, f.hint)}`
+  ).join('') + phoneRows + `
+    <div></div><div><button class="btn-ghost" id="addPhoneCol" style="font-size:12px;padding:5px 10px">+ Add phone column</button></div>`;
+
   $('addPhoneCol').addEventListener('click', () => {
-    csvParsed.mapping.phones.push({num:'', type:''});
-    showCsvPreview();
+    phonesForMap.push({num:'', type:''});
+    applyTemplate(currentUploadTemplate);
   });
   updateUploadStats();
   $('uploadPreview').classList.remove('hide');
+}
+
+function showCsvPreview(){
+  $('uploadFileName').textContent = csvParsed.fileName + ' · ' + csvParsed.rows.length + ' rows';
+  applyTemplate(currentUploadTemplate);
 }
 function updateUploadStats(){
   // Count rows that would have at least one phone
@@ -2322,6 +2393,13 @@ document.addEventListener('change', e => { if(e.target.closest('.map-phone-num')
 
 $('uploadCancel').addEventListener('click', () => { $('uploadPreview').classList.add('hide'); });
 
+// ── Upload template switcher ─────────────────────────────────────
+document.addEventListener('click', e => {
+  const btn = e.target.closest('.upload-template-btn');
+  if(!btn || !csvParsed) return;
+  applyTemplate(btn.dataset.template);
+});
+
 // ── List color picker ────────────────────────────────────────────
 document.addEventListener('click', e => {
   const btn = e.target.closest('.list-color-btn');
@@ -2333,18 +2411,25 @@ document.addEventListener('click', e => {
 });
 $('uploadGo').addEventListener('click', async () => {
   if(!csvParsed) return;
-  const idCol      = $('map-id').value;
-  const ownersCol  = $('map-owners').value;
-  const propCol    = $('map-property').value;
-  const emailCol   = $('map-email').value;
-  const vaNotesCol = $('map-vanotes').value;
-  const recordingCol = $('map-recording').value;
-  const listNameCol  = $('map-listname').value;
-  const phoneCols  = Array.from(document.querySelectorAll('.map-phone-num')).map(s => s.value);
-  const typeCols   = Array.from(document.querySelectorAll('.map-phone-type')).map(s => s.value);
+  const idCol       = $('map-id')?.value || '';
+  const ownersCol   = $('map-owners')?.value || '';
+  const propCol     = $('map-property')?.value || '';
+  const emailCol    = $('map-email')?.value || '';
+  const vaNotesCol  = $('map-vanotes')?.value || '';
+  const recordingCol= $('map-recording')?.value || '';
+  const listNameCol = $('map-listname')?.value || '';
+  // PropertyReach extra fields
+  const bedsCol     = $('map-beds')?.value || '';
+  const bathsCol    = $('map-baths')?.value || '';
+  const sqftCol     = $('map-sqft')?.value || '';
+  const yearCol     = $('map-yearbuilt')?.value || '';
+  const lastPriceCol= $('map-lastprice')?.value || '';
+  const estValueCol = $('map-estvalue')?.value || '';
+  const phoneCols   = Array.from(document.querySelectorAll('.map-phone-num')).map(s => s.value);
+  const typeCols    = Array.from(document.querySelectorAll('.map-phone-type')).map(s => s.value);
   if(!phoneCols.some(Boolean)){ toast('Select at least one phone column','err'); return; }
   if(!ownersCol && !propCol){ toast('Map at least Owners or Property address','err'); return; }
-  const replace = $('replaceExisting').checked;
+  const replace   = $('replaceExisting').checked;
   const skipDupes = $('skipDuplicates').checked;
   const listColor = selectedListColor !== 'none' ? selectedListColor : '';
 
@@ -2377,12 +2462,24 @@ $('uploadGo').addEventListener('click', async () => {
     let ownerName = ownersCol ? (r[ownersCol] || '') : '';
     if(lastNameCol && r[lastNameCol]) ownerName = (ownerName + ' ' + r[lastNameCol]).trim();
 
+    // Build property notes from PropertyReach fields if available
+    const prParts = [];
+    if(bedsCol && r[bedsCol])     prParts.push(`Beds: ${r[bedsCol]}`);
+    if(bathsCol && r[bathsCol])   prParts.push(`Baths: ${r[bathsCol]}`);
+    if(sqftCol && r[sqftCol])     prParts.push(`Sqft: ${r[sqftCol]}`);
+    if(yearCol && r[yearCol])     prParts.push(`Year Built: ${r[yearCol]}`);
+    if(lastPriceCol && r[lastPriceCol]) prParts.push(`Last Sale: $${Number(r[lastPriceCol]).toLocaleString()}`);
+    if(estValueCol && r[estValueCol])   prParts.push(`Est Value: $${Number(r[estValueCol]).toLocaleString()}`);
+    const prNotes = prParts.length ? prParts.join(' · ') : '';
+    const vaNotes = vaNotesCol ? r[vaNotesCol] : '';
+    const combinedNotes = [vaNotes, prNotes].filter(Boolean).join('\n');
+
     out.push({
       id: idCol && r[idCol] ? String(r[idCol]) : ('row-'+(i+1)),
       owners: ownerName,
       property_address: propCol ? r[propCol] : '',
       email: emailCol ? r[emailCol] : '',
-      va_notes: vaNotesCol ? r[vaNotesCol] : '',
+      va_notes: combinedNotes,
       recording_url: recordingCol ? r[recordingCol] : '',
       list_name: listNameCol ? r[listNameCol] : '',
       va_lead: true,
