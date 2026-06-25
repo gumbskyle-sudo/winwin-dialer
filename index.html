@@ -1002,6 +1002,18 @@ body.view-inbox header .callerid{display:none}
           </label>
         </div>
         <div id="uploadStats" style="font-size:12px;color:#6b7280;margin-bottom:10px"></div>
+        <div style="margin-bottom:12px">
+          <div style="font-size:12px;font-weight:600;color:#374151;margin-bottom:6px">🎨 List color tag (optional)</div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <button type="button" class="list-color-btn" data-listcolor="none" style="background:#e5e7eb;border:2px solid #1a1d23;border-radius:50%;width:26px;height:26px" title="None"></button>
+            <button type="button" class="list-color-btn" data-listcolor="red" style="background:#ef4444;border:2px solid transparent;border-radius:50%;width:26px;height:26px" title="Red"></button>
+            <button type="button" class="list-color-btn" data-listcolor="orange" style="background:#f97316;border:2px solid transparent;border-radius:50%;width:26px;height:26px" title="Orange"></button>
+            <button type="button" class="list-color-btn" data-listcolor="yellow" style="background:#f59e0b;border:2px solid transparent;border-radius:50%;width:26px;height:26px" title="Yellow"></button>
+            <button type="button" class="list-color-btn" data-listcolor="green" style="background:#10b981;border:2px solid transparent;border-radius:50%;width:26px;height:26px" title="Green"></button>
+            <button type="button" class="list-color-btn" data-listcolor="blue" style="background:#3b82f6;border:2px solid transparent;border-radius:50%;width:26px;height:26px" title="Blue"></button>
+            <button type="button" class="list-color-btn" data-listcolor="purple" style="background:#8b5cf6;border:2px solid transparent;border-radius:50%;width:26px;height:26px" title="Purple"></button>
+          </div>
+        </div>
         <div style="display:flex;gap:8px">
           <button class="btn-ghost" id="uploadCancel">Cancel</button>
           <button class="btn-primary" id="uploadGo" style="flex:1">Import</button>
@@ -1261,6 +1273,7 @@ const PAGE_SIZE = 20;
 let page = 1;
 let searchQuery = '';
 let assignFilter = ''; // profile id to filter by, '' = show all
+let selectedListColor = 'none'; // color tag applied to uploaded list
 
 function getFilteredProperties(){
   let list = properties;
@@ -1306,6 +1319,11 @@ function openModal(id){
   if(id==='uploadModal'){
     $('uploadPreview').classList.add('hide');
     $('csvFile').value = '';
+    // Reset color picker to "none"
+    document.querySelectorAll('.list-color-btn').forEach(b => {
+      b.style.borderColor = b.dataset.listcolor === 'none' ? '#1a1d23' : 'transparent';
+    });
+    selectedListColor = 'none';
   }
 }
 
@@ -1411,7 +1429,17 @@ function renderPage(){
     const lead = p.lead || {called:false, lead_status:'', notes:''};
     const called = lead.called || !!lead.lead_status;
     const sc = lead.lead_status ? STATUS_COLORS[lead.lead_status] : null;
+    const highlightStyles = {
+      red:    { border:'#ef4444', bg:'#fff5f5' },
+      orange: { border:'#f97316', bg:'#fff7ed' },
+      yellow: { border:'#f59e0b', bg:'#fffbeb' },
+      green:  { border:'#10b981', bg:'#f0fdf4' },
+      blue:   { border:'#3b82f6', bg:'#eff6ff' },
+      purple: { border:'#8b5cf6', bg:'#f5f3ff' },
+    };
+    const hl = lead.highlight ? highlightStyles[lead.highlight] : null;
     const style = sc ? `border-color:${sc.border};background:${sc.bg}` :
+                  hl ? `border-color:${hl.border};background:${hl.bg};border-width:3px` :
                   called ? 'border-color:#047857;background:#ecfdf5' : '';
     const pipBg = sc ? sc.pip : 'transparent';
     const assignedProfile = lead.assigned_to != null ? allProfiles.find(pr => String(pr.id) === String(lead.assigned_to)) : null;
@@ -2284,6 +2312,16 @@ $('colMap')?.addEventListener('change', updateUploadStats);
 document.addEventListener('change', e => { if(e.target.closest('.map-phone-num')) updateUploadStats(); });
 
 $('uploadCancel').addEventListener('click', () => { $('uploadPreview').classList.add('hide'); });
+
+// ── List color picker ────────────────────────────────────────────
+document.addEventListener('click', e => {
+  const btn = e.target.closest('.list-color-btn');
+  if(!btn) return;
+  selectedListColor = btn.dataset.listcolor || 'none';
+  document.querySelectorAll('.list-color-btn').forEach(b => {
+    b.style.borderColor = b === btn ? '#1a1d23' : 'transparent';
+  });
+});
 $('uploadGo').addEventListener('click', async () => {
   if(!csvParsed) return;
   const idCol      = $('map-id').value;
@@ -2319,6 +2357,7 @@ $('uploadGo').addEventListener('click', async () => {
       recording_url: recordingCol ? r[recordingCol] : '',
       list_name: listNameCol ? r[listNameCol] : '',
       va_lead: true,
+      highlight: selectedListColor !== 'none' ? selectedListColor : '',
       phones,
     });
   });
