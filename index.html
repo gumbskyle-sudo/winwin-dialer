@@ -1287,6 +1287,7 @@ let page = 1;
 let searchQuery = '';
 let assignFilter = ''; // profile id to filter by, '' = show all
 let selectedListColor = 'none'; // color tag applied to uploaded list
+let currentUploadTemplate = 'va'; // active upload column template
 
 function getFilteredProperties(){
   let list = properties;
@@ -2291,7 +2292,6 @@ function autoMap(headers){
 }
 
 // ── Upload templates ─────────────────────────────────────────────
-let currentUploadTemplate = 'va';
 
 const UPLOAD_TEMPLATES = {
   va: {
