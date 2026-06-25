@@ -2316,8 +2316,6 @@ const UPLOAD_TEMPLATES = {
       { id:'bedbath',  label:'Bed/Bath',             hint:'Bed/Bath' },
       { id:'sqft',     label:'Square Footage',       hint:'Square Footage' },
       { id:'yearbuilt',label:'Year Built',           hint:'Year Built' },
-      { id:'lastprice',label:'Last Sale Amount',     hint:'Last Sale Amount' },
-      { id:'estvalue', label:'Est Property Value',   hint:'Est Property Value' },
     ],
     phones: [
       'Owner 1 Phone 1','Owner 1 Phone 2','Owner 1 Phone 3',
@@ -2431,8 +2429,6 @@ $('uploadGo').addEventListener('click', async () => {
   const bedbathCol  = $('map-bedbath')?.value || '';
   const sqftCol     = $('map-sqft')?.value || '';
   const yearCol     = $('map-yearbuilt')?.value || '';
-  const lastPriceCol= $('map-lastprice')?.value || '';
-  const estValueCol = $('map-estvalue')?.value || '';
   const phoneCols   = Array.from(document.querySelectorAll('.map-phone-num')).map(s => s.value);
   const typeCols    = Array.from(document.querySelectorAll('.map-phone-type')).map(s => s.value);
   if(!phoneCols.some(Boolean)){ toast('Select at least one phone column','err'); return; }
@@ -2473,12 +2469,10 @@ $('uploadGo').addEventListener('click', async () => {
     // Build property notes from PropertyReach fields if available
     const prParts = [];
     const owner2Name = owner2Col ? r[owner2Col] : '';
-    if(owner2Name)                prParts.push(`Owner 2: ${owner2Name}`);
+    if(owner2Name)                  prParts.push(`Owner 2: ${owner2Name}`);
     if(bedbathCol && r[bedbathCol]) prParts.push(`Bed/Bath: ${r[bedbathCol]}`);
-    if(sqftCol && r[sqftCol])     prParts.push(`Sqft: ${r[sqftCol]}`);
-    if(yearCol && r[yearCol])     prParts.push(`Year Built: ${r[yearCol]}`);
-    if(lastPriceCol && r[lastPriceCol]) prParts.push(`Last Sale: $${Number(r[lastPriceCol]).toLocaleString()}`);
-    if(estValueCol && r[estValueCol])   prParts.push(`Est Value: $${Number(r[estValueCol]).toLocaleString()}`);
+    if(sqftCol && r[sqftCol])       prParts.push(`Sqft: ${r[sqftCol]}`);
+    if(yearCol && r[yearCol])       prParts.push(`Year Built: ${r[yearCol]}`);
     const prNotes = prParts.length ? prParts.join(' · ') : '';
     const vaNotes = vaNotesCol ? r[vaNotesCol] : '';
     const combinedNotes = [vaNotes, prNotes].filter(Boolean).join('\n');
