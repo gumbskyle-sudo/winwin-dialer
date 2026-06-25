@@ -1748,7 +1748,7 @@ exports.handler = async (event) => {
             body: JSON.stringify({
               location: String(body.zipCode),
               listingType: 'both',
-              maxResults: 10,
+              maxResults: 60, // fetch more so filters have enough to work with
             }),
           }
         );
@@ -1772,18 +1772,56 @@ exports.handler = async (event) => {
           (a.phones && (a.phones[0]?.number || a.phones[0])) ||
           (a.contact && a.contact.phone) || '';
 
-        const results = (Array.isArray(agents) ? agents : []).slice(0, 10).map(a => ({
-          name:       a.name || a.fullName || a.agentName || '',
-          phone:      extractPhone(a),
-          email:      a.email || a.emailAddress || '',
-          brokerage:  a.officeName || a.brokerage || a.office || '',
-          listings:   a.listingCount || a.activeListings || 0,
-          sold:       a.soldCount || a.recentlySold || 0,
-          photo:      a.photo || a.profilePhoto || a.photoUrl || '',
-          profileUrl: a.profileUrl || a.url || a.realtorUrl || '',
+        const filters = body.filters || {};
+
+        let results = (Array.isArray(agents) ? agents : []).map(a => ({
+          name:        a.name || a.fullName || a.agentName || '',
+          phone:       extractPhone(a),
+          email:       a.email || a.emailAddress || '',
+          brokerage:   a.officeName || a.brokerage || a.office || '',
+          listings:    a.listingCount || a.activeListings || 0,
+          sold:        a.soldCount || a.recentlySold || a.soldThisYear || 0,
+          rating:      a.rating || a.reviewScore || a.averageRating || 0,
+          reviewCount: a.reviewCount || a.totalReviews || 0,
+          yearsExp:    a.yearsExperience || a.experienceYears || null,
+          bio:         a.bio || a.description || '',
+          photo:       a.photo || a.profilePhoto || a.photoUrl || '',
+          profileUrl:  a.profileUrl || a.url || a.realtorUrl || '',
         })).filter(a => a.name);
 
-        return ok({ agents: results, total: results.length });
+        // ── Apply filters ──────────────────────────────────────────
+        // Max sales this year
+        if (filters.maxSold != null) {
+          results = results.filter(a => a.sold === 0 || a.sold <= filters.maxSold);
+        }
+        // Min rating
+        if (filters.minRating != null) {
+          results = results.filter(a => a.rating === 0 || a.rating >= filters.minRating);
+        }
+        // Min review count
+        if (filters.minReviews != null) {
+          results = results.filter(a => a.reviewCount >= filters.minReviews);
+        }
+        // Max years experience ("young" agents)
+        if (filters.maxYearsExp != null) {
+          results = results.filter(a => a.yearsExp == null || a.yearsExp <= filters.maxYearsExp);
+        }
+        // Investor friendly — bio contains relevant keywords
+        if (filters.investorFriendly) {
+          const kwds = ['investor', 'investment', 'flip', 'wholesale', 'cash buyer', 'off-market', 'distressed', 'buy and hold', 'rental'];
+          results = results.filter(a => {
+            const bio = (a.bio || '').toLowerCase();
+            return kwds.some(k => bio.includes(k));
+          });
+        }
+
+        // Sort: rated agents first, then by sold count ascending (less busy = more available)
+        results.sort((a, b) => {
+          if (b.rating !== a.rating) return b.rating - a.rating;
+          return a.sold - b.sold;
+        });
+
+        return ok({ agents: results.slice(0, 20), total: results.length });
       }
 
       default:
