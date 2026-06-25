@@ -2476,9 +2476,6 @@ $('uploadGo').addEventListener('click', async () => {
     const prNotes = prParts.length ? prParts.join(' · ') : '';
     const vaNotes = vaNotesCol ? r[vaNotesCol] : '';
     const combinedNotes = [vaNotes, prNotes].filter(Boolean).join('\n');
-    const prNotes = prParts.length ? prParts.join(' · ') : '';
-    const vaNotes = vaNotesCol ? r[vaNotesCol] : '';
-    const combinedNotes = [vaNotes, prNotes].filter(Boolean).join('\n');
 
     out.push({
       id: idCol && r[idCol] ? String(r[idCol]) : ('row-'+(i+1)),
