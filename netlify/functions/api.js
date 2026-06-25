@@ -1741,16 +1741,15 @@ exports.handler = async (event) => {
         const APIFY_TOKEN = process.env.APIFY_API_TOKEN || 'apify_api_BzvtdXSFSTGcWCqj6yK784P6cDJkEJ1zJKzm';
         const maxResults = Math.min(parseInt(body.maxResults || 50), 100);
 
-        // Start the Apify actor run synchronously and get results
+        // Use the scraper-engine actor which reliably returns phone numbers
         const runResp = await fetch(
-          `https://api.apify.com/v2/acts/automation-lab~realtor-agents-scraper/run-sync-get-dataset-items?token=${APIFY_TOKEN}&timeout=60`,
+          `https://api.apify.com/v2/acts/scraper-engine~realtor-com-agents-scraper/run-sync-get-dataset-items?token=${APIFY_TOKEN}&timeout=90`,
           {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              location: body.zipCode,
-              listingType: 'both',
-              maxResults,
+              zipCodes: [body.zipCode],
+              maxAgentsPerZip: maxResults,
             }),
           }
         );
@@ -1768,16 +1767,23 @@ exports.handler = async (event) => {
           return err(msg, runResp.status);
         }
 
+        // Pull phone from every possible field name across different scrapers
+        const extractPhone = (a) =>
+          a.phone || a.mobilePhone || a.officePhone || a.directPhone ||
+          a.cellPhone || a.contactPhone || a.phoneNumber || a.mobile ||
+          (a.phones && (a.phones[0]?.number || a.phones[0])) ||
+          (a.contact && a.contact.phone) || '';
+
         // Normalize to a clean list
         const results = (Array.isArray(agents) ? agents : []).map(a => ({
-          name:      a.name || a.fullName || '',
-          phone:     a.phone || a.mobilePhone || a.officePhone || '',
-          email:     a.email || '',
-          brokerage: a.officeName || a.brokerage || '',
-          listings:  a.listingCount || 0,
-          sold:      a.soldCount || 0,
-          photo:     a.photo || a.profilePhoto || '',
-          profileUrl: a.profileUrl || '',
+          name:       a.name || a.fullName || a.agentName || '',
+          phone:      extractPhone(a),
+          email:      a.email || a.emailAddress || (a.contact && a.contact.email) || '',
+          brokerage:  a.officeName || a.brokerage || a.brokerageName || a.office || '',
+          listings:   a.listingCount || a.activeListings || a.forSaleCount || 0,
+          sold:       a.soldCount || a.recentlySold || 0,
+          photo:      a.photo || a.profilePhoto || a.photoUrl || a.imageUrl || '',
+          profileUrl: a.profileUrl || a.url || '',
         })).filter(a => a.name);
 
         return ok({ agents: results, total: results.length });
