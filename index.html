@@ -2308,15 +2308,16 @@ const UPLOAD_TEMPLATES = {
   propertyreach: {
     fields: [
       { id:'id',       label:'Property ID (APN)',    hint:'APN' },
-      { id:'owners',   label:'Owner name',           hint:'Owner 1 First Name' },
-      { id:'property', label:'Property address',     hint:'Address' },
+      { id:'owners',   label:'Owner 1 Full Name',    hint:'Owner 1 Full Name' },
+      { id:'owner2',   label:'Owner 2 Full Name',    hint:'Owner 2 Full Name' },
+      { id:'property', label:'Property Address',     hint:'Property Address' },
+      { id:'mailing',  label:'Mailing Address',      hint:'Mailing Address' },
       { id:'email',    label:'Email',                hint:'Owner 1 Email 1' },
-      { id:'beds',     label:'Bedrooms',             hint:'Bedrooms' },
-      { id:'baths',    label:'Bathrooms',            hint:'Bathrooms' },
-      { id:'sqft',     label:'Square footage',       hint:'Square Footage' },
-      { id:'yearbuilt',label:'Year built',           hint:'Year Built' },
-      { id:'lastprice',label:'Last sale amount',     hint:'Last Sale Amount' },
-      { id:'estvalue', label:'Est. property value',  hint:'Est Property Value' },
+      { id:'bedbath',  label:'Bed/Bath',             hint:'Bed/Bath' },
+      { id:'sqft',     label:'Square Footage',       hint:'Square Footage' },
+      { id:'yearbuilt',label:'Year Built',           hint:'Year Built' },
+      { id:'lastprice',label:'Last Sale Amount',     hint:'Last Sale Amount' },
+      { id:'estvalue', label:'Est Property Value',   hint:'Est Property Value' },
     ],
     phones: [
       'Owner 1 Phone 1','Owner 1 Phone 2','Owner 1 Phone 3',
@@ -2425,9 +2426,9 @@ $('uploadGo').addEventListener('click', async () => {
   const vaNotesCol  = $('map-vanotes')?.value || '';
   const recordingCol= $('map-recording')?.value || '';
   const listNameCol = $('map-listname')?.value || '';
-  // PropertyReach extra fields
-  const bedsCol     = $('map-beds')?.value || '';
-  const bathsCol    = $('map-baths')?.value || '';
+  // PropertyReach extra fields (new combined headers)
+  const owner2Col   = $('map-owner2')?.value || '';
+  const bedbathCol  = $('map-bedbath')?.value || '';
   const sqftCol     = $('map-sqft')?.value || '';
   const yearCol     = $('map-yearbuilt')?.value || '';
   const lastPriceCol= $('map-lastprice')?.value || '';
@@ -2471,12 +2472,16 @@ $('uploadGo').addEventListener('click', async () => {
 
     // Build property notes from PropertyReach fields if available
     const prParts = [];
-    if(bedsCol && r[bedsCol])     prParts.push(`Beds: ${r[bedsCol]}`);
-    if(bathsCol && r[bathsCol])   prParts.push(`Baths: ${r[bathsCol]}`);
+    const owner2Name = owner2Col ? r[owner2Col] : '';
+    if(owner2Name)                prParts.push(`Owner 2: ${owner2Name}`);
+    if(bedbathCol && r[bedbathCol]) prParts.push(`Bed/Bath: ${r[bedbathCol]}`);
     if(sqftCol && r[sqftCol])     prParts.push(`Sqft: ${r[sqftCol]}`);
     if(yearCol && r[yearCol])     prParts.push(`Year Built: ${r[yearCol]}`);
     if(lastPriceCol && r[lastPriceCol]) prParts.push(`Last Sale: $${Number(r[lastPriceCol]).toLocaleString()}`);
     if(estValueCol && r[estValueCol])   prParts.push(`Est Value: $${Number(r[estValueCol]).toLocaleString()}`);
+    const prNotes = prParts.length ? prParts.join(' · ') : '';
+    const vaNotes = vaNotesCol ? r[vaNotesCol] : '';
+    const combinedNotes = [vaNotes, prNotes].filter(Boolean).join('\n');
     const prNotes = prParts.length ? prParts.join(' · ') : '';
     const vaNotes = vaNotesCol ? r[vaNotesCol] : '';
     const combinedNotes = [vaNotes, prNotes].filter(Boolean).join('\n');
