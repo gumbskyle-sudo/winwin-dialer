@@ -774,6 +774,21 @@ exports.handler = async (event) => {
           return p;
         });
 
+        // ── skipDuplicates: if the caller asked to skip (not merge) dupes,
+        //    remove any property whose normalized address already exists in the
+        //    DB (we already built addrToExistingId above).  Also drop rows
+        //    whose phones ALL already exist in the phones table.
+        if (body.skipDuplicates) {
+          const { json: existingPhones } = await supa('/phones?select=e164&limit=50000');
+          const existingPhoneSet = new Set((existingPhones || []).map(p => p.e164));
+          deduped = deduped.filter(p => {
+            const k = normAddr(p.property_address);
+            if (k && addrToExistingId.has(k) && addrToExistingId.get(k) !== p.id) return false;
+            if (p.phones && p.phones.length && p.phones.every(ph => existingPhoneSet.has(ph.e164))) return false;
+            return true;
+          });
+        }
+
         // Upsert properties
         // Helper: derive owner_last_name from owners string
         const parseLastName = (owners) => {
@@ -829,16 +844,18 @@ exports.handler = async (event) => {
           await supa('/phones', 'POST', phoneRows.slice(i, i + 500), { Prefer: 'return=minimal' });
         }
 
-        // Persist va_notes + recording_url onto the leads row
+        // Persist va_notes + recording_url + highlight onto the leads row
         const leadRows = [];
         for (const p of deduped) {
           const va = (p.va_notes || '').trim();
           const rec = (p.recording_url || '').trim();
-          if (va || rec) {
+          const hl = (p.highlight || '').trim();
+          if (va || rec || hl) {
             leadRows.push({
               property_id: p.id,
               va_notes: va,
               recording_url: rec,
+              highlight: hl,
               updated_at: new Date().toISOString(),
             });
           }
