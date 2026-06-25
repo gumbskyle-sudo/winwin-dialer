@@ -949,11 +949,6 @@ body.view-inbox header .callerid{display:none}
 <div id="realtorsView">
   <div class="realtor-search-bar">
     <input type="text" id="realtorZip" placeholder="Enter zip code (e.g. 11735)" maxlength="10" autocomplete="off">
-    <select id="realtorCount">
-      <option value="25">25 agents</option>
-      <option value="50" selected>50 agents</option>
-      <option value="100">100 agents</option>
-    </select>
     <button class="btn-primary" id="realtorSearchBtn">🔍 Search</button>
   </div>
   <div id="realtorStatus" style="font-size:13px;color:#6b7280;padding:8px 0;min-height:24px"></div>
@@ -1641,7 +1636,6 @@ $('realtorZip').addEventListener('keydown', e => { if(e.key==='Enter') searchRea
 async function searchRealtors(){
   const zip = $('realtorZip').value.trim();
   if(!zip){ toast('Enter a zip code first','err'); return; }
-  const maxResults = parseInt($('realtorCount').value || 50);
   const statusEl = $('realtorStatus');
   const resultsEl = $('realtorResults');
   $('realtorSearchBtn').disabled = true;
@@ -1649,7 +1643,7 @@ async function searchRealtors(){
   statusEl.textContent = 'Searching Realtor.com for agents in ' + zip + '… (this may take 15–30 seconds)';
   resultsEl.innerHTML = '';
   try {
-    const data = await api('search-realtors', {method:'POST', body:{ zipCode: zip, maxResults }});
+    const data = await api('search-realtors', {method:'POST', body:{ zipCode: zip }});
     const agents = data.agents || [];
     if(!agents.length){
       statusEl.textContent = 'No agents found for zip code ' + zip;
@@ -1672,7 +1666,9 @@ async function searchRealtors(){
           <div class="realtor-actions">
             ${a.phone
               ? `<button class="realtor-call-btn" data-realtor-call="${escapeHtml(a.phone)}" data-realtor-name="${escapeHtml(a.name)}">📞 ${escapeHtml(a.phone)}</button>`
-              : `<span style="font-size:11px;color:#9ca3af">No phone</span>`}
+              : a.profileUrl
+                ? `<a href="${escapeHtml(a.profileUrl)}" target="_blank" rel="noopener" class="realtor-call-btn" style="text-decoration:none;text-align:center">🔗 View Profile</a>`
+                : `<span style="font-size:11px;color:#9ca3af">No phone</span>`}
           </div>
         </div>
       `).join('');
