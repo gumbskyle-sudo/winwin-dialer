@@ -417,17 +417,8 @@ async function _handleTwilioVoiceInboundInner(event) {
 
   // Whisper URL — played only in the team member's ear after they answer
   const baseUrl    = 'https://winwincalltoclose.netlify.app/api';
-  const whisperUrl = `${baseUrl}?action=twilio-voice-inbound&whisper=1&name=${encodeURIComponent(sellerName || 'a seller')}`;
-
-  // Seller hears "Connecting" once then silence until bridged (< 5 sec).
-  // Team member hears seller name only in their ear — no keypress needed.
-  const twiml = `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Say voice="alice">Connecting</Say>
-  <Dial callerId="${to}" timeout="30" answerOnBridge="true">
-    <Number url="${whisperUrl}">${forwardTo}</Number>
-  </Dial>
-</Response>`;
+  // Simple seamless connect — no whisper URL (was causing XML parse error 12100)
+  const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Say voice="alice">Connecting</Say><Dial callerId="${escapeXml(to)}" timeout="30" answerOnBridge="true"><Number>${escapeXml(forwardTo)}</Number></Dial></Response>`;
 
   return { statusCode: 200, headers: { 'Content-Type': 'text/xml' }, body: twiml };
 }
