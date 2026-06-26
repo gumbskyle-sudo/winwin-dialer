@@ -696,9 +696,10 @@ exports.handler = async (event) => {
         const byId = new Map();
         const seenAddrInBatch = new Map(); // normAddr -> id (first occurrence in this batch)
         let synthCounter = 0;
+        const synthPrefix = 'row-' + Date.now() + '-'; // unique per upload batch
         for (const raw of list) {
           let id = raw && raw.id != null ? String(raw.id).trim() : '';
-          if (!id) id = 'row-' + (++synthCounter);
+          if (!id) id = synthPrefix + (++synthCounter);
 
           const addrKey = normAddr(raw.property_address);
 
