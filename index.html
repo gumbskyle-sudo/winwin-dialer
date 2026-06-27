@@ -2764,7 +2764,7 @@ $('uploadGo').addEventListener('click', async () => {
     const combinedNotes = [vaNotes, prNotes].filter(Boolean).join('\n');
 
     out.push({
-      id: idCol && r[idCol] ? String(r[idCol]) : ('row-'+(i+1)),
+      id: idCol && r[idCol] ? String(r[idCol]) : '',
       owners: ownerName,
       property_address: propCol ? r[propCol] : '',
       email: emailCol ? r[emailCol] : '',
