@@ -860,20 +860,27 @@ exports.handler = async (event) => {
           await supa('/phones', 'POST', phoneRows.slice(i, i + 500), { Prefer: 'return=minimal' });
         }
 
-        // Persist va_notes + recording_url + highlight onto the leads row
+        // Persist va_notes + recording_url + highlight (+ batch assignee) onto the leads row
+        const assignedToRaw = (body.assignedTo != null && body.assignedTo !== '')
+          ? parseInt(body.assignedTo, 10) : null;
+        const batchAssignee = Number.isFinite(assignedToRaw) ? assignedToRaw : null;
         const leadRows = [];
         for (const p of deduped) {
           const va = (p.va_notes || '').trim();
           const rec = (p.recording_url || '').trim();
           const hl = (p.highlight || '').trim();
-          if (va || rec || hl) {
-            leadRows.push({
+          // Create a lead row when there are notes/recording/highlight OR a caller
+          // was chosen for this list (so the assignment sticks even with no notes).
+          if (va || rec || hl || batchAssignee != null) {
+            const lr = {
               property_id: p.id,
               va_notes: va,
               recording_url: rec,
               highlight: hl,
               updated_at: new Date().toISOString(),
-            });
+            };
+            if (batchAssignee != null) lr.assigned_to = batchAssignee;
+            leadRows.push(lr);
           }
         }
         for (let i = 0; i < leadRows.length; i += 500) {
