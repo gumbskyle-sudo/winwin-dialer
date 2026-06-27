@@ -828,16 +828,24 @@ exports.handler = async (event) => {
           await supa('/properties?on_conflict=id', 'POST', propRows.slice(i, i + 500), { Prefer: 'resolution=merge-duplicates,return=minimal' });
         }
 
-        // Replace phones for these properties
-        const ids = propRows.map(p => p.id);
-        const idChunks = [];
-        for (let i = 0; i < ids.length; i += 200) idChunks.push(ids.slice(i, i + 200));
-        for (const chunk of idChunks) {
-          const inList = chunk.map(id => `"${id.replace(/"/g, '\\"')}"`).join(',');
-          await supa(`/phones?property_id=in.(${encodeURIComponent(inList)})`, 'DELETE');
+        // Only delete + replace phones for NEW properties (ones not already
+        // in the DB before this upload). Existing properties keep their phones
+        // untouched so uploading a second list never wipes the first list's data.
+        const existingIdSet = new Set(addrToExistingId.values());
+        const newPropertyIds = propRows.map(p => p.id).filter(id => !existingIdSet.has(id));
+
+        if (newPropertyIds.length) {
+          const idChunks = [];
+          for (let i = 0; i < newPropertyIds.length; i += 200) idChunks.push(newPropertyIds.slice(i, i + 200));
+          for (const chunk of idChunks) {
+            const inList = chunk.map(id => `"${id.replace(/"/g, '\\"')}"`).join(',');
+            await supa(`/phones?property_id=in.(${encodeURIComponent(inList)})`, 'DELETE');
+          }
         }
         const phoneRows = [];
         for (const p of deduped) {
+          // Skip phones for existing properties
+          if (existingIdSet.has(p.id)) continue;
           for (const ph of p.phones || []) {
             if (!ph.e164) continue;
             phoneRows.push({
