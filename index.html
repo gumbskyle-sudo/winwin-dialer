@@ -118,6 +118,19 @@ body.hide-called .card.called{display:none}
 .phone.dialing .badge{background:#f59e0b;color:#000}
 
 /* Mark button */
+/* ── Power Dialer ────────────────────────────────────────────── */
+#powerDialBar{
+  background:#1a1d23;border-radius:12px;padding:10px 14px;
+  margin-bottom:10px;display:flex;align-items:center;
+  justify-content:space-between;gap:8px;flex-wrap:wrap;
+}
+.pd-progress{display:flex;align-items:center;gap:10px;font-size:13px;color:#e5e7eb}
+.pd-actions{display:flex;gap:6px}
+.pd-btn{padding:7px 12px;border-radius:7px;border:1.5px solid #374151;background:#374151;color:#e5e7eb;font-size:12px;font-weight:600;cursor:pointer}
+.pd-btn:hover{background:#4b5563}
+.pd-stop{border-color:#dc2626;background:#dc2626;color:#fff}
+.pd-stop:hover{background:#b91c1c}
+.card.pd-active{outline:3px solid #1f6feb;outline-offset:2px;box-shadow:0 0 0 6px rgba(31,111,235,.15)}
 .mark-btn{display:block;width:100%;margin-top:12px;font-size:15px;padding:13px 16px;border-radius:8px;border:2px solid #047857;background:#fff;color:#047857;cursor:pointer;font-weight:700;text-align:center;-webkit-tap-highlight-color:rgba(4,120,87,.3);transition:transform .05s,background .15s,color .15s}
 .mark-btn:active{transform:scale(.97);background:#ecfdf5}
 .mark-btn.is-called{background:#047857;border-color:#047857;color:#fff}
@@ -819,6 +832,7 @@ body.view-inbox header .callerid{display:none}
   </div>
   <div class="header-controls">
     <label><input type="checkbox" id="hideCalled">&nbsp;Hide called</label>
+    <button class="header-link" id="powerDialBtn">⚡ Power Dial</button>
     <button class="header-link" data-open="manualDialModal">☎ Dial a number</button>
     <button class="header-link" data-open="numbersModal">📞 Numbers</button>
     <button class="header-link" data-open="logModal">📊 Log</button>
@@ -840,6 +854,17 @@ body.view-inbox header .callerid{display:none}
   <div class="filter-row" id="filterRow">
     <button class="filter-chip" id="filterMyLeads">👤 My leads</button>
     <button class="filter-chip filter-clear hide" id="filterClear">✕ Clear filter</button>
+  </div>
+  <div id="powerDialBar" class="hide">
+    <div class="pd-progress">
+      <span id="pdStatus">⚡ Power Dialing</span>
+      <span id="pdCounter" style="font-weight:700;color:#1f6feb"></span>
+    </div>
+    <div class="pd-actions">
+      <button id="pdPrev" class="pd-btn">← Prev</button>
+      <button id="pdSkip" class="pd-btn">Skip →</button>
+      <button id="pdStop" class="pd-btn pd-stop">✕ Stop</button>
+    </div>
   </div>
   <div id="cards"></div>
   <div class="page-nav" id="pageNav"></div>
@@ -1472,7 +1497,7 @@ function renderPage(){
     const statusOptions = STATUS_OPTIONS.map(([v,l]) => `<option value="${v}"${v===(lead.lead_status||'')?' selected':''}>${l}</option>`).join('');
 
     out.push(`
-      <div class="card${called?' called':''}" data-id="${escapeHtml(p.id)}" style="${style}">
+      <div class="card${called?' called':''}" data-id="${escapeHtml(p.id)}" data-card-id="${escapeHtml(p.id)}" style="${style}">
         <div class="card-top">
           <div class="card-info">
             <div class="owners">${escapeHtml(p.owners||'(no name)')}${p.va_lead?` <span class="va-lead-tag">VA</span>`:''}</div>
@@ -1640,6 +1665,84 @@ $('hideCalled').addEventListener('change', e => {
   document.body.classList.toggle('hide-called', e.target.checked);
 });
 
+// ── Power Dialer ─────────────────────────────────────────────────
+let pdActive = false;
+let pdIndex  = 0; // index into getFilteredProperties()
+
+function pdStart(){
+  const list = getFilteredProperties().filter(p => !(p.lead||{}).called);
+  if(!list.length){ toast('No uncalled leads to dial','err'); return; }
+  pdActive = true;
+  pdIndex  = 0;
+  $('powerDialBtn').textContent = '⚡ Dialing…';
+  $('powerDialBtn').style.color = '#1f6feb';
+  $('powerDialBar').classList.remove('hide');
+  pdGo();
+}
+
+function pdStop(){
+  pdActive = false;
+  $('powerDialBtn').textContent = '⚡ Power Dial';
+  $('powerDialBtn').style.color = '';
+  $('powerDialBar').classList.add('hide');
+  // Remove active highlight
+  document.querySelectorAll('.card.pd-active').forEach(c => c.classList.remove('pd-active'));
+}
+
+function pdGo(){
+  if(!pdActive) return;
+  const list = getFilteredProperties().filter(p => !(p.lead||{}).called);
+  if(!list.length){ toast('All leads called! 🎉','ok'); pdStop(); return; }
+  pdIndex = Math.min(pdIndex, list.length - 1);
+  const p = list[pdIndex];
+  const total = getFilteredProperties().filter(pp => !(pp.lead||{}).called).length;
+  const totalAll = getFilteredProperties().length;
+  const called = totalAll - total;
+  $('pdCounter').textContent = `${called} called · ${total} remaining`;
+
+  // Make sure we're on the dialer view
+  if(currentView !== 'dialer') switchView('dialer');
+
+  // Find which page this lead is on and navigate there
+  const filtered = getFilteredProperties();
+  const globalIdx = filtered.findIndex(fp => fp.id === p.id);
+  if(globalIdx >= 0){
+    page = Math.floor(globalIdx / PAGE_SIZE) + 1;
+    renderPage();
+  }
+
+  // Scroll to and highlight the active card
+  setTimeout(() => {
+    const card = document.querySelector(`[data-card-id="${CSS.escape(p.id)}"]`);
+    if(card){
+      document.querySelectorAll('.card.pd-active').forEach(c => c.classList.remove('pd-active'));
+      card.classList.add('pd-active');
+      card.scrollIntoView({ behavior:'smooth', block:'center' });
+    }
+  }, 100);
+}
+
+function pdNext(){
+  if(!pdActive) return;
+  const list = getFilteredProperties().filter(p => !(p.lead||{}).called);
+  pdIndex = Math.min(pdIndex + 1, list.length - 1);
+  pdGo();
+}
+
+function pdPrev(){
+  if(!pdActive) return;
+  pdIndex = Math.max(pdIndex - 1, 0);
+  pdGo();
+}
+
+$('powerDialBtn').addEventListener('click', () => {
+  if(pdActive) pdStop();
+  else pdStart();
+});
+$('pdStop').addEventListener('click', pdStop);
+$('pdSkip').addEventListener('click', pdNext);
+$('pdPrev').addEventListener('click', pdPrev);
+
 // ── Search bar ────────────────────────────────────────────────
 let searchDebounce = null;
 $('leadSearch').addEventListener('input', e => {
@@ -1762,6 +1865,11 @@ document.addEventListener('click', e => {
     } else {
       Object.assign(p.lead, {called:true});
       api('update-lead', {method:'POST', body:{propertyId:id, called:true}}).catch(err=>toast(err.message,'err'));
+      // Auto-advance power dialer after marking as called
+      if(pdActive){
+        setTimeout(() => { renderPage(); refreshCounter(); pdGo(); }, 600);
+        return;
+      }
     }
     renderPage(); refreshCounter();
   }
