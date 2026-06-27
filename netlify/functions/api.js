@@ -756,15 +756,29 @@ exports.handler = async (event) => {
             if (k && !addrToExistingId.has(k)) addrToExistingId.set(k, ep.id);
           }
         }
-        deduped = deduped.map(p => {
-          const k = normAddr(p.property_address);
-          const existingId = k ? addrToExistingId.get(k) : null;
-          if (existingId && existingId !== p.id) {
-            p.id = existingId;
-            dupeAddressesSkipped++;
-          }
-          return p;
-        });
+        // Skip new leads whose address already exists in the DB — never overwrite
+        // an existing lead's data with a new upload unless Replace is checked.
+        if (!body.replace) {
+          deduped = deduped.filter(p => {
+            const k = normAddr(p.property_address);
+            if (k && addrToExistingId.has(k)) {
+              dupeAddressesSkipped++;
+              return false;
+            }
+            return true;
+          });
+        } else {
+          // Replace mode: remap IDs to existing ones so the upsert updates them
+          deduped = deduped.map(p => {
+            const k = normAddr(p.property_address);
+            const existingId = k ? addrToExistingId.get(k) : null;
+            if (existingId && existingId !== p.id) {
+              p.id = existingId;
+              dupeAddressesSkipped++;
+            }
+            return p;
+          });
+        }
 
         // ── skipDuplicates: if the caller asked to skip (not merge) dupes,
         //    remove any property whose normalized address already exists in the
