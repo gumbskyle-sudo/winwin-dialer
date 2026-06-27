@@ -962,6 +962,51 @@ exports.handler = async (event) => {
         return ok({ sid: j.sid, status: j.status });
       }
 
+      // ── Power Dialer: place a call in a power dial session ─────
+      // Calls the agent's phone first, then when they answer bridges
+      // to the seller. The status callback URL triggers the next call
+      // automatically when the session call completes.
+      case 'power-dial-call': {
+        if (!body.to)        return err('to required');
+        if (!body.from)      return err('from required');
+        if (!body.agentPhone)return err('agentPhone required');
+
+        const baseUrl = 'https://winwincalltoclose.netlify.app/api';
+        const sessionId = body.sessionId || '';
+        const propertyId = body.propertyId || '';
+
+        // TwiML played to the agent when they answer:
+        // say the seller name then dial out to the seller
+        const sellerName = (body.sellerName || 'your next lead').replace(/[<>&"]/g, '');
+        const connectTwiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Say voice="alice">Connecting to ${sellerName}</Say><Dial callerId="${escapeXml(body.from)}" timeout="30" answerOnBridge="true"><Number>${escapeXml(body.to)}</Number></Dial></Response>`;
+
+        // Status callback so we know when this leg ends
+        const statusCb = `${baseUrl}?action=twilio-status&sid=SID_PLACEHOLDER`;
+
+        const j = await tw(`/Accounts/${twilioSid()}/Calls.json`, 'POST', {
+          From: body.from,
+          To:   body.agentPhone,
+          Twiml: connectTwiml,
+          StatusCallback: `${baseUrl}?action=twilio-status`,
+          StatusCallbackMethod: 'POST',
+          StatusCallbackEvent: 'completed',
+        });
+
+        // Persist call record
+        try {
+          await supa('/calls', 'POST', [{
+            twilio_sid: j.sid,
+            property_id: propertyId ? String(propertyId) : null,
+            from_number: body.from,
+            to_number:   body.to,
+            status: j.status || 'queued',
+            profile_id: body.profileId || null,
+          }], { Prefer: 'return=minimal' });
+        } catch (e) { console.warn('power dial persist failed', e.message); }
+
+        return ok({ sid: j.sid, status: j.status });
+      }
+
       case 'call-status': {
         if (!qs.sid) return err('sid required');
         const j = await tw(`/Accounts/${twilioSid()}/Calls/${encodeURIComponent(qs.sid)}.json`);
