@@ -726,6 +726,7 @@ exports.handler = async (event) => {
             if (!existing.email && raw.email) existing.email = raw.email;
             if (!existing.va_notes && raw.va_notes) existing.va_notes = raw.va_notes;
             if (!existing.recording_url && raw.recording_url) existing.recording_url = raw.recording_url;
+            if (!existing.highlight && raw.highlight) existing.highlight = raw.highlight;
             dupesCollapsed++;
           } else {
             byId.set(id, {
@@ -737,6 +738,7 @@ exports.handler = async (event) => {
               va_notes: raw.va_notes || '',
               recording_url: raw.recording_url || '',
               va_lead: !!raw.va_lead,
+              highlight: raw.highlight || '',
               phones: Array.isArray(raw.phones) ? [...raw.phones] : [],
             });
             if (addrKey) seenAddrInBatch.set(addrKey, id);
