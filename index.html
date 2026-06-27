@@ -1113,6 +1113,12 @@ body.view-inbox header .callerid{display:none}
             <button type="button" class="list-color-btn" data-listcolor="purple" style="background:#8b5cf6;border:2px solid transparent;border-radius:50%;width:26px;height:26px" title="Purple"></button>
           </div>
         </div>
+        <div style="margin-bottom:12px">
+          <div style="font-size:12px;font-weight:600;color:#374151;margin-bottom:6px">📞 Assign list to caller (optional)</div>
+          <select id="uploadAssignTo" style="width:100%;padding:9px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;background:#fff">
+            <option value="">— Unassigned —</option>
+          </select>
+        </div>
         <div style="display:flex;gap:8px">
           <button class="btn-ghost" id="uploadCancel">Cancel</button>
           <button class="btn-primary" id="uploadGo" style="flex:1">Import</button>
@@ -2722,6 +2728,7 @@ $('uploadGo').addEventListener('click', async () => {
   const replace   = $('replaceExisting').checked;
   const skipDupes = $('skipDuplicates').checked;
   const listColor = selectedListColor !== 'none' ? selectedListColor : '';
+  const assignTo  = $('uploadAssignTo') && $('uploadAssignTo').value ? parseInt($('uploadAssignTo').value, 10) : null;
 
   // For PropertyReach: detect if owners col is a "First Name" col and find matching Last Name col
   const headers = csvParsed.headers;
@@ -2780,7 +2787,7 @@ $('uploadGo').addEventListener('click', async () => {
   const btn = $('uploadGo');
   btn.disabled = true; btn.textContent = 'Importing…';
   try {
-    const r = await api('import-properties', {method:'POST', body:{properties: out, replace, skipDuplicates: skipDupes}});
+    const r = await api('import-properties', {method:'POST', body:{properties: out, replace, skipDuplicates: skipDupes, assignedTo: assignTo}});
     const totalDupes = (r.dupesCollapsed||0) + (r.dupeAddressesSkipped||0);
     const dupMsg = totalDupes ? ` · ${totalDupes} duplicate${totalDupes===1?'':'s'} merged` : '';
     toast(`Imported ${r.imported} properties · ${r.phones} phones${dupMsg}`,'ok');
@@ -2816,6 +2823,14 @@ async function loadProfiles(){
     const j = await api('list-profiles');
     allProfiles = j.profiles || [];
   } catch(e){ allProfiles = []; }
+  // Keep the upload modal's "assign list to caller" dropdown in sync with the team
+  const ua = document.getElementById('uploadAssignTo');
+  if(ua){
+    const cur = ua.value;
+    ua.innerHTML = '<option value="">— Unassigned —</option>' +
+      allProfiles.map(pr => `<option value="${escapeHtml(pr.id)}">${escapeHtml(pr.name)}</option>`).join('');
+    ua.value = cur; // preserve any existing selection if still valid
+  }
 }
 function updateProfileBadge(){
   const b = $('profileBadge');
