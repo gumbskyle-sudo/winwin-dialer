@@ -501,6 +501,10 @@ body.view-pipeline header .callerid{display:none}
 .lead-tools{margin-top:10px;padding-top:10px;border-top:1px solid #f3f4f6}
 .lead-tools-row{display:flex;align-items:center;gap:8px;margin-bottom:8px}
 .lead-tools-label{font-size:12px;color:#6b7280;font-weight:600;min-width:80px;flex-shrink:0}
+.hl-swatches{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.hl-dot{width:26px;height:26px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 0 1px #d1d5db;cursor:pointer;padding:0;display:flex;align-items:center;justify-content:center;font-size:13px;color:#9ca3af;line-height:1;-webkit-tap-highlight-color:transparent}
+.hl-dot.active{box-shadow:0 0 0 2px #111827;transform:scale(1.12)}
+.hl-dot.hl-clear{background:#fff}
 .assign-sel{flex:1;padding:7px 10px;border:1.5px solid #d1d5db;border-radius:7px;font-size:13px;background:#fff;color:#1a1d23}
 .assigned-badge{font-size:11px;color:#1f6feb;background:#eff6ff;border-radius:6px;padding:3px 8px;display:inline-block}
 .va-notes-block summary{
@@ -1703,6 +1707,13 @@ function renderPage(){
               </select>
             </div>
             ${assignedProfile ? `<div class="assigned-badge">Assigned to <strong>${escapeHtml(assignedProfile.name)}</strong></div>` : ''}
+            <div class="lead-tools-row">
+              <span class="lead-tools-label">🎨 Highlight</span>
+              <div class="hl-swatches" data-id="${escapeHtml(p.id)}">
+                ${['red','orange','yellow','green','blue','purple'].map(c => `<button type="button" class="hl-dot${lead.highlight===c?' active':''}" data-hl="${c}" data-id="${escapeHtml(p.id)}" style="background:${highlightStyles[c].border}" title="${c}"></button>`).join('')}
+                <button type="button" class="hl-dot hl-clear${!lead.highlight?' active':''}" data-hl="" data-id="${escapeHtml(p.id)}" title="No highlight">✕</button>
+              </div>
+            </div>
           </div>
         <button class="mark-btn${called?' is-called':''}" data-mark data-id="${escapeHtml(p.id)}">${called?'✓ Called — tap to undo':'Mark as called'}</button>
         <div class="call-info">
@@ -4160,6 +4171,24 @@ document.addEventListener('change', async e => {
     await api('update-lead', {method:'POST', body:{ propertyId: pid, assignedTo: profileId }});
     const name = profileId ? (allProfiles.find(pr => String(pr.id) === String(profileId))?.name || '') : '';
     toast(name ? `Assigned to ${name}` : 'Unassigned', 'ok');
+  } catch(err){ toast('Save failed: '+err.message,'err'); }
+  renderPage();
+});
+
+// ── Per-lead highlight color (works any time, after upload too) ───
+document.addEventListener('click', async e => {
+  const dot = e.target.closest('[data-hl]');
+  if(!dot) return;
+  const pid = dot.dataset.id;
+  const color = dot.dataset.hl || '';
+  const p = properties.find(x => x.id === pid);
+  if(!p) return;
+  if(!p.lead) p.lead = {};
+  if((p.lead.highlight || '') === color) return; // already set, nothing to do
+  p.lead.highlight = color;
+  try {
+    await api('update-lead', {method:'POST', body:{ propertyId: pid, highlight: color }});
+    toast(color ? `Highlighted ${color}` : 'Highlight cleared', 'ok');
   } catch(err){ toast('Save failed: '+err.message,'err'); }
   renderPage();
 });
