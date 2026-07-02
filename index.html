@@ -789,6 +789,23 @@ body.view-inbox header .callerid{display:none}
   padding:2px 7px;border-radius:10px;flex-shrink:0;
 }
 .inbox-empty{text-align:center;color:#9ca3af;font-size:13px;padding:40px 12px}
+/* Mail (email via Spacemail) view */
+#mailView{display:none}
+body.view-mail #cards,body.view-mail #pageNav,body.view-mail #pipelineView,body.view-mail #inboxView,body.view-mail #buyersView,body.view-mail #realtorsView,body.view-mail .search-bar-wrap,body.view-mail .filter-row{display:none}
+body.view-mail #mailView{display:block}
+body.view-mail header .callerid{display:none}
+.mail-row{background:#fff;border-radius:9px;padding:12px 14px;cursor:pointer;border:1px solid #e5e7eb;display:flex;gap:10px;align-items:flex-start}
+.mail-row:hover{border-color:#1f6feb;background:#f9fafb}
+.mail-row.unread{border-left:3px solid #1f6feb}
+.mail-row .who{flex:1;min-width:0}
+.mail-row .who .name{font-size:13px;font-weight:600;color:#1a1d23;display:flex;align-items:center;gap:6px}
+.mail-row .who .addr{font-size:11px;color:#6b7280;margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mail-row .who .subj{font-size:12px;color:#374151;margin-top:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mail-row .when{font-size:10px;color:#9ca3af;flex-shrink:0;white-space:nowrap}
+.mail-unread-dot{width:8px;height:8px;border-radius:50%;background:#1f6feb;flex-shrink:0}
+.mail-iframe{width:100%;min-height:300px;border:1px solid #e5e7eb;border-radius:8px;background:#fff}
+.mail-meta{font-size:12px;color:#6b7280;margin-bottom:4px}
+.mail-meta b{color:#1a1d23}
 
 /* SMS settings in settings modal */
 .sms-settings-section{
@@ -845,6 +862,7 @@ body.view-inbox header .callerid{display:none}
     <button class="view-tab active" data-view="dialer">📞 Dialer</button>
     <button class="view-tab" data-view="pipeline">📋 Pipeline <span id="pipeBadge" style="font-size:10px;opacity:.6"></span></button>
     <button class="view-tab" data-view="inbox">💬 Inbox <span id="inboxBadge" style="font-size:10px;opacity:.6"></span></button>
+    <button class="view-tab" data-view="mail">📧 Mail <span id="mailBadge" style="font-size:10px;opacity:.6"></span></button>
     <button class="view-tab" data-view="buyers">💰 Buyers <span id="buyersBadge" style="font-size:10px;opacity:.6"></span></button>
     <button class="view-tab" data-view="realtors">🏡 Realtors</button>
   </div>
@@ -949,6 +967,18 @@ body.view-inbox header .callerid{display:none}
       <button class="header-link" id="inboxRefresh">↻ Refresh</button>
     </div>
     <div class="inbox-list" id="inboxList"></div>
+  </div>
+
+  <!-- Mail (email) view -->
+  <div id="mailView">
+    <div class="pipe-toolbar">
+      <div class="pipe-summary" id="mailSummary">—</div>
+      <div style="display:flex;gap:8px">
+        <button class="header-link" id="mailCompose">✏️ Compose</button>
+        <button class="header-link" id="mailRefresh">↻ Refresh</button>
+      </div>
+    </div>
+    <div class="inbox-list" id="mailList"></div>
   </div>
 
   <!-- Buyers view -->
@@ -1063,6 +1093,35 @@ body.view-inbox header .callerid{display:none}
         <input type="text" id="manualDialLabel" placeholder="e.g. Title company, lender, etc.">
       </div>
       <button class="btn-primary" id="manualDialGo" style="width:100%;margin-top:8px">📞 Call</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="mailReadModal">
+  <div class="modal-box">
+    <div class="modal-head">
+      <h3 id="mailReadSubject" style="font-size:15px">Message</h3>
+      <button class="modal-close" data-close="mailReadModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div id="mailReadMeta"></div>
+      <iframe id="mailReadFrame" class="mail-iframe" sandbox=""></iframe>
+      <button class="btn-primary" id="mailReplyBtn" style="width:100%;margin-top:12px">↩ Reply</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="mailComposeModal">
+  <div class="modal-box">
+    <div class="modal-head">
+      <h3>✉️ New email</h3>
+      <button class="modal-close" data-close="mailComposeModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="field"><label>To</label><input type="email" id="composeTo" placeholder="name@example.com" autocomplete="off"></div>
+      <div class="field"><label>Subject</label><input type="text" id="composeSubject" placeholder="Subject"></div>
+      <div class="field"><label>Message</label><textarea id="composeBody" rows="8" placeholder="Write your message…"></textarea></div>
+      <button class="btn-primary" id="composeSend" style="width:100%;margin-top:8px">📤 Send</button>
     </div>
   </div>
 </div>
@@ -2903,11 +2962,13 @@ function switchView(v){
   currentView = v;
   document.body.classList.toggle('view-pipeline', v === 'pipeline');
   document.body.classList.toggle('view-inbox', v === 'inbox');
+  document.body.classList.toggle('view-mail', v === 'mail');
   document.body.classList.toggle('view-buyers', v === 'buyers');
   document.body.classList.toggle('view-realtors', v === 'realtors');
   document.querySelectorAll('.view-tab').forEach(t => t.classList.toggle('active', t.dataset.view === v));
   if(v === 'pipeline') loadPipeline();
   if(v === 'inbox') loadInbox();
+  if(v === 'mail') loadMail();
   if(v === 'buyers') loadBuyers();
 }
 
@@ -3602,6 +3663,116 @@ function renderInbox(threads){
   });
 }
 $('inboxRefresh')?.addEventListener('click', () => loadInbox());
+
+// ── Mail (email via Spacemail / IMAP) ───────────────────────────
+let mailCache = [];
+let mailReplyCtx = null;
+
+async function loadMail(){
+  $('mailList').innerHTML = '<div class="inbox-empty">Loading mail…</div>';
+  $('mailSummary').textContent = '…';
+  try {
+    const j = await api('fetch-inbox', {method:'POST', body:{ limit: 30 }});
+    mailCache = j.messages || [];
+    renderMail(mailCache);
+  } catch(e){
+    $('mailList').innerHTML = '<div class="inbox-empty" style="color:#b91c1c">'+escapeHtml(e.message)+'</div>';
+    $('mailSummary').textContent = '—';
+  }
+}
+function renderMail(messages){
+  const unread = messages.filter(m => !m.seen).length;
+  $('mailSummary').textContent = messages.length + ' message' + (messages.length===1?'':'s') + (unread?` · ${unread} unread`:'');
+  $('mailBadge').textContent = unread ? '· '+unread : '';
+  const list = $('mailList');
+  if(!messages.length){
+    list.innerHTML = '<div class="inbox-empty">No mail found.<br><span style="font-size:11px">Replies to your outreach will show up here.</span></div>';
+    return;
+  }
+  list.innerHTML = '';
+  messages.forEach(m => {
+    const when = m.date ? fmtMailDate(m.date) : '';
+    const row = el(`<div class="mail-row${m.seen?'':' unread'}" data-mailuid="${escapeHtml(String(m.uid))}">
+      <div class="who">
+        <div class="name">${m.seen?'':'<span class="mail-unread-dot"></span>'}${escapeHtml(m.fromName||m.from||'(unknown)')}</div>
+        <div class="addr">${escapeHtml(m.from||'')}</div>
+        <div class="subj">${escapeHtml(m.subject||'(no subject)')}</div>
+      </div>
+      <div class="when">${escapeHtml(when)}</div>
+    </div>`);
+    list.appendChild(row);
+  });
+}
+function fmtMailDate(iso){
+  try {
+    const d = new Date(iso), now = new Date();
+    if(d.toDateString() === now.toDateString()) return d.toLocaleTimeString([], {hour:'numeric', minute:'2-digit'});
+    return d.toLocaleDateString([], {month:'short', day:'numeric'});
+  } catch { return ''; }
+}
+function extractEmail(s){
+  const m = (s||'').match(/[^\s<>]+@[^\s<>]+/);
+  return m ? m[0] : (s||'');
+}
+$('mailRefresh')?.addEventListener('click', () => loadMail());
+
+// Open one email in the reader modal (body rendered in a sandboxed iframe)
+document.addEventListener('click', async e => {
+  const row = e.target.closest('[data-mailuid]');
+  if(!row) return;
+  const uid = row.dataset.mailuid;
+  openModal('mailReadModal');
+  $('mailReadSubject').textContent = 'Loading…';
+  $('mailReadMeta').innerHTML = '';
+  $('mailReadFrame').srcdoc = '<p style="font-family:sans-serif;color:#888">Loading…</p>';
+  try {
+    const m = await api('fetch-email', {method:'POST', body:{ uid: parseInt(uid,10) }});
+    $('mailReadSubject').textContent = m.subject || '(no subject)';
+    $('mailReadMeta').innerHTML = `<div class="mail-meta"><b>From:</b> ${escapeHtml(m.from||'')}</div>
+      <div class="mail-meta"><b>Date:</b> ${escapeHtml(m.date? new Date(m.date).toLocaleString():'')}</div>`;
+    const bodyHtml = m.html || (m.text ? '<pre style="white-space:pre-wrap;font-family:sans-serif">'+escapeHtml(m.text)+'</pre>' : '<em>(empty message)</em>');
+    $('mailReadFrame').srcdoc = bodyHtml;
+    mailReplyCtx = { to: m.from, subject: m.subject };
+    const c = mailCache.find(x => String(x.uid) === String(uid)); if(c){ c.seen = true; renderMail(mailCache); }
+  } catch(err){
+    $('mailReadSubject').textContent = 'Error';
+    $('mailReadFrame').srcdoc = '<p style="font-family:sans-serif;color:#b91c1c">'+escapeHtml(err.message)+'</p>';
+  }
+});
+
+// Reply → prefill compose
+$('mailReplyBtn')?.addEventListener('click', () => {
+  if(!mailReplyCtx) return;
+  $('mailReadModal').classList.remove('open');
+  const subj = mailReplyCtx.subject || '';
+  openCompose({ to: extractEmail(mailReplyCtx.to), subject: /^re:/i.test(subj) ? subj : 'Re: ' + subj });
+});
+
+// Compose
+function openCompose(prefill){
+  prefill = prefill || {};
+  $('composeTo').value = prefill.to || '';
+  $('composeSubject').value = prefill.subject || '';
+  $('composeBody').value = prefill.body || '';
+  openModal('mailComposeModal');
+}
+$('mailCompose')?.addEventListener('click', () => openCompose());
+$('composeSend')?.addEventListener('click', async () => {
+  const to = $('composeTo').value.trim();
+  if(!to){ toast('Enter a recipient','err'); return; }
+  const btn = $('composeSend'); btn.disabled = true; btn.textContent = 'Sending…';
+  try {
+    await api('send-email', {method:'POST', body:{
+      to,
+      subject: $('composeSubject').value.trim(),
+      text: $('composeBody').value,
+      html: $('composeBody').value.replace(/\n/g,'<br>'),
+    }});
+    toast('Email sent ✓','ok');
+    $('mailComposeModal').classList.remove('open');
+  } catch(err){ toast('Send failed: '+err.message,'err'); }
+  btn.disabled = false; btn.textContent = '📤 Send';
+});
 
 // ── SMS consent toggle on Pipeline cards (during call) ──────────
 // Renders into the call drawer area — we add a quick consent toggle
