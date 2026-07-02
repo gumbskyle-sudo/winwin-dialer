@@ -537,6 +537,53 @@ async function sendEmail({ to, subject, html, text, replyTo }) {
 }
 
 // ════════════════════════════════════════════════════════════════
+// SPACEMAIL (branded email — SMTP send + IMAP inbox)
+// Credentials come ONLY from Netlify env vars, never hardcoded:
+//   SPACEMAIL_USER = kyleg@winwinproperties.net
+//   SPACEMAIL_PASS = <mailbox password>   (or app password if 2FA on)
+//   SPACEMAIL_FROM_NAME (optional display name)
+// ════════════════════════════════════════════════════════════════
+
+function spacemailReady() {
+  return !!(process.env.SPACEMAIL_USER && process.env.SPACEMAIL_PASS);
+}
+function spacemailFrom() {
+  const name = process.env.SPACEMAIL_FROM_NAME || 'Win Win Property Solutions NY';
+  return `${name} <${process.env.SPACEMAIL_USER}>`;
+}
+async function sendViaSpacemail({ to, subject, html, text, replyTo, cc }) {
+  if (!spacemailReady()) return { error: 'SPACEMAIL_USER / SPACEMAIL_PASS not set in Netlify env vars' };
+  const nodemailer = require('nodemailer');
+  const transporter = nodemailer.createTransport({
+    host: 'mail.spacemail.com',
+    port: 465,
+    secure: true,
+    auth: { user: process.env.SPACEMAIL_USER, pass: process.env.SPACEMAIL_PASS },
+  });
+  const info = await transporter.sendMail({
+    from: spacemailFrom(),
+    to: Array.isArray(to) ? to.join(', ') : to,
+    cc: cc || undefined,
+    replyTo: replyTo || undefined,
+    subject: subject || '(no subject)',
+    text: text || (html ? html.replace(/<[^>]+>/g, ' ') : ''),
+    html: html || (text ? text.replace(/\n/g, '<br>') : ''),
+  });
+  return { ok: true, id: info.messageId };
+}
+
+function spacemailImapClient() {
+  const { ImapFlow } = require('imapflow');
+  return new ImapFlow({
+    host: 'mail.spacemail.com',
+    port: 993,
+    secure: true,
+    auth: { user: process.env.SPACEMAIL_USER, pass: process.env.SPACEMAIL_PASS },
+    logger: false,
+  });
+}
+
+// ════════════════════════════════════════════════════════════════
 // SUPABASE STORAGE (audio recordings)
 // ════════════════════════════════════════════════════════════════
 
@@ -1664,32 +1711,122 @@ exports.handler = async (event) => {
         if (!body.contractUrl)  return err('contractUrl required');
         if (!body.sellerName)   return err('sellerName required');
 
-        const ZOHO_USER = 'leadmanager@zohomail.com';
-        const ZOHO_PASS = process.env.ZOHO_APP_PASSWORD || 'i0ZQgzZKQVTN';
-
         const subject  = body.subject  || `Contract for ${body.propertyAddress || 'your property'}`;
-        const message  = body.message  || `Hi ${body.sellerName},\n\nPlease find your contract attached via the link below.\n\n${body.contractUrl}\n\nLet me know if you have any questions.\n\nBest regards`;
+        const message  = body.message  || `Hi ${body.sellerName},\n\nPlease find your contract at the link below.\n\n${body.contractUrl}\n\nLet me know if you have any questions.\n\nBest regards`;
+        const html = `<p>${message.replace(/\n/g,'<br>')}</p>
+                 <p><a href="${body.contractUrl}" style="background:#1a56db;color:#fff;padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:bold">📄 Open Contract</a></p>`;
 
-        // Send via Zoho SMTP using fetch to smtp2http or nodemailer-style raw SMTP
-        // We use Zoho's SMTP via a lightweight raw SMTP approach with node's net/tls
-        const nodemailer = require('nodemailer');
-        const transporter = nodemailer.createTransport({
-          host: 'smtp.zoho.com',
-          port: 465,
-          secure: true,
-          auth: { user: ZOHO_USER, pass: ZOHO_PASS },
+        const contractRes = await sendViaSpacemail({ to: body.toEmail, subject, text: message, html });
+        if (contractRes.error) return err(contractRes.error, 500);
+        return ok({ sent: true, id: contractRes.id });
+      }
+
+      // ════════════════════════════════════════════════════════
+      // SPACEMAIL — send any email from the app
+      // ════════════════════════════════════════════════════════
+      case 'send-email': {
+        if (!body.to) return err('to (recipient) required');
+        const res = await sendViaSpacemail({
+          to: body.to,
+          cc: body.cc,
+          replyTo: body.replyTo,
+          subject: body.subject,
+          html: body.html,
+          text: body.text,
         });
+        if (res.error) return err(res.error, 500);
+        return ok({ sent: true, id: res.id });
+      }
 
-        await transporter.sendMail({
-          from: `WinWin Dialer <${ZOHO_USER}>`,
-          to: body.toEmail,
-          subject,
-          text: message,
-          html: `<p>${message.replace(/\n/g,'<br>')}</p>
-                 <p><a href="${body.contractUrl}" style="background:#1a56db;color:#fff;padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:bold">📄 Open Contract</a></p>`,
-        });
+      // ════════════════════════════════════════════════════════
+      // SPACEMAIL — pull recent inbox messages via IMAP
+      // Optional body.search filters by sender address or subject.
+      // ════════════════════════════════════════════════════════
+      case 'fetch-inbox': {
+        if (!spacemailReady()) return err('SPACEMAIL_USER / SPACEMAIL_PASS not set in Netlify env vars', 500);
+        const limit  = Math.min(parseInt(body.limit, 10) || 30, 50);
+        const search = (body.search || '').trim().toLowerCase();
+        const client = spacemailImapClient();
+        const messages = [];
+        try {
+          await client.connect();
+          const lock = await client.getMailboxLock('INBOX');
+          try {
+            const status = await client.status('INBOX', { messages: true });
+            const total = status.messages || 0;
+            if (total > 0) {
+              const windowSize = search ? total : Math.min(total, limit);
+              const start = Math.max(1, total - windowSize + 1);
+              for await (const msg of client.fetch(`${start}:*`, { envelope: true, flags: true, internalDate: true }, { uid: false })) {
+                const env = msg.envelope || {};
+                const fromObj = (env.from && env.from[0]) || {};
+                const fromAddr = (fromObj.address || '').toLowerCase();
+                const subj = env.subject || '';
+                if (search && !(fromAddr.includes(search) || subj.toLowerCase().includes(search))) continue;
+                let iso = '';
+                const d = env.date || msg.internalDate;
+                try { iso = d ? new Date(d).toISOString() : ''; } catch { iso = ''; }
+                let seen = false;
+                try { seen = msg.flags ? msg.flags.has('\\Seen') : false; } catch { seen = false; }
+                messages.push({
+                  uid: msg.uid,
+                  from: fromObj.address || '',
+                  fromName: fromObj.name || fromObj.address || '',
+                  subject: subj || '(no subject)',
+                  date: iso,
+                  seen,
+                });
+              }
+            }
+          } finally { lock.release(); }
+          await client.logout();
+        } catch (e) {
+          try { await client.close(); } catch {}
+          return err('IMAP error: ' + (e.message || e), 502);
+        }
+        messages.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+        return ok({ messages: messages.slice(0, limit) });
+      }
 
-        return ok({ sent: true });
+      // ════════════════════════════════════════════════════════
+      // SPACEMAIL — fetch full body of one message (marks as read)
+      // ════════════════════════════════════════════════════════
+      case 'fetch-email': {
+        const uid = parseInt(body.uid, 10);
+        if (!uid) return err('uid required');
+        if (!spacemailReady()) return err('SPACEMAIL_USER / SPACEMAIL_PASS not set', 500);
+        const { simpleParser } = require('mailparser');
+        const client = spacemailImapClient();
+        let result = null;
+        try {
+          await client.connect();
+          const lock = await client.getMailboxLock('INBOX');
+          try {
+            const msg = await client.fetchOne(String(uid), { source: true }, { uid: true });
+            if (!msg || !msg.source) {
+              result = { error: 'not found' };
+            } else {
+              const parsed = await simpleParser(msg.source);
+              result = {
+                uid,
+                from: (parsed.from && parsed.from.text) || '',
+                to: (parsed.to && parsed.to.text) || '',
+                subject: parsed.subject || '(no subject)',
+                date: parsed.date ? parsed.date.toISOString() : '',
+                messageId: parsed.messageId || '',
+                html: parsed.html || parsed.textAsHtml || '',
+                text: parsed.text || '',
+              };
+              try { await client.messageFlagsAdd(String(uid), ['\\Seen'], { uid: true }); } catch {}
+            }
+          } finally { lock.release(); }
+          await client.logout();
+        } catch (e) {
+          try { await client.close(); } catch {}
+          return err('IMAP error: ' + (e.message || e), 502);
+        }
+        if (result && result.error) return err(result.error, 404);
+        return ok(result);
       }
 
       // ════════════════════════════════════════════════════════
