@@ -1612,6 +1612,8 @@ function renderPage(){
   slice.forEach((p, i) => {
     const idx = start + i + 1;
     const lead = p.lead || {called:false, lead_status:'', notes:''};
+    const notesToggleLabel = p.va_lead ? '📋 VA Notes' : '🏠 Property Info';
+    const notesSummaryLabel = p.va_lead ? '📋 VA / pre-existing notes' : '🏠 Property info / pre-existing notes';
     const called = lead.called || !!lead.lead_status;
     const sc = lead.lead_status ? STATUS_COLORS[lead.lead_status] : null;
     const highlightStyles = {
@@ -1658,7 +1660,7 @@ function renderPage(){
         ${(lead.va_notes||'').trim() ? `
         <div class="pre-call-section">
           <button class="pre-call-toggle" onclick="this.nextElementSibling.classList.toggle('hide');this.classList.toggle('open')">
-            📋 VA Notes <span class="toggle-arrow">▼</span>
+            ${notesToggleLabel} <span class="toggle-arrow">▼</span>
           </button>
           <div class="pre-call-content hide">${escapeHtml(lead.va_notes)}</div>
         </div>` : ''}
@@ -1789,7 +1791,7 @@ function renderPage(){
           <select class="status-sel" data-status data-id="${escapeHtml(p.id)}">${statusOptions}</select>
           <textarea class="notes-ta" data-notes data-id="${escapeHtml(p.id)}" rows="3" placeholder="Call notes — tap to type…">${escapeHtml(lead.notes||'')}</textarea>
           <details class="va-notes-block"${(lead.va_notes||'').trim()?' open':''}>
-            <summary>📋 VA / pre-existing notes${(lead.va_notes||'').trim()?' ✓':''}</summary>
+            <summary>${notesSummaryLabel}${(lead.va_notes||'').trim()?' ✓':''}</summary>
             <textarea class="va-notes-ta" data-vanotes data-id="${escapeHtml(p.id)}" rows="4" placeholder="Paste VA notes, prior call summaries, recording links…">${escapeHtml(lead.va_notes||'')}</textarea>
             <div data-recordings-container="${escapeHtml(p.id)}" id="rec-card-${escapeHtml(p.id)}" style="margin-top:8px"></div>
           </details>
@@ -2961,7 +2963,7 @@ $('uploadGo').addEventListener('click', async () => {
       va_notes: combinedNotes,
       recording_url: recordingCol ? r[recordingCol] : '',
       list_name: listNameCol ? r[listNameCol] : '',
-      va_lead: true,
+      va_lead: currentUploadTemplate === 'va',
       highlight: listColor,
       phones,
     });
