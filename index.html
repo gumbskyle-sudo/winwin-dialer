@@ -868,6 +868,7 @@ body.view-mail header .callerid{display:none}
   </div>
   <div class="header-controls">
     <label><input type="checkbox" id="hideCalled">&nbsp;Hide called</label>
+    <label><input type="checkbox" id="hideOthersAssigned">&nbsp;Hide others' leads</label>
     <button class="header-link" data-open="manualDialModal">☎ Dial a number</button>
     <button class="header-link" data-open="numbersModal">📞 Numbers</button>
     <button class="header-link" data-open="logModal">📊 Log</button>
@@ -1147,6 +1148,7 @@ body.view-mail header .callerid{display:none}
           <div style="display:flex;gap:8px">
             <button class="upload-template-btn active" data-template="va" style="flex:1;padding:8px;border:2px solid #1f6feb;background:#eff6ff;color:#1e40af;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer">📋 VA Leads</button>
             <button class="upload-template-btn" data-template="propertyreach" style="flex:1;padding:8px;border:2px solid #d1d5db;background:#fff;color:#374151;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer">🏠 PropertyReach</button>
+            <button class="upload-template-btn" data-template="custom" style="flex:1;padding:8px;border:2px solid #d1d5db;background:#fff;color:#374151;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer">🗂️ Custom</button>
           </div>
         </div>
         <div style="font-size:12px;color:#6b7280;margin-bottom:8px">Map your CSV columns to the dialer fields. Phone columns can be repeated — they're combined automatically.</div>
@@ -1308,6 +1310,7 @@ const LS = {
   pwd:'cb_pwd', backend:'cb_backend',
   forward:'cb_forward', active:'cb_active',
   profileId:'cb_profile_id', profileName:'cb_profile_name',
+  hideOthers:'cb_hide_others',
 };
 let backend  = localStorage.getItem(LS.backend) || '/api';
 let password = localStorage.getItem(LS.pwd) || '';
@@ -1441,6 +1444,7 @@ const PAGE_SIZE = 20;
 let page = 1;
 let searchQuery = '';
 let assignFilter = ''; // profile id to filter by, '' = show all
+let hideOthersAssigned = localStorage.getItem(LS.hideOthers) === '1'; // hide leads assigned to OTHER teammates
 let selectedListColor = 'none'; // color tag applied to uploaded list
 let currentUploadTemplate = 'va'; // active upload column template
 
@@ -1458,6 +1462,12 @@ function getFilteredProperties(){
   }
   if(assignFilter){
     list = list.filter(p => String((p.lead||{}).assigned_to) === String(assignFilter));
+  }
+  if(hideOthersAssigned){
+    list = list.filter(p => {
+      const a = (p.lead||{}).assigned_to;
+      return a == null || a === '' || String(a) === String(activeProfileId);
+    });
   }
   return list;
 }
@@ -1790,16 +1800,36 @@ function renderPage(){
   $('cards').innerHTML = out.join('');
 
   $('pageNav').innerHTML = `
+    <button id="firstPage"${page<=1?' disabled':''}>« First</button>
     <button id="prevPage"${page<=1?' disabled':''}>← Prev</button>
-    <span class="page-label">Page ${page} of ${totalPages} · ${start+1}–${Math.min(start+slice.length, filtered.length)} of ${filtered.length}</span>
-    <button id="nextPage"${page>=totalPages?' disabled':''}>Next →</button>`;
+    <span class="page-label">
+      Page <input type="number" id="pageJump" value="${page}" min="1" max="${totalPages}" inputmode="numeric" style="width:44px;text-align:center;padding:4px 2px;border:1px solid #d1d5db;border-radius:5px;font-size:13px;margin:0 3px">
+      of ${totalPages} · ${start+1}–${Math.min(start+slice.length, filtered.length)} of ${filtered.length}
+    </span>
+    <button id="nextPage"${page>=totalPages?' disabled':''}>Next →</button>
+    <button id="lastPage"${page>=totalPages?' disabled':''}>Last »</button>`;
   $('prevPage')?.addEventListener('click', ()=>{ page--; renderPage(); window.scrollTo({top:0,behavior:'smooth'}); });
   $('nextPage')?.addEventListener('click', ()=>{ page++; renderPage(); window.scrollTo({top:0,behavior:'smooth'}); });
+  $('firstPage')?.addEventListener('click', ()=>{ page=1; renderPage(); window.scrollTo({top:0,behavior:'smooth'}); });
+  $('lastPage')?.addEventListener('click', ()=>{ page=totalPages; renderPage(); window.scrollTo({top:0,behavior:'smooth'}); });
+  $('pageJump')?.addEventListener('keydown', e => { if(e.key==='Enter'){ e.target.blur(); } });
+  $('pageJump')?.addEventListener('change', e => {
+    const v = parseInt(e.target.value, 10);
+    if(!isFinite(v)) return;
+    const clamped = Math.max(1, Math.min(v, totalPages));
+    if(clamped !== page){ page = clamped; renderPage(); window.scrollTo({top:0,behavior:'smooth'}); }
+  });
 }
 
 // ── Card interactions ───────────────────────────────────────────
 $('hideCalled').addEventListener('change', e => {
   document.body.classList.toggle('hide-called', e.target.checked);
+});
+$('hideOthersAssigned').addEventListener('change', e => {
+  hideOthersAssigned = e.target.checked;
+  localStorage.setItem(LS.hideOthers, hideOthersAssigned ? '1' : '0');
+  page = 1;
+  renderPage();
 });
 
 // ── Power Dialer ─────────────────────────────────────────────────
@@ -2628,14 +2658,16 @@ function autoMap(headers){
     return '';
   };
   // Phone columns: standard format OR PropertyReach "Owner N Phone N" format
+  // OR generic skip-trace exports using Wireless/Landline/Voip/Mobile/Cell/Tel column families.
   const phoneCols = [];
   headers.forEach((h,i) => {
     const lc = lower[i];
-    const isStandardPhone = /^phone\s*\d*$/.test(lc) || /^phone\s*\d*\s*number$/.test(lc) || /^mobile\s*\d*$/.test(lc) || /^cell\s*\d*$/.test(lc);
+    const isStandardPhone = /^phone\s*\d*$/.test(lc) || /^phone\s*\d*\s*number$/.test(lc) || /^mobile\s*\d*$/.test(lc) || /^cell\s*\d*$/.test(lc)
+      || /^wireless\s*\d*$/.test(lc) || /^landline\s*\d*$/.test(lc) || /^voip\s*\d*$/.test(lc) || /^tel\s*\d*$/.test(lc) || /^telephone\s*\d*$/.test(lc);
     // PropertyReach: "Owner 1 Phone 1", "Owner 2 Phone 3" etc — exclude DNC/Type/Last Seen columns
     const isOwnerPhone = /^owner\s*\d+\s*phone\s*\d+$/.test(lc);
     if(isStandardPhone || isOwnerPhone){
-      const typeI = lower.findIndex(x => x === lc+' type' || x === lc.replace('number','type') || x === lc.replace('phone','phone type'));
+      const typeI = lower.findIndex((x, idx) => idx !== i && (x === lc+' type' || x === lc.replace('number','type') || x === lc.replace('phone','phone type')));
       const typeIByPattern = lower.findIndex((x, idx) => idx !== i && x.startsWith(lc) && x.includes('type'));
       phoneCols.push({ num: h, type: typeI >= 0 ? headers[typeI] : (typeIByPattern >= 0 ? headers[typeIByPattern] : '') });
     }
@@ -2645,11 +2677,45 @@ function autoMap(headers){
     owners:            find(/^seller\s*name$/, /^sellers?\s*name$/, /^owners?$/, /full\s*name/, /owner\s*name/, /^name$/, /^owner\s*1\s*full\s*name$/, /^owner\s*1\s*first\s*name$/),
     propertyAddress:   find(/^property\s*address$/, /property\s*address/, /site\s*address/, /^address$/, /^street$/),
     mailingAddress:    find(/mailing\s*address/, /mail\s*address/, /owner\s*address/),
-    email:             find(/^sellers?\s*email$/, /^email$/, /e-mail/, /^owner\s*1\s*email\s*1$/),
+    email:             find(/^sellers?\s*email$/, /^email$/, /^email\s*\d*$/, /e-?mail\s*\d*/, /^owner\s*1\s*email\s*1$/),
     vaNotes:           find(/^additional\s*notes?$/, /^va\s*notes?$/, /^notes?$/, /pre.?call\s*notes?/),
     recording:         find(/^call\s*recording$/, /^recording$/, /recording\s*url/, /recording\s*link/, /audio\s*url/),
-    listName:          find(/^list\s*name$/, /^list$/, /batch/, /campaign/, /source/),
+    listName:          find(/^list\s*name$/, /^list$/, /batch/, /campaign/, /source/, /marketing\s*lists?/),
     phones: phoneCols,
+  };
+}
+
+// Find a companion "Last Name" column for a chosen "First Name" column
+// (e.g. "Owner 1 First Name" -> "Owner 1 Last Name", "Owner 2 First Name" -> "Owner 2 Last Name")
+function findCompanionLastNameCol(headers, firstNameCol){
+  if(!firstNameCol) return '';
+  const lc = firstNameCol.toLowerCase().trim();
+  if(!lc.includes('first') || lc.includes('full')) return '';
+  const target = lc.replace('first', 'last');
+  const idx = headers.findIndex(h => h.toLowerCase().trim() === target);
+  return idx >= 0 ? headers[idx] : '';
+}
+
+// ── Generic auto-detection used by the Custom template ──────────
+// Broader than autoMap(): also catches Bedrooms/Bathrooms/Sqft/Year Built
+// style columns and owner-2 name columns, for arbitrary skip-trace exports.
+function autoMapGeneric(headers){
+  const base = autoMap(headers);
+  const lower = headers.map(h => h.toLowerCase().trim());
+  const find = (...patterns) => {
+    for(const pat of patterns){
+      const i = lower.findIndex(h => pat instanceof RegExp ? pat.test(h) : h === pat);
+      if(i >= 0) return headers[i];
+    }
+    return '';
+  };
+  return {
+    ...base,
+    owner2:      find(/^owner\s*2\s*full\s*name$/, /^owner\s*2\s*first\s*name$/, /^owner\s*2$/),
+    bedrooms:    find(/^bedrooms?$/, /^beds?$/),
+    bathrooms:   find(/^total\s*bathrooms?$/, /^bathrooms?$/, /^baths?$/),
+    sqft:        find(/^building\s*sqft$/, /^square\s*footage$/, /^sqft$/, /^living\s*area$/),
+    yearBuilt:   find(/^effective\s*year\s*built$/, /^year\s*built$/),
   };
 }
 
@@ -2684,6 +2750,28 @@ const UPLOAD_TEMPLATES = {
       'Owner 2 Phone 1','Owner 2 Phone 2','Owner 2 Phone 3',
     ],
   },
+  custom: {
+    // Fields are auto-detected per-file via autoMapGeneric() rather than
+    // fixed hint strings, since "Custom" exists for exports that don't
+    // match the VA or PropertyReach shape (e.g. Wireless/Landline/Voip
+    // phone columns, separate Bedrooms/Bathrooms columns, etc).
+    fields: [
+      { id:'id',        label:'Property ID (APN)' },
+      { id:'owners',    label:'Owner name' },
+      { id:'owner2',    label:'Owner 2 name' },
+      { id:'property',  label:'Property Address' },
+      { id:'mailing',   label:'Mailing Address' },
+      { id:'email',     label:'Email' },
+      { id:'vanotes',   label:'Notes' },
+      { id:'recording', label:'Call recording URL' },
+      { id:'listname',  label:'List name' },
+      { id:'bedrooms',  label:'Bedrooms' },
+      { id:'bathrooms', label:'Bathrooms' },
+      { id:'sqft',      label:'Square Footage' },
+      { id:'yearbuilt', label:'Year Built' },
+    ],
+    phones: [], // populated dynamically from autoMapGeneric()'s phone detection
+  },
 };
 
 function bestMatch(headers, hint){
@@ -2712,8 +2800,28 @@ function applyTemplate(templateKey){
     return `<select id="map-${id}">${opts.replace(`value="${escapeHtml(val)}"`, `value="${escapeHtml(val)}" selected`)}</select>`;
   };
 
-  const tmplPhones = (tmpl.phones||[]).map(hint => ({ num: bestMatch(headers, hint), type:'' })).filter(p => p.num);
+  let tmplPhones, fieldValueLookup;
+  if(templateKey === 'custom'){
+    // Use the smarter generic auto-detector instead of fixed hint strings.
+    const detected = autoMapGeneric(headers);
+    fieldValueLookup = {
+      id: detected.id, owners: detected.owners, owner2: detected.owner2,
+      property: detected.propertyAddress, mailing: detected.mailingAddress,
+      email: detected.email, vanotes: detected.vaNotes, recording: detected.recording,
+      listname: detected.listName, bedrooms: detected.bedrooms, bathrooms: detected.bathrooms,
+      sqft: detected.sqft, yearbuilt: detected.yearBuilt,
+    };
+    tmplPhones = (detected.phones || []).map(p => ({ num: p.num, type: p.type || '' }));
+  } else {
+    fieldValueLookup = null; // fall back to hint-based bestMatch below
+    tmplPhones = (tmpl.phones||[]).map(hint => ({ num: bestMatch(headers, hint), type:'' })).filter(p => p.num);
+  }
   const phonesForMap = tmplPhones.length ? tmplPhones : [{num:'',type:''}];
+
+  const selForCustom = (id) => {
+    const val = fieldValueLookup[id] || '';
+    return `<select id="map-${id}">${opts.replace(`value="${escapeHtml(val)}"`, `value="${escapeHtml(val)}" selected`)}</select>`;
+  };
 
   const phoneRows = phonesForMap.map((p,i) => `
     <div style="font-weight:600">Phone ${i+1}</div>
@@ -2723,7 +2831,7 @@ function applyTemplate(templateKey){
     </div>`).join('');
 
   $('colMap').innerHTML = tmpl.fields.map(f =>
-    `<div style="font-weight:600">${escapeHtml(f.label)}</div>${sel(f.id, f.hint)}`
+    `<div style="font-weight:600">${escapeHtml(f.label)}</div>${templateKey==='custom' ? selForCustom(f.id) : sel(f.id, f.hint)}`
   ).join('') + phoneRows + `
     <div></div><div><button class="btn-ghost" id="addPhoneCol" style="font-size:12px;padding:5px 10px">+ Add phone column</button></div>`;
 
@@ -2791,6 +2899,9 @@ $('uploadGo').addEventListener('click', async () => {
   const bedbathCol  = $('map-bedbath')?.value || '';
   const sqftCol     = $('map-sqft')?.value || '';
   const yearCol     = $('map-yearbuilt')?.value || '';
+  // Custom-template extra fields (separate bedrooms/bathrooms columns)
+  const bedroomsCol  = $('map-bedrooms')?.value || '';
+  const bathroomsCol = $('map-bathrooms')?.value || '';
   const phoneCols   = Array.from(document.querySelectorAll('.map-phone-num')).map(s => s.value);
   const typeCols    = Array.from(document.querySelectorAll('.map-phone-type')).map(s => s.value);
   if(!phoneCols.some(Boolean)){ toast('Select at least one phone column','err'); return; }
@@ -2800,17 +2911,10 @@ $('uploadGo').addEventListener('click', async () => {
   const listColor = selectedListColor !== 'none' ? selectedListColor : '';
   const assignTo  = $('uploadAssignTo') && $('uploadAssignTo').value ? parseInt($('uploadAssignTo').value, 10) : null;
 
-  // For PropertyReach: detect if owners col is a "First Name" col and find matching Last Name col
+  // For PropertyReach / Custom: detect if owners col is a "First Name" col and find matching Last Name col
   const headers = csvParsed.headers;
-  const lowerH = headers.map(h => h.toLowerCase().trim());
-  let lastNameCol = '';
-  if(ownersCol){
-    const lc = ownersCol.toLowerCase().trim();
-    if(lc.includes('first') && !lc.includes('full')){
-      const lastIdx = lowerH.findIndex(h => h.replace('first','last') === lc.replace('first','last') && h.includes('last'));
-      if(lastIdx >= 0) lastNameCol = headers[lastIdx];
-    }
-  }
+  const lastNameCol = findCompanionLastNameCol(headers, ownersCol);
+  const owner2LastNameCol = findCompanionLastNameCol(headers, owner2Col);
 
   const out = [];
   csvParsed.rows.forEach((r, i) => {
@@ -2829,11 +2933,20 @@ $('uploadGo').addEventListener('click', async () => {
     let ownerName = ownersCol ? (r[ownersCol] || '') : '';
     if(lastNameCol && r[lastNameCol]) ownerName = (ownerName + ' ' + r[lastNameCol]).trim();
 
-    // Build property notes from PropertyReach fields if available
+    // Build owner 2 display name — combine first+last if needed
+    let owner2Name = owner2Col ? (r[owner2Col] || '') : '';
+    if(owner2LastNameCol && r[owner2LastNameCol]) owner2Name = (owner2Name + ' ' + r[owner2LastNameCol]).trim();
+
+    // Build property notes from PropertyReach / Custom fields if available
     const prParts = [];
-    const owner2Name = owner2Col ? r[owner2Col] : '';
     if(owner2Name)                  prParts.push(`Owner 2: ${owner2Name}`);
     if(bedbathCol && r[bedbathCol]) prParts.push(`Bed/Bath: ${r[bedbathCol]}`);
+    // Custom template: separate bedrooms/bathrooms columns combined into one string
+    if(!bedbathCol && (bedroomsCol || bathroomsCol)){
+      const bd = bedroomsCol ? r[bedroomsCol] : '';
+      const ba = bathroomsCol ? r[bathroomsCol] : '';
+      if(bd || ba) prParts.push(`Bed/Bath: ${bd||'?'}/${ba||'?'}`);
+    }
     if(sqftCol && r[sqftCol])       prParts.push(`Sqft: ${r[sqftCol]}`);
     if(yearCol && r[yearCol])       prParts.push(`Year Built: ${r[yearCol]}`);
     const prNotes = prParts.length ? prParts.join(' · ') : '';
@@ -5069,6 +5182,7 @@ async function boot(){
     updateProfileBadge();
   }
   refreshCallerStrip();
+  $('hideOthersAssigned').checked = hideOthersAssigned;
   await Promise.all([
     loadProperties(),
     loadOwnedNumbers().catch(()=>{}),
