@@ -66,6 +66,55 @@ function escapeXml(s) {
   return String(s).replace(/[<>&"']/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&apos;'}[c]));
 }
 
+// ── Voicemail drop recording — auth-embedded playback URL ──────
+// Twilio recording media requires HTTP Basic Auth by default. Rather
+// than store a secret at rest, we rebuild this URL on demand from
+// env credentials + the stored (non-secret) RecordingSid.
+function recordingPlaybackUrl(recordingSid) {
+  let user, pass;
+  if (process.env.TWILIO_API_KEY_SID && process.env.TWILIO_API_KEY_SECRET) {
+    user = process.env.TWILIO_API_KEY_SID;
+    pass = process.env.TWILIO_API_KEY_SECRET;
+  } else {
+    user = process.env.TWILIO_ACCOUNT_SID;
+    pass = process.env.TWILIO_AUTH_TOKEN;
+  }
+  return `https://${encodeURIComponent(user)}:${encodeURIComponent(pass)}@api.twilio.com/2010-04-01/Accounts/${twilioSid()}/Recordings/${recordingSid}.mp3`;
+}
+
+// TwiML played when we call a rep's own phone to record their VM drop message
+function handleRecordVmTwiml(event) {
+  const qs = event.queryStringParameters || {};
+  const baseUrl = 'https://winwincalltoclose.netlify.app/api';
+  const profileId = qs.profileId || '';
+  const statusCb = `${baseUrl}?action=record-vm-status&profileId=${encodeURIComponent(profileId)}`;
+  const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response>
+    <Say voice="alice">Record your voicemail drop message after the tone. Press pound when you're finished.</Say>
+    <Record maxLength="120" playBeep="true" finishOnKey="#" trim="trim-silence" recordingStatusCallback="${escapeXml(statusCb)}" recordingStatusCallbackEvent="completed" />
+    <Say voice="alice">Got it. That message is saved. Goodbye.</Say>
+  </Response>`;
+  return { statusCode: 200, headers: { 'Content-Type': 'text/xml' }, body: twiml };
+}
+
+// Twilio POSTs here once the recording above is finalized
+async function handleRecordVmStatus(event) {
+  try {
+    const params = parseFormEncoded(event.body || '');
+    const qs = event.queryStringParameters || {};
+    const profileId = qs.profileId || '';
+    const recordingSid = params.RecordingSid || '';
+    const duration = parseInt(params.RecordingDuration || '0', 10) || 0;
+    if (profileId && recordingSid) {
+      await supa(`/profiles?id=eq.${encodeURIComponent(profileId)}`, 'PATCH', {
+        vm_recording_sid: recordingSid,
+        vm_recording_duration: duration,
+        vm_recorded_at: new Date().toISOString(),
+      });
+    }
+  } catch (e) { console.warn('record-vm-status failed', e.message); }
+  return { statusCode: 200, headers: { 'Content-Type': 'text/xml' }, body: '<Response></Response>' };
+}
+
 // ── Supabase REST helpers (no SDK — keeps function tiny) ──────
 function supaUrl() {
   const u = process.env.SUPABASE_URL;
@@ -672,6 +721,12 @@ exports.handler = async (event) => {
   if (action === 'twilio-status') {
     return await handleTwilioStatus(event);
   }
+  if (action === 'record-vm-twiml') {
+    return handleRecordVmTwiml(event);
+  }
+  if (action === 'record-vm-status') {
+    return await handleRecordVmStatus(event);
+  }
   // The drip processor can run via Netlify scheduled function or cron
   // hitting a special key — but to keep it simple, it's behind the
   // password gate like everything else and the admin can trigger it
@@ -1090,6 +1145,58 @@ exports.handler = async (event) => {
         if (!body.sid) return err('sid required');
         await tw(`/Accounts/${twilioSid()}/Calls/${encodeURIComponent(body.sid)}.json`, 'POST', { Status: 'completed' });
         return ok({ ended: true });
+      }
+
+      // Calls the rep's own phone and records their voicemail-drop message
+      case 'start-vm-recording': {
+        if (!body.profileId) return err('profileId required');
+        if (!body.phone)     return err('phone required (your forwarding number)');
+        if (!body.from)      return err('from required (a Twilio number you own)');
+        const baseUrl = 'https://winwincalltoclose.netlify.app/api';
+        const url = `${baseUrl}?action=record-vm-twiml&profileId=${encodeURIComponent(body.profileId)}`;
+        const j = await tw(`/Accounts/${twilioSid()}/Calls.json`, 'POST', {
+          From: body.from, To: body.phone, Url: url, Method: 'POST',
+        });
+        return ok({ sid: j.sid, status: j.status });
+      }
+
+      // Lets Settings show whether a recording is saved yet
+      case 'vm-recording-status': {
+        if (!qs.profileId) return err('profileId required');
+        const { json: profiles } = await supa(`/profiles?id=eq.${encodeURIComponent(qs.profileId)}&select=vm_recording_sid,vm_recording_duration,vm_recorded_at`);
+        const profile = Array.isArray(profiles) && profiles[0];
+        return ok({
+          hasRecording: !!(profile && profile.vm_recording_sid),
+          durationSec: profile ? profile.vm_recording_duration || 0 : 0,
+          recordedAt: profile ? profile.vm_recorded_at || null : null,
+        });
+      }
+
+      // Drops a voicemail into the LEAD's leg of a live call. Prefers
+      // the rep's recorded audio; falls back to a text-to-speech
+      // message if no recording has been saved yet.
+      case 'drop-voicemail': {
+        if (!body.sid) return err('sid required (the parent call sid)');
+        let playUrl = null;
+        if (body.profileId) {
+          try {
+            const { json: profiles } = await supa(`/profiles?id=eq.${encodeURIComponent(body.profileId)}&select=vm_recording_sid`);
+            const profile = Array.isArray(profiles) && profiles[0];
+            if (profile && profile.vm_recording_sid) playUrl = recordingPlaybackUrl(profile.vm_recording_sid);
+          } catch (e) { console.warn('vm profile lookup failed', e.message); }
+        }
+        if (!playUrl && !body.message) return err('No recorded voicemail message and no fallback text provided');
+
+        const { json: childCalls } = await tw(`/Accounts/${twilioSid()}/Calls.json?ParentCallSid=${encodeURIComponent(body.sid)}`);
+        const childCall = childCalls && childCalls.calls && childCalls.calls[0];
+        if (!childCall) return err('Could not find the lead\'s call leg — they may have already hung up');
+
+        const inner = playUrl
+          ? `<Play>${escapeXml(playUrl)}</Play>`
+          : `<Say voice="alice">${escapeXml(body.message)}</Say>`;
+        const dropTwiml = `<?xml version="1.0" encoding="UTF-8"?><Response>${inner}<Hangup/></Response>`;
+        await tw(`/Accounts/${twilioSid()}/Calls/${encodeURIComponent(childCall.sid)}.json`, 'POST', { Twiml: dropTwiml });
+        return ok({ dropped: true, usedRecording: !!playUrl });
       }
 
       // List calls in window (for KPIs/log). Pulls from DB; refreshes any non-final from Twilio first.
