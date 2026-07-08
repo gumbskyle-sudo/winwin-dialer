@@ -269,7 +269,10 @@ body.hide-called .card.called{display:none}
 .calldrawer .row2{display:flex;gap:8px;margin-top:12px;align-items:center;font-size:12px;opacity:.85}
 .calldrawer .timer{font-family:ui-monospace,monospace;font-size:14px;font-weight:600;opacity:1}
 .calldrawer .row2 .from{flex:1;text-align:right}
+.calldrawer .vm-drop{background:#96751A;color:#fff;border:none;border-radius:8px;padding:9px 12px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap}
 .calldrawer .hangup{background:#b91c1c;color:#fff;border:none;border-radius:8px;padding:9px 14px;font-size:13px;font-weight:700;cursor:pointer}
+.calldrawer .skip-btn{background:rgba(255,255,255,.12);color:#fff;border:1px solid rgba(255,255,255,.25);border-radius:8px;padding:9px 10px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap}
+.calldrawer .skip-btn:disabled{opacity:.35;cursor:not-allowed}
 
 /* Toast */
 .toast-stack{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);z-index:80;display:flex;flex-direction:column;gap:6px;pointer-events:none;align-items:center}
@@ -1229,6 +1232,17 @@ body.view-mail header .callerid{display:none}
         <input type="text" id="settingsBackendUrl" placeholder="/api">
         <div style="font-size:11px;color:#6b7280;margin-top:4px">Default <code>/api</code> works if you're using Netlify. Change if hosting the function elsewhere.</div>
       </div>
+      <div class="field">
+        <label>Voicemail drop — your recorded message</label>
+        <div id="vmRecordStatus" style="font-size:12px;color:#6b7280;margin-bottom:8px">Checking…</div>
+        <button type="button" id="vmRecordBtn" class="btn-secondary">🎙️ Record my voicemail message</button>
+        <div style="font-size:11px;color:#6b7280;margin-top:4px">Taps call your phone — answer it, talk after the beep, then press # when done. Used automatically when you tap 📨 VM Drop during a call.</div>
+      </div>
+      <div class="field">
+        <label>Voicemail drop message (text-to-speech fallback)</label>
+        <textarea id="settingsVmMessage" rows="3" placeholder="Message played when you tap VM Drop"></textarea>
+        <div style="font-size:11px;color:#6b7280;margin-top:4px">Only used if you haven't recorded a message above. Saved on this device only.</div>
+      </div>
 
       <!-- SMS settings (shared across team) -->
       <div class="sms-settings-section">
@@ -1268,6 +1282,9 @@ body.view-mail header .callerid{display:none}
   <div class="row2">
     <span class="timer" id="cdTimer">00:00</span>
     <span class="from" id="cdFrom"></span>
+    <button class="skip-btn" id="cdNextNum" title="Try this lead's next phone number">⏭ Next #</button>
+    <button class="skip-btn" id="cdNextLead" title="Skip to the next lead">⏭⏭ Next lead</button>
+    <button class="vm-drop" id="cdVoicemail" title="Drop voicemail">📨 VM Drop</button>
     <button class="hangup" id="cdHangup">End</button>
   </div>
 </div>
@@ -1330,7 +1347,9 @@ const LS = {
   forward:'cb_forward', active:'cb_active',
   profileId:'cb_profile_id', profileName:'cb_profile_name',
   hideOthers:'cb_hide_others', hiddenColors:'cb_hidden_colors',
+  vmMessage:'cb_vm_message',
 };
+const DEFAULT_VM_MESSAGE = "Hi, this is Win-Win Property Solutions. We're interested in your property and would love to chat. Please give us a call back at your convenience. Thanks, and have a great day.";
 let backend  = localStorage.getItem(LS.backend) || '/api';
 let password = localStorage.getItem(LS.pwd) || '';
 let forwardPhone   = localStorage.getItem(LS.forward) || '';
@@ -1525,6 +1544,8 @@ function openModal(id){
   if(id==='settingsModal'){
     $('settingsForwardPhone').value = forwardPhone;
     $('settingsBackendUrl').value   = backend;
+    $('settingsVmMessage').value    = localStorage.getItem(LS.vmMessage) || DEFAULT_VM_MESSAGE;
+    refreshVmRecordStatus();
   }
   if(id==='uploadModal'){
     $('uploadPreview').classList.add('hide');
@@ -2214,7 +2235,7 @@ document.addEventListener('click', e => {
     const p = properties.find(x => x.id === pid);
     const ph = p?.phones?.[phidx];
     if(!p || !ph) return;
-    placeCall(p, ph, callBtn);
+    placeCall(p, ph, callBtn, phidx);
   }
 });
 document.addEventListener('change', e => {
@@ -2276,10 +2297,10 @@ document.addEventListener('toggle', e => {
 }, true);
 
 // ── Calling ─────────────────────────────────────────────────────
-async function placeCall(p, ph, btn){
+async function placeCall(p, ph, btn, phidx){
   btn.classList.add('dialing');
   btn.querySelector('.badge:last-child').textContent='DIALING';
-  showDrawer({name:p.owners, num:ph.e164, state:'Initializing', from:fmtPhone(activeCallerId)});
+  showDrawer({name:p.owners, num:ph.e164, state:'Initializing', from:fmtPhone(activeCallerId)}, true);
   try {
     const r = await api('make-call',{method:'POST', body:{
       to: toE164(ph.e164),
@@ -2288,7 +2309,7 @@ async function placeCall(p, ph, btn){
       propertyId: p.id,
       profileId: activeProfileId,
     }});
-    activeCall = { sid:r.sid, btn, propertyId:p.id, startedAt:Date.now() };
+    activeCall = { sid:r.sid, btn, propertyId:p.id, phidx: (phidx==null?0:phidx), startedAt:Date.now() };
     setDrawerState('Ringing your phone','ringing');
     btn.querySelector('.badge:last-child').textContent='RINGING';
     activeCall.tickTimer = setInterval(updateDrawerTimer, 1000);
@@ -2364,15 +2385,20 @@ function finishCall(label, isErr){
   }
   if(activeCall.tickTimer) clearInterval(activeCall.tickTimer);
   if(activeCall.statusTimer) clearTimeout(activeCall.statusTimer);
-  setTimeout(hideDrawer, 1700);
+  clearTimeout(hideDrawerTimer);
+  hideDrawerTimer = setTimeout(hideDrawer, 1700);
   activeCall = null;
 }
-function showDrawer(o){
+let hideDrawerTimer = null;
+function showDrawer(o, hasLead){
+  clearTimeout(hideDrawerTimer);
   $('cdName').textContent = o.name||'—';
   $('cdNum').textContent  = fmtPhone(o.num)||'—';
   $('cdFrom').textContent = o.from?'from '+o.from:'';
   $('cdTimer').textContent = '00:00';
   setDrawerState(o.state||'…','');
+  $('cdNextNum').disabled = !hasLead;
+  $('cdNextLead').disabled = !hasLead;
   $('callDrawer').classList.add('open');
 }
 function hideDrawer(){ $('callDrawer').classList.remove('open'); }
@@ -2388,6 +2414,90 @@ $('cdHangup').addEventListener('click', async ()=>{
   if(!activeCall){ hideDrawer(); return; }
   try { await api('end-call', {method:'POST', body:{sid:activeCall.sid}}); } catch{}
   finishCall('Ended', false);
+});
+function findLeadButton(pid, phidx){
+  return document.querySelector(`[data-call][data-pid="${CSS.escape(pid)}"][data-phidx="${phidx}"]`);
+}
+const dummyCallBtn = { classList:{add(){},remove(){},contains(){return false;}}, querySelector(){return {textContent:''};} };
+$('cdNextNum').addEventListener('click', async ()=>{
+  if(!activeCall || !activeCall.propertyId) return;
+  const {propertyId, phidx, sid} = activeCall;
+  const p = properties.find(x => x.id === propertyId);
+  const nextIdx = (phidx==null?0:phidx) + 1;
+  const ph = p?.phones?.[nextIdx];
+  if(!ph){ toast("No more numbers for this lead",'err'); return; }
+  try { await api('end-call', {method:'POST', body:{sid}}); } catch{}
+  finishCall('Skipped', false);
+  setTimeout(() => placeCall(p, ph, findLeadButton(p.id, nextIdx) || dummyCallBtn, nextIdx), 400);
+});
+$('cdNextLead').addEventListener('click', async ()=>{
+  if(!activeCall || !activeCall.propertyId) return;
+  const {propertyId, sid} = activeCall;
+  const list = getFilteredProperties();
+  const curIdx = list.findIndex(x => x.id === propertyId);
+  let next = null;
+  for(let i = curIdx+1; i < list.length; i++){
+    if(list[i].phones && list[i].phones.length){ next = list[i]; break; }
+  }
+  if(!next){ toast('No more leads in this list','err'); return; }
+  try { await api('end-call', {method:'POST', body:{sid}}); } catch{}
+  finishCall('Skipped', false);
+  setTimeout(() => placeCall(next, next.phones[0], findLeadButton(next.id, 0) || dummyCallBtn, 0), 400);
+});
+$('cdVoicemail').addEventListener('click', async ()=>{
+  if(!activeCall) return;
+  const btn = $('cdVoicemail');
+  btn.disabled = true; btn.textContent = 'Dropping…';
+  try {
+    const message = localStorage.getItem(LS.vmMessage) || DEFAULT_VM_MESSAGE;
+    const r = await api('drop-voicemail', {method:'POST', body:{sid:activeCall.sid, profileId:activeProfileId, message}});
+    toast(r.usedRecording ? 'Your voicemail message was dropped' : 'Voicemail dropped (text-to-speech)', 'ok');
+    finishCall('VM dropped', false);
+  } catch(e){
+    toast('Voicemail drop failed: '+e.message,'err');
+  } finally {
+    btn.disabled = false; btn.textContent = '📨 VM Drop';
+  }
+});
+
+// ── Voicemail drop: record your own message by phone ────────────
+async function refreshVmRecordStatus(){
+  const el = $('vmRecordStatus');
+  if(!activeProfileId){ el.textContent = 'Pick a profile first.'; return; }
+  el.textContent = 'Checking…';
+  try {
+    const r = await api('vm-recording-status&profileId='+encodeURIComponent(activeProfileId));
+    if(r.hasRecording){
+      const mins = Math.floor((r.durationSec||0)/60), secs = (r.durationSec||0)%60;
+      const when = r.recordedAt ? new Date(r.recordedAt).toLocaleDateString() : '';
+      el.textContent = `✅ Saved (${mins}:${String(secs).padStart(2,'0')}) — recorded ${when}`;
+      el.style.color = '#047857';
+    } else {
+      el.textContent = 'No recording yet — the text message below will be used instead.';
+      el.style.color = '#6b7280';
+    }
+  } catch(e){
+    el.textContent = 'Could not check status: '+e.message;
+    el.style.color = '#b91c1c';
+  }
+}
+$('vmRecordBtn').addEventListener('click', async ()=>{
+  if(!activeProfileId){ toast('Pick a profile first','err'); return; }
+  if(!forwardPhone){ toast('Set your phone number in Settings first','err'); return; }
+  if(!activeCallerId){ toast('Buy a phone number first','err'); openModal('numbersModal'); return; }
+  const btn = $('vmRecordBtn');
+  btn.disabled = true; btn.textContent = 'Calling your phone…';
+  try {
+    await api('start-vm-recording', {method:'POST', body:{
+      profileId: activeProfileId, phone: toE164(forwardPhone), from: activeCallerId,
+    }});
+    toast('Your phone is ringing — answer it and record after the beep','ok');
+    setTimeout(refreshVmRecordStatus, 20000);
+  } catch(e){
+    toast('Could not start recording: '+e.message,'err');
+  } finally {
+    btn.disabled = false; btn.textContent = '🎙️ Record my voicemail message';
+  }
 });
 
 // ── Number management ───────────────────────────────────────────
@@ -2612,6 +2722,7 @@ $('settingsSave').addEventListener('click', async () => {
   backend = $('settingsBackendUrl').value.trim() || '/api';
   localStorage.setItem(LS.forward, forwardPhone);
   localStorage.setItem(LS.backend, backend);
+  localStorage.setItem(LS.vmMessage, $('settingsVmMessage').value.trim() || DEFAULT_VM_MESSAGE);
   refreshCallerStrip();
   $('settingsModal').classList.remove('open');
   toast('Saved','ok');
