@@ -518,6 +518,8 @@ body.view-pipeline header .callerid{display:none}
 .hc-dot{width:22px;height:22px;border-radius:50%;border:none;background:var(--hc);cursor:pointer;padding:0;position:relative;box-shadow:0 0 0 1.5px #d1d5db;-webkit-tap-highlight-color:transparent;flex-shrink:0}
 .hc-dot.active{opacity:.3;box-shadow:0 0 0 2px #0f0d0a}
 .hc-dot.active::after{content:'✕';position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#0f0d0a}
+.state-filter-row{display:flex;align-items:center;gap:7px;padding:6px 14px 2px}
+.state-filter-row select{padding:5px 8px;border:1px solid #d1d5db;border-radius:7px;font-size:12px;background:#fff;color:#0f0d0a}
 .assign-sel{flex:1;padding:7px 10px;border:1.5px solid #d1d5db;border-radius:7px;font-size:13px;background:#fff;color:#0f0d0a}
 .assigned-badge{font-size:11px;color:#96751A;background:#faf3e0;border-radius:6px;padding:3px 8px;display:inline-block}
 .va-notes-block summary{
@@ -913,6 +915,10 @@ body.view-mail header .callerid{display:none}
     <button type="button" class="hc-dot" data-hc="blue" style="--hc:#3b82f6" title="Hide blue"></button>
     <button type="button" class="hc-dot" data-hc="purple" style="--hc:#8b5cf6" title="Hide purple"></button>
   </div>
+  <div class="state-filter-row" id="stateFilterRow">
+    <span class="hide-color-lbl">State:</span>
+    <select id="stateFilterSel"></select>
+  </div>
   <div id="powerDialBar" class="hide">
     <div class="pd-session">
       <div class="pd-left">
@@ -963,6 +969,12 @@ body.view-mail header .callerid{display:none}
         <option value="wrong">❌ Wrong Number</option>
       </select>
       <div style="font-size:11px;color:#6b7280;margin-top:4px">Picking a stage calls leads already tagged with that status, regardless of "called" state.</div>
+    </div>
+
+    <div class="pd-setup-field">
+      <label>Filter by state</label>
+      <select id="pdStateFilter"></select>
+      <div style="font-size:11px;color:#6b7280;margin-top:4px">Synced with the state filter on the main list.</div>
     </div>
 
     <div class="pd-setup-field">
@@ -1362,7 +1374,7 @@ const LS = {
   forward:'cb_forward', active:'cb_active',
   profileId:'cb_profile_id', profileName:'cb_profile_name',
   hideOthers:'cb_hide_others', hiddenColors:'cb_hidden_colors',
-  vmMessage:'cb_vm_message',
+  vmMessage:'cb_vm_message', stateFilter:'cb_state_filter',
 };
 const DEFAULT_VM_MESSAGE = "Hi, this is Win-Win Property Solutions. We're interested in your property and would love to chat. Please give us a call back at your convenience. Thanks, and have a great day.";
 let backend  = localStorage.getItem(LS.backend) || '/api';
@@ -1510,6 +1522,30 @@ const HL_COLORS = {
 };
 let hiddenColors = new Set(JSON.parse(localStorage.getItem(LS.hiddenColors) || '[]'));
 
+// ── State filter (parsed from the free-text property address) ───
+const US_STATES = [
+  ['AL','Alabama'],['AK','Alaska'],['AZ','Arizona'],['AR','Arkansas'],['CA','California'],
+  ['CO','Colorado'],['CT','Connecticut'],['DE','Delaware'],['DC','Washington DC'],['FL','Florida'],
+  ['GA','Georgia'],['HI','Hawaii'],['ID','Idaho'],['IL','Illinois'],['IN','Indiana'],
+  ['IA','Iowa'],['KS','Kansas'],['KY','Kentucky'],['LA','Louisiana'],['ME','Maine'],
+  ['MD','Maryland'],['MA','Massachusetts'],['MI','Michigan'],['MN','Minnesota'],['MS','Mississippi'],
+  ['MO','Missouri'],['MT','Montana'],['NE','Nebraska'],['NV','Nevada'],['NH','New Hampshire'],
+  ['NJ','New Jersey'],['NM','New Mexico'],['NY','New York'],['NC','North Carolina'],['ND','North Dakota'],
+  ['OH','Ohio'],['OK','Oklahoma'],['OR','Oregon'],['PA','Pennsylvania'],['RI','Rhode Island'],
+  ['SC','South Carolina'],['SD','South Dakota'],['TN','Tennessee'],['TX','Texas'],['UT','Utah'],
+  ['VT','Vermont'],['VA','Virginia'],['WA','Washington'],['WV','West Virginia'],['WI','Wisconsin'],
+  ['WY','Wyoming'],
+];
+const US_STATE_CODES = new Set(US_STATES.map(s => s[0]));
+function extractState(address){
+  if(!address) return '';
+  // Matches ", OK 74107", ", OK, 74107", or a trailing ", OK" with no zip
+  const m = String(address).match(/,\s*([A-Za-z]{2})\b(?!\w)(?:[\s,-]*\d{5})?\s*$/);
+  const code = m ? m[1].toUpperCase() : '';
+  return US_STATE_CODES.has(code) ? code : '';
+}
+let stateFilter = localStorage.getItem(LS.stateFilter) || '';
+
 function getFilteredProperties(){
   let list = properties;
   if(searchQuery.trim()){
@@ -1533,6 +1569,9 @@ function getFilteredProperties(){
   }
   if(hiddenColors.size){
     list = list.filter(p => !hiddenColors.has((p.lead||{}).highlight || ''));
+  }
+  if(stateFilter){
+    list = list.filter(p => extractState(p.property_address) === stateFilter);
   }
   return list;
 }
@@ -1911,6 +1950,27 @@ $('hideColorRow')?.addEventListener('click', e => {
   renderPage();
 });
 
+// ── State filter (shared by main list + power dialer) ───────────
+function populateStateSelect(sel, includeAllLabel){
+  if(!sel) return;
+  sel.innerHTML = `<option value="">${includeAllLabel}</option>` +
+    US_STATES.map(([code,name]) => `<option value="${code}">${name}</option>`).join('');
+  sel.value = stateFilter;
+}
+function setStateFilter(code){
+  stateFilter = code || '';
+  localStorage.setItem(LS.stateFilter, stateFilter);
+  if($('stateFilterSel')) $('stateFilterSel').value = stateFilter;
+  if($('pdStateFilter')) $('pdStateFilter').value = stateFilter;
+  page = 1;
+  renderPage();
+  if(!$('pdSetupScreen').classList.contains('hide')) pdUpdateCount();
+}
+populateStateSelect($('stateFilterSel'), 'All states');
+populateStateSelect($('pdStateFilter'), 'All states');
+$('stateFilterSel')?.addEventListener('change', e => setStateFilter(e.target.value));
+$('pdStateFilter')?.addEventListener('change', e => setStateFilter(e.target.value));
+
 // ── Power Dialer ─────────────────────────────────────────────────
 let pdActive    = false;
 let pdIndex     = 0;
@@ -1949,6 +2009,9 @@ $('pdStartBtn').addEventListener('click', () => {
 
   // Pre-fill agent phone from settings
   $('pdAgentPhone').value = forwardPhone || '';
+
+  // Sync state filter with main list
+  if($('pdStateFilter')) $('pdStateFilter').value = stateFilter;
 
   // Update count
   pdUpdateCount();
