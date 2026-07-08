@@ -951,6 +951,21 @@ body.view-mail header .callerid{display:none}
     </div>
 
     <div class="pd-setup-field">
+      <label>Filter by stage</label>
+      <select id="pdStageFilter">
+        <option value="">All uncalled leads (default)</option>
+        <option value="hot">🔥 Hot Lead</option>
+        <option value="warm">☀️ Warm Lead</option>
+        <option value="callback">📞 Call Back</option>
+        <option value="voicemail">📱 Left Voicemail</option>
+        <option value="noanswer">🔕 No Answer</option>
+        <option value="notinterested">👎 Not Interested</option>
+        <option value="wrong">❌ Wrong Number</option>
+      </select>
+      <div style="font-size:11px;color:#6b7280;margin-top:4px">Picking a stage calls leads already tagged with that status, regardless of "called" state.</div>
+    </div>
+
+    <div class="pd-setup-field">
       <label>Who is dialing</label>
       <select id="pdProfileSel"></select>
     </div>
@@ -1900,11 +1915,17 @@ $('hideColorRow')?.addEventListener('click', e => {
 let pdActive    = false;
 let pdIndex     = 0;
 let pdColorFilter = '';
+let pdStageFilter = '';
 let pdActiveSid = null;
 let pdPollTimer = null;
 
 function pdGetList(){
-  let list = getFilteredProperties().filter(p => !(p.lead||{}).called);
+  let list = getFilteredProperties();
+  if(pdStageFilter){
+    list = list.filter(p => (p.lead||{}).lead_status === pdStageFilter);
+  } else {
+    list = list.filter(p => !(p.lead||{}).called);
+  }
   if(pdColorFilter) list = list.filter(p => (p.lead||{}).highlight === pdColorFilter);
   return list;
 }
@@ -1935,11 +1956,13 @@ $('pdStartBtn').addEventListener('click', () => {
 
 function pdUpdateCount(){
   pdColorFilter = $('pdColorFilter')?.value || '';
+  pdStageFilter = $('pdStageFilter')?.value || '';
   const list = pdGetList();
   $('pdSetupCount').textContent = `${list.length} lead${list.length===1?'':'s'} will be dialed`;
 }
 
 $('pdColorFilter')?.addEventListener('change', pdUpdateCount);
+$('pdStageFilter')?.addEventListener('change', pdUpdateCount);
 
 $('pdSetupCancel').addEventListener('click', () => {
   $('pdSetupScreen').classList.add('hide');
@@ -1954,6 +1977,7 @@ $('pdSetupStart').addEventListener('click', async () => {
   if(!callerId){ toast('Select a caller ID number','err'); return; }
 
   pdColorFilter = $('pdColorFilter').value;
+  pdStageFilter = $('pdStageFilter')?.value || '';
   const list = pdGetList();
   if(!list.length){ toast('No leads match your selection','err'); return; }
 
