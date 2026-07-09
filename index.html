@@ -521,6 +521,10 @@ body.view-pipeline header .callerid{display:none}
 .state-filter-row{display:flex;align-items:center;gap:7px;padding:6px 14px 2px}
 .state-filter-row select{padding:5px 8px;border:1px solid #d1d5db;border-radius:7px;font-size:12px;background:#fff;color:#0f0d0a}
 .assign-sel{flex:1;padding:7px 10px;border:1.5px solid #d1d5db;border-radius:7px;font-size:13px;background:#fff;color:#0f0d0a}
+.postcard-row{display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap}
+.postcard-btn{background:#fff;color:#96751A;border:1.5px solid #96751A;border-radius:7px;padding:6px 11px;font-size:12px;font-weight:700;cursor:pointer}
+.postcard-btn:disabled{opacity:.5;cursor:not-allowed}
+.postcard-sent{font-size:11px;color:#047857;font-weight:600}
 .assigned-badge{font-size:11px;color:#96751A;background:#faf3e0;border-radius:6px;padding:3px 8px;display:inline-block}
 .va-notes-block summary{
   cursor:pointer;font-size:12px;color:#374151;font-weight:600;user-select:none;
@@ -1143,6 +1147,38 @@ body.view-mail header .callerid{display:none}
         <input type="text" id="manualDialLabel" placeholder="e.g. Title company, lender, etc.">
       </div>
       <button class="btn-primary" id="manualDialGo" style="width:100%;margin-top:8px">📞 Call</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="postcardModal">
+  <div class="modal-box">
+    <div class="modal-head">
+      <h3>📬 Send Postcard</h3>
+      <button class="modal-close" data-close="postcardModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="field">
+        <label>Sending to</label>
+        <div id="postcardRecipient" style="font-size:13px;color:#0f0d0a;font-weight:600"></div>
+        <div id="postcardAddress" style="font-size:12px;color:#6b7280;margin-top:2px"></div>
+      </div>
+      <div class="field">
+        <label>Message tone</label>
+        <select id="postcardTone">
+          <option value="warm">Warm & personal</option>
+          <option value="friendly">Friendly & direct</option>
+          <option value="folksy">Down-to-earth</option>
+          <option value="pro">Professional & confident</option>
+          <option value="custom">Custom…</option>
+        </select>
+      </div>
+      <div class="field hide" id="postcardCustomWrap">
+        <label>Custom message</label>
+        <textarea id="postcardCustomMsg" rows="3" placeholder="Write your own message…"></textarea>
+      </div>
+      <div style="font-size:11px;color:#6b7280;margin:2px 0 8px">Mailed via standard/marketing class — typically 5–14 days to arrive.</div>
+      <button class="btn-primary" id="postcardSendBtn" style="width:100%">📬 Send Postcard</button>
     </div>
   </div>
 </div>
@@ -1875,6 +1911,10 @@ function renderPage(){
           </div>
         </div>
         <div class="phones">${phoneHtml || '<div class="muted" style="font-size:12px">No phone numbers</div>'}</div>
+        <div class="postcard-row">
+          <button class="postcard-btn" data-sendpostcard="${escapeHtml(p.id)}">📬 Send Postcard</button>
+          ${p.postcard_sent_at ? `<span class="postcard-sent">✅ Sent ${new Date(p.postcard_sent_at).toLocaleDateString()}</span>` : ''}
+        </div>
         <div class="lead-tools">
             <div class="lead-tools-row">
               <span class="lead-tools-label">👤 Assign to</span>
@@ -4552,6 +4592,54 @@ document.addEventListener('change', async e => {
   } catch(err) {
     filenameEl.textContent = 'Upload failed: ' + err.message;
     toast('Upload failed: '+err.message,'err');
+  }
+});
+
+// ── Postcard drop ─────────────────────────────────────────────
+const POSTCARD_TONES = {
+  warm:    "Hi {FirstName}, really enjoyed our call! Wanted to follow up — whenever you're ready to talk numbers, I'd love to work out a deal that makes sense for you. No rush, just give me a shout.",
+  friendly:"{FirstName}, great talking with you the other day. When you're ready to move forward, I'm ready too — let's find a number that works for both of us. Call me anytime.",
+  folksy:  "Hey {FirstName}, enjoyed catching up on the phone! Whenever the time feels right on your end, let's sit down and get you a fair deal. I'll be here.",
+  pro:     "{FirstName}, it was a pleasure speaking with you. I'm confident we can put together an offer that works well for you — whenever you're ready to move forward, just reach out.",
+};
+let postcardPid = null;
+document.addEventListener('click', e => {
+  const btn = e.target.closest('[data-sendpostcard]');
+  if(!btn) return;
+  postcardPid = btn.dataset.sendpostcard;
+  const p = properties.find(x => x.id === postcardPid);
+  if(!p) return;
+  $('postcardRecipient').textContent = p.owners || '(no owner name on file)';
+  $('postcardAddress').textContent = p.mailing_address || p.property_address || 'No mailing address on file';
+  $('postcardTone').value = 'warm';
+  $('postcardCustomWrap').classList.add('hide');
+  $('postcardCustomMsg').value = '';
+  const sendBtn = $('postcardSendBtn');
+  sendBtn.disabled = !(p.mailing_address || p.property_address);
+  sendBtn.textContent = '📬 Send Postcard';
+  openModal('postcardModal');
+});
+$('postcardTone').addEventListener('change', e => {
+  $('postcardCustomWrap').classList.toggle('hide', e.target.value !== 'custom');
+});
+$('postcardSendBtn').addEventListener('click', async () => {
+  if(!postcardPid) return;
+  const tone = $('postcardTone').value;
+  const message = tone === 'custom' ? $('postcardCustomMsg').value.trim() : POSTCARD_TONES[tone];
+  if(!message){ toast('Write a message first','err'); return; }
+  const btn = $('postcardSendBtn');
+  btn.disabled = true; btn.textContent = 'Sending…';
+  try {
+    const r = await api('send-postcard', {method:'POST', body:{propertyId: postcardPid, message}});
+    toast(r.mode === 'test' ? 'Postcard sent (test mode — nothing mailed)' : 'Postcard sent!', 'ok');
+    const p = properties.find(x => x.id === postcardPid);
+    if(p) p.postcard_sent_at = new Date().toISOString();
+    $('postcardModal').classList.remove('open');
+    renderPage();
+  } catch(err){
+    toast('Postcard failed: '+err.message,'err');
+  } finally {
+    btn.disabled = false; btn.textContent = '📬 Send Postcard';
   }
 });
 
