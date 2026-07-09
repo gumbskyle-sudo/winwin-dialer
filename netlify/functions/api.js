@@ -1,3 +1,4 @@
+
 /* Real Estate Dialer — single backend
  * ─────────────────────────────────────
  * Required env vars (Netlify → Site → Environment variables):
@@ -62,6 +63,62 @@ async function tw(path, method = 'GET', formObj) {
   }
   return json;
 }
+// ── PostGrid (postcards) ─────────────────────────────────────────
+function postgridMode() {
+  return (process.env.POSTGRID_MODE || 'test').toLowerCase() === 'live' ? 'live' : 'test';
+}
+function postgridApiKey() {
+  return postgridMode() === 'live'
+    ? process.env.POSTGRID_LIVE_API_KEY
+    : process.env.POSTGRID_TEST_API_KEY;
+}
+async function postgrid(path, params) {
+  const key = postgridApiKey();
+  if (!key) throw new Error('PostGrid API key not configured');
+  const body = new URLSearchParams();
+  const flatten = (obj, prefix) => {
+    for (const [k, v] of Object.entries(obj || {})) {
+      if (v === null || v === undefined || v === '') continue;
+      const paramKey = prefix ? `${prefix}[${k}]` : k;
+      if (typeof v === 'object' && !Array.isArray(v)) flatten(v, paramKey);
+      else body.append(paramKey, v);
+    }
+  };
+  flatten(params, '');
+  const res = await fetch(`https://api.postgrid.com${path}`, {
+    method: 'POST',
+    headers: { 'x-api-key': key, 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: body.toString(),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const msg = (json && json.error && json.error.message) || `PostGrid error ${res.status}`;
+    throw new Error(msg);
+  }
+  return json;
+}
+// Parses "123 Main St, Tulsa, OK 74107" style free-text addresses into
+// the structured fields PostGrid's `to`/`from` objects expect.
+function parseMailingAddress(raw) {
+  const out = { addressLine1: '', city: '', provinceOrState: '', postalOrZip: '', countryCode: 'US' };
+  const parts = String(raw || '').split(',').map(s => s.trim()).filter(Boolean);
+  if (parts.length >= 3) {
+    out.addressLine1 = parts[0];
+    out.city = parts[1];
+    const stateZip = parts.slice(2).join(' ').trim();
+    const m = stateZip.match(/^([A-Za-z]{2})\s*([0-9]{5})?/);
+    if (m) { out.provinceOrState = m[1].toUpperCase(); if (m[2]) out.postalOrZip = m[2]; }
+  } else if (parts.length === 2) {
+    out.addressLine1 = parts[0];
+    const m = parts[1].match(/^([A-Za-z]{2})\s*([0-9]{5})?/);
+    if (m) { out.provinceOrState = m[1].toUpperCase(); if (m[2]) out.postalOrZip = m[2]; }
+    else out.city = parts[1];
+  } else if (parts.length === 1) {
+    out.addressLine1 = parts[0];
+  }
+  return out;
+}
+
 function escapeXml(s) {
   return String(s).replace(/[<>&"']/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&apos;'}[c]));
 }
@@ -756,7 +813,7 @@ exports.handler = async (event) => {
       case 'list-properties': {
         // Supabase default limit is 1000; raise it for larger lists.
         const LIMIT = 50000;
-        const { json: props }  = await supa(`/properties?select=id,owners,owner_last_name,property_address,mailing_address,email,imported_at&order=imported_at.asc,id.asc&limit=${LIMIT}`);
+        const { json: props }  = await supa(`/properties?select=id,owners,owner_last_name,property_address,mailing_address,email,imported_at,postcard_sent_at,postcard_id&order=imported_at.asc,id.asc&limit=${LIMIT}`);
         const { json: phones } = await supa(`/phones?select=property_id,e164,display,type&order=property_id.asc,id.asc&limit=${LIMIT}`);
         const { json: leads }  = await supa(`/leads?select=property_id,called,lead_status,notes,va_notes,recording_url,highlight,assigned_to,sms_consent,sms_cell&limit=${LIMIT}`);
         const phonesBy = {};
@@ -1197,6 +1254,69 @@ exports.handler = async (event) => {
         const dropTwiml = `<?xml version="1.0" encoding="UTF-8"?><Response>${inner}<Hangup/></Response>`;
         await tw(`/Accounts/${twilioSid()}/Calls/${encodeURIComponent(childCall.sid)}.json`, 'POST', { Twiml: dropTwiml });
         return ok({ dropped: true, usedRecording: !!playUrl });
+      }
+
+      // ════════════════════════════════════════════════════════
+      // POSTCARDS — PostGrid
+      // ════════════════════════════════════════════════════════
+      case 'send-postcard': {
+        if (!body.propertyId) return err('propertyId required');
+        if (!postgridApiKey()) return err(`PostGrid ${postgridMode()} API key not configured on the server`);
+        const templateId = process.env.POSTGRID_TEMPLATE_ID;
+        if (!templateId) return err('POSTGRID_TEMPLATE_ID not configured on the server');
+
+        const { json: props } = await supa(`/properties?id=eq.${encodeURIComponent(body.propertyId)}&select=id,owners,owner_last_name,property_address,mailing_address`);
+        const prop = Array.isArray(props) && props[0];
+        if (!prop) return err('Lead not found');
+
+        const rawAddress = prop.mailing_address || prop.property_address;
+        if (!rawAddress) return err('No mailing address on file for this lead');
+        const addr = parseMailingAddress(rawAddress);
+        if (!addr.addressLine1 || !addr.provinceOrState) {
+          return err('Could not parse a complete mailing address (need street + state) for this lead');
+        }
+
+        const first = firstName(prop.owners);
+        const firstClean = first === 'there' ? '' : first;
+        const message = String(body.message || '').replace(/\{FirstName\}/gi, firstClean || 'there');
+
+        let result;
+        try {
+          result = await postgrid('/print-mail/v1/postcards', {
+            to: {
+              firstName: firstClean,
+              lastName: prop.owner_last_name || '',
+              addressLine1: addr.addressLine1,
+              city: addr.city,
+              provinceOrState: addr.provinceOrState,
+              postalOrZip: addr.postalOrZip,
+              countryCode: 'US',
+            },
+            from: {
+              companyName: 'Win Win Property Solutions NY',
+              addressLine1: '92 Virginia Ave',
+              city: 'Freeport',
+              provinceOrState: 'NY',
+              postalOrZip: '11520',
+              countryCode: 'US',
+            },
+            size: '6x4',
+            template: templateId,
+            mailingClass: 'standard_class',
+            mergeVariables: { message, first_name: firstClean },
+          });
+        } catch (e) {
+          return err('PostGrid: ' + e.message);
+        }
+
+        try {
+          await supa(`/properties?id=eq.${encodeURIComponent(body.propertyId)}`, 'PATCH', {
+            postcard_sent_at: new Date().toISOString(),
+            postcard_id: result.id || null,
+          });
+        } catch (e) { console.warn('postcard tracking update failed', e.message); }
+
+        return ok({ sent: true, id: result.id, status: result.status, mode: postgridMode() });
       }
 
       // List calls in window (for KPIs/log). Pulls from DB; refreshes any non-final from Twilio first.
