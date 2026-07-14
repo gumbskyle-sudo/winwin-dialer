@@ -1288,7 +1288,7 @@ body.view-mail header .callerid{display:none}
       <div class="field">
         <label>Your phone (Twilio rings YOU first when you place a call)</label>
         <input type="text" id="settingsForwardPhone" placeholder="+15085551234 or 5085551234">
-        <div style="font-size:11px;color:#6b7280;margin-top:4px">Each device on the team should set their own number here. Saved on this device only.</div>
+        <div style="font-size:11px;color:#6b7280;margin-top:4px">This is the number Twilio bridges to on THIS device. Saved locally — it only updates a teammate's stored callback number if you confirm the prompt, so logging into someone else's profile on a borrowed phone won't silently overwrite their number.</div>
       </div>
       <div class="field">
         <label>Backend URL</label>
@@ -2853,11 +2853,23 @@ $('settingsSave').addEventListener('click', async () => {
   refreshCallerStrip();
   $('settingsModal').classList.remove('open');
   toast('Saved','ok');
-  // Also save this number on the active profile so inbound seller
-  // callbacks can be routed back to the right person automatically.
+  // Only touch the active profile's callback number if this device's
+  // cached number actually differs from what's on file — and always
+  // ask first. Prevents someone on a borrowed/shared phone from
+  // silently overwriting a teammate's real callback number.
   if(activeProfileId && forwardPhone){
     try {
-      await api('update-profile-phone', {method:'POST', body:{ profileId: activeProfileId, phone: forwardPhone }});
+      const { json } = await api('list-profiles');
+      const prof = (json.profiles || []).find(p => p.id === activeProfileId);
+      if(prof && prof.phone !== forwardPhone){
+        const ok = confirm(
+          `This device's number (${forwardPhone}) doesn't match what's on file for ${activeProfileName || 'this profile'} (${prof.phone || 'none set'}).\n\nUpdate ${activeProfileName || 'this profile'}'s callback number to ${forwardPhone}?`
+        );
+        if(ok){
+          await api('update-profile-phone', {method:'POST', body:{ profileId: activeProfileId, phone: forwardPhone }});
+          toast('Callback number updated for '+(activeProfileName||'profile'),'ok');
+        }
+      }
     } catch(e){ /* non-fatal — outbound calling still works either way */ }
   }
 });
