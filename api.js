@@ -10,6 +10,13 @@
  *
  * Fallback if you don't make a Twilio API key:
  *   TWILIO_AUTH_TOKEN
+ *
+ * E-SIGN (built-in, optional env vars):
+ *   ESIGN_COMPANY_NAME   shown on contracts (default: Win Win Property Solutions NY)
+ *   ESIGN_COMPANY_SIGNER typed company signature on contracts (default: company name)
+ *   ESIGN_NOTIFY_EMAIL   email to ping when a doc is signed (default: SPACEMAIL_USER)
+ *   ESIGN_NOTIFY_PHONE   E.164 cell to text when a doc is signed (optional)
+ * Requires "pdf-lib" in package.json dependencies.
  */
 
 const TWILIO_BASE = 'https://api.twilio.com/2010-04-01';
@@ -62,8 +69,113 @@ async function tw(path, method = 'GET', formObj) {
   }
   return json;
 }
+// ── PostGrid (postcards) ─────────────────────────────────────────
+function postgridMode() {
+  return (process.env.POSTGRID_MODE || 'test').toLowerCase() === 'live' ? 'live' : 'test';
+}
+function postgridApiKey() {
+  return postgridMode() === 'live'
+    ? process.env.POSTGRID_LIVE_API_KEY
+    : process.env.POSTGRID_TEST_API_KEY;
+}
+async function postgrid(path, params) {
+  const key = postgridApiKey();
+  if (!key) throw new Error('PostGrid API key not configured');
+  const body = new URLSearchParams();
+  const flatten = (obj, prefix) => {
+    for (const [k, v] of Object.entries(obj || {})) {
+      if (v === null || v === undefined || v === '') continue;
+      const paramKey = prefix ? `${prefix}[${k}]` : k;
+      if (typeof v === 'object' && !Array.isArray(v)) flatten(v, paramKey);
+      else body.append(paramKey, v);
+    }
+  };
+  flatten(params, '');
+  const res = await fetch(`https://api.postgrid.com${path}`, {
+    method: 'POST',
+    headers: { 'x-api-key': key, 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: body.toString(),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const msg = (json && json.error && json.error.message) || `PostGrid error ${res.status}`;
+    throw new Error(msg);
+  }
+  return json;
+}
+// Parses "123 Main St, Tulsa, OK 74107" style free-text addresses into
+// the structured fields PostGrid's `to`/`from` objects expect.
+function parseMailingAddress(raw) {
+  const out = { addressLine1: '', city: '', provinceOrState: '', postalOrZip: '', countryCode: 'US' };
+  const parts = String(raw || '').split(',').map(s => s.trim()).filter(Boolean);
+  if (parts.length >= 3) {
+    out.addressLine1 = parts[0];
+    out.city = parts[1];
+    const stateZip = parts.slice(2).join(' ').trim();
+    const m = stateZip.match(/^([A-Za-z]{2})\s*([0-9]{5})?/);
+    if (m) { out.provinceOrState = m[1].toUpperCase(); if (m[2]) out.postalOrZip = m[2]; }
+  } else if (parts.length === 2) {
+    out.addressLine1 = parts[0];
+    const m = parts[1].match(/^([A-Za-z]{2})\s*([0-9]{5})?/);
+    if (m) { out.provinceOrState = m[1].toUpperCase(); if (m[2]) out.postalOrZip = m[2]; }
+    else out.city = parts[1];
+  } else if (parts.length === 1) {
+    out.addressLine1 = parts[0];
+  }
+  return out;
+}
+
 function escapeXml(s) {
   return String(s).replace(/[<>&"']/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&apos;'}[c]));
+}
+
+// ── Voicemail drop recording — auth-embedded playback URL ──────
+// Twilio recording media requires HTTP Basic Auth by default. Rather
+// than store a secret at rest, we rebuild this URL on demand from
+// env credentials + the stored (non-secret) RecordingSid.
+function recordingPlaybackUrl(recordingSid) {
+  let user, pass;
+  if (process.env.TWILIO_API_KEY_SID && process.env.TWILIO_API_KEY_SECRET) {
+    user = process.env.TWILIO_API_KEY_SID;
+    pass = process.env.TWILIO_API_KEY_SECRET;
+  } else {
+    user = process.env.TWILIO_ACCOUNT_SID;
+    pass = process.env.TWILIO_AUTH_TOKEN;
+  }
+  return `https://${encodeURIComponent(user)}:${encodeURIComponent(pass)}@api.twilio.com/2010-04-01/Accounts/${twilioSid()}/Recordings/${recordingSid}.mp3`;
+}
+
+// TwiML played when we call a rep's own phone to record their VM drop message
+function handleRecordVmTwiml(event) {
+  const qs = event.queryStringParameters || {};
+  const baseUrl = 'https://winwincalltoclose.netlify.app/api';
+  const profileId = qs.profileId || '';
+  const statusCb = `${baseUrl}?action=record-vm-status&profileId=${encodeURIComponent(profileId)}`;
+  const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response>
+    <Say voice="alice">Record your voicemail drop message after the tone. Press pound when you're finished.</Say>
+    <Record maxLength="120" playBeep="true" finishOnKey="#" trim="trim-silence" recordingStatusCallback="${escapeXml(statusCb)}" recordingStatusCallbackEvent="completed" />
+    <Say voice="alice">Got it. That message is saved. Goodbye.</Say>
+  </Response>`;
+  return { statusCode: 200, headers: { 'Content-Type': 'text/xml' }, body: twiml };
+}
+
+// Twilio POSTs here once the recording above is finalized
+async function handleRecordVmStatus(event) {
+  try {
+    const params = parseFormEncoded(event.body || '');
+    const qs = event.queryStringParameters || {};
+    const profileId = qs.profileId || '';
+    const recordingSid = params.RecordingSid || '';
+    const duration = parseInt(params.RecordingDuration || '0', 10) || 0;
+    if (profileId && recordingSid) {
+      await supa(`/profiles?id=eq.${encodeURIComponent(profileId)}`, 'PATCH', {
+        vm_recording_sid: recordingSid,
+        vm_recording_duration: duration,
+        vm_recorded_at: new Date().toISOString(),
+      });
+    }
+  } catch (e) { console.warn('record-vm-status failed', e.message); }
+  return { statusCode: 200, headers: { 'Content-Type': 'text/xml' }, body: '<Response></Response>' };
 }
 
 // ── Supabase REST helpers (no SDK — keeps function tiny) ──────
@@ -339,55 +451,89 @@ const TEAM_FORWARD_NUMBERS = {
   // name -> E.164 cell number (kept here as a simple, no-DB-required map;
   // profiles.phone in Supabase is the source of truth when present —
   // this is just the fallback / seed list)
-  Kyle: '+15162734255',
-  Paul: '+15162707064',
-  Mark: '+12022130776',
+  Kyle:   '+15162734255',
+  Paul:   '+15162707064',
+  Mark:   '+12022130776',
+  Khalid: '+15165956250',
 };
 
 async function handleTwilioVoiceInbound(event) {
+  // Top-level guard: any unhandled error returns valid TwiML so Twilio
+  // never plays its generic "callback error" message.
+  try {
+    return await _handleTwilioVoiceInboundInner(event);
+  } catch (e) {
+    console.error('handleTwilioVoiceInbound error:', e.message);
+    const twiml = '<?xml version="1.0" encoding="UTF-8"?><Response><Say voice="alice">Sorry, we are having a technical issue. Please try again in a moment.</Say></Response>';
+    return { statusCode: 200, headers: { 'Content-Type': 'text/xml' }, body: twiml };
+  }
+}
+
+async function _handleTwilioVoiceInboundInner(event) {
   const params = parseFormEncoded(event.body || '');
   if (process.env.TWILIO_AUTH_TOKEN) {
     if (!verifyTwilioSignature(event, params)) {
       return { statusCode: 403, body: 'invalid signature' };
     }
   }
-  const from = params.From || ''; // the seller's number calling in
-  const to   = params.To   || ''; // your Twilio number they called
 
-  let forwardTo = null;
+  const qs   = event.queryStringParameters || {};
+  const from = params.From || '';
+  const to   = params.To   || '';
 
-  try {
-    // Find the most recent outbound call we placed TO this caller's number.
-    const { json: calls } = await supa(
-      `/calls?to_number=eq.${encodeURIComponent(from)}&select=profile_id,from_number,started_at&order=started_at.desc&limit=1`
-    );
-    const lastCall = Array.isArray(calls) && calls[0];
-    if (lastCall && lastCall.profile_id) {
-      const { json: profiles } = await supa(`/profiles?id=eq.${encodeURIComponent(lastCall.profile_id)}&select=name,phone`);
-      const profile = Array.isArray(profiles) && profiles[0];
-      if (profile && profile.phone) {
-        forwardTo = profile.phone;
-      } else if (profile && profile.name && TEAM_FORWARD_NUMBERS[profile.name]) {
-        forwardTo = TEAM_FORWARD_NUMBERS[profile.name];
-      }
-    }
-  } catch (e) { /* fall through to default below */ }
-
-  if (!forwardTo) {
-    // No match found — use the configured default forwarding number.
-    forwardTo = await getAppConfig('default_voice_forward_number');
-  }
-
-  if (!forwardTo) {
-    // Nothing configured at all — let the caller know rather than hanging up silently.
-    const twiml = '<?xml version="1.0" encoding="UTF-8"?><Response><Say>Thanks for calling. No one is available to take your call right now. Please leave a message after the tone.</Say><Record maxLength="120" /></Response>';
+  // ── Whisper endpoint — played ONLY to the team member answering ──
+  // The seller never hears this. No keypress needed — connects instantly.
+  if (qs.whisper === '1') {
+    const name = decodeURIComponent(qs.name || 'a seller');
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Say voice="alice">Call from ${name}</Say></Response>`;
     return { statusCode: 200, headers: { 'Content-Type': 'text/xml' }, body: twiml };
   }
 
-  const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Dial callerId="${escapeXml(to)}" timeout="25" answerOnBridge="true"><Number>${escapeXml(forwardTo)}</Number></Dial></Response>`;
+  let forwardTo  = null;
+  let sellerName = null;
+
+  try {
+    const { json: calls } = await supa(
+      `/calls?to_number=eq.${encodeURIComponent(from)}&select=profile_id,property_id,started_at&order=started_at.desc&limit=1`
+    );
+    const lastCall = Array.isArray(calls) && calls[0];
+
+    if (lastCall) {
+      if (lastCall.profile_id) {
+        const { json: profiles } = await supa(`/profiles?id=eq.${encodeURIComponent(lastCall.profile_id)}&select=name,phone`);
+        const profile = Array.isArray(profiles) && profiles[0];
+        if (profile) {
+          if (profile.phone) {
+            forwardTo = profile.phone;
+          } else if (TEAM_FORWARD_NUMBERS[profile.name]) {
+            forwardTo = TEAM_FORWARD_NUMBERS[profile.name];
+          }
+        }
+      }
+      if (lastCall.property_id) {
+        const { json: props } = await supa(`/properties?id=eq.${encodeURIComponent(lastCall.property_id)}&select=owners`);
+        const prop = Array.isArray(props) && props[0];
+        if (prop && prop.owners) sellerName = prop.owners.trim();
+      }
+    }
+  } catch (e) { /* fall through */ }
+
+  if (!forwardTo) forwardTo = await getAppConfig('default_voice_forward_number');
+  // Final hardcoded fallback — forwards to Kyle if nothing else resolves
+  if (!forwardTo) forwardTo = '+15162734255';
+
+  if (!forwardTo) {
+    const twiml = '<?xml version="1.0" encoding="UTF-8"?><Response><Say voice="alice">Thanks for calling. No one is available right now. Please leave a message after the tone.</Say><Record maxLength="120" /></Response>';
+    return { statusCode: 200, headers: { 'Content-Type': 'text/xml' }, body: twiml };
+  }
+
+  // Whisper URL — played only in the team member's ear after they answer
+  const baseUrl    = 'https://winwincalltoclose.netlify.app/api';
+  // Simple seamless connect — no whisper URL (was causing XML parse error 12100)
+  const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Say voice="alice">Connecting</Say><Dial callerId="${escapeXml(to)}" timeout="30" answerOnBridge="true"><Number>${escapeXml(forwardTo)}</Number></Dial></Response>`;
+
   return { statusCode: 200, headers: { 'Content-Type': 'text/xml' }, body: twiml };
 }
-
 // ── Twilio status callback (delivery status updates) ────────
 async function handleTwilioStatus(event) {
   const params = parseFormEncoded(event.body || '');
@@ -503,6 +649,53 @@ async function sendEmail({ to, subject, html, text, replyTo }) {
 }
 
 // ════════════════════════════════════════════════════════════════
+// SPACEMAIL (branded email — SMTP send + IMAP inbox)
+// Credentials come ONLY from Netlify env vars, never hardcoded:
+//   SPACEMAIL_USER = kyleg@winwinproperties.net
+//   SPACEMAIL_PASS = <mailbox password>   (or app password if 2FA on)
+//   SPACEMAIL_FROM_NAME (optional display name)
+// ════════════════════════════════════════════════════════════════
+
+function spacemailReady() {
+  return !!(process.env.SPACEMAIL_USER && process.env.SPACEMAIL_PASS);
+}
+function spacemailFrom() {
+  const name = process.env.SPACEMAIL_FROM_NAME || 'Win Win Property Solutions NY';
+  return `${name} <${process.env.SPACEMAIL_USER}>`;
+}
+async function sendViaSpacemail({ to, subject, html, text, replyTo, cc }) {
+  if (!spacemailReady()) return { error: 'SPACEMAIL_USER / SPACEMAIL_PASS not set in Netlify env vars' };
+  const nodemailer = require('nodemailer');
+  const transporter = nodemailer.createTransport({
+    host: 'mail.spacemail.com',
+    port: 465,
+    secure: true,
+    auth: { user: process.env.SPACEMAIL_USER, pass: process.env.SPACEMAIL_PASS },
+  });
+  const info = await transporter.sendMail({
+    from: spacemailFrom(),
+    to: Array.isArray(to) ? to.join(', ') : to,
+    cc: cc || undefined,
+    replyTo: replyTo || undefined,
+    subject: subject || '(no subject)',
+    text: text || (html ? html.replace(/<[^>]+>/g, ' ') : ''),
+    html: html || (text ? text.replace(/\n/g, '<br>') : ''),
+  });
+  return { ok: true, id: info.messageId };
+}
+
+function spacemailImapClient() {
+  const { ImapFlow } = require('imapflow');
+  return new ImapFlow({
+    host: 'mail.spacemail.com',
+    port: 993,
+    secure: true,
+    auth: { user: process.env.SPACEMAIL_USER, pass: process.env.SPACEMAIL_PASS },
+    logger: false,
+  });
+}
+
+// ════════════════════════════════════════════════════════════════
 // SUPABASE STORAGE (audio recordings)
 // ════════════════════════════════════════════════════════════════
 
@@ -572,6 +765,376 @@ async function cleanupExpiredRecordings() {
 }
 
 // ── Main handler ──────────────────────────────────────────────
+// ════════════════════════════════════════════════════════════════
+// WIN WIN E-SIGN — built-in e-signature engine (replaces SignWell)
+// Generates contract PDFs with pdf-lib, sends a secure signing link
+// by email/SMS, captures a drawn signature on sign.html, stamps the
+// PDF, appends a signature certificate page, and stores everything
+// in Supabase (esign_envelopes table + contracts/esign storage).
+// ════════════════════════════════════════════════════════════════
+
+function esignFmtMoney(v) {
+  if (v === undefined || v === null || v === '') return '____________';
+  const n = Number(String(v).replace(/[^0-9.]/g, ''));
+  if (!isFinite(n) || n === 0) return String(v);
+  return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function esignFmtDate(v) {
+  if (!v) return '____________';
+  const d = new Date(v + (String(v).length === 10 ? 'T12:00:00' : ''));
+  if (isNaN(d)) return String(v);
+  return d.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+}
+function esignStateFrom(fields) {
+  if (fields.state) return String(fields.state).toUpperCase();
+  const m = String(fields.property_address || '').match(/,\s*([A-Za-z]{2})\s*\d{5}?/);
+  return m ? m[1].toUpperCase() : '____';
+}
+function esignCompanyName() {
+  return process.env.ESIGN_COMPANY_NAME || 'Win Win Property Solutions NY';
+}
+function esignCompanySigner() {
+  return process.env.ESIGN_COMPANY_SIGNER || esignCompanyName();
+}
+
+// ── Contract templates ──────────────────────────────────────────
+// Returns { title, paragraphs: [{h?, t}], signerLabel, companyLabel }
+// Single source of truth: the same text is rendered on sign.html
+// and laid out into the PDF, so what the seller reads is what gets
+// signed.
+function esignContractContent(docType, f) {
+  const company = esignCompanyName();
+  const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+  const state = esignStateFrom(f);
+
+  if (docType === 'assignment') {
+    const fee = esignFmtMoney(f.assignment_fee);
+    const deposit = f.deposit ? esignFmtMoney(f.deposit) : fee;
+    return {
+      title: 'ASSIGNMENT OF PURCHASE AND SALE AGREEMENT',
+      signerLabel: 'ASSIGNEE (Buyer)',
+      companyLabel: 'ASSIGNOR',
+      paragraphs: [
+        { t: `This Assignment of Purchase and Sale Agreement ("Assignment") is made on ${today} by and between ${company} ("Assignor") and ${f.signer_name || '____________'} ("Assignee").` },
+        { t: `Assignor is the buyer under a Purchase and Sale Agreement${f.original_contract_date ? ' dated ' + esignFmtDate(f.original_contract_date) : ''} (the "Contract") for the purchase of the real property located at ${f.property_address || '____________'} (the "Property").` },
+        { h: '1. Assignment.', t: `Assignor hereby assigns, transfers, and conveys to Assignee all of Assignor's rights, title, and interest in and to the Contract, in consideration of an assignment fee of ${fee} (the "Assignment Fee").` },
+        { h: '2. Deposit.', t: `Upon execution of this Assignment, Assignee shall deliver a non-refundable deposit of ${deposit}, which shall be credited toward the Assignment Fee. The balance of the Assignment Fee, if any, shall be paid at closing and reflected on the settlement statement.` },
+        { h: '3. Assumption.', t: `Assignee accepts the assignment and assumes and agrees to perform all obligations of the buyer under the Contract, including payment of the full purchase price and all closing costs required of the buyer, and shall close on or before the closing date set forth in the Contract.` },
+        { h: '4. Earnest Money.', t: `Any earnest money deposited by Assignor under the Contract shall be reimbursed to Assignor at closing or credited as agreed by the parties.` },
+        { h: '5. No Further Liability.', t: `Upon execution of this Assignment and receipt of the deposit, Assignor shall have no further obligation to perform under the Contract. If Assignee fails to close for any reason other than Seller's default or a title defect, the deposit and any portion of the Assignment Fee already paid shall be retained by Assignor.` },
+        { h: '6. Entire Agreement; Governing Law.', t: `This Assignment, together with the Contract, constitutes the entire agreement between the parties and shall be governed by the laws of the State of ${state}. This Assignment may be executed electronically, and electronic signatures shall be deemed originals for all purposes.` },
+      ],
+    };
+  }
+
+  // purchase_sale (default)
+  const price = esignFmtMoney(f.purchase_price);
+  const earnest = f.earnest_money ? esignFmtMoney(f.earnest_money) : '$100.00';
+  const closing = esignFmtDate(f.closing_date);
+  const inspectionDays = f.inspection_days || '14';
+  return {
+    title: 'PURCHASE AND SALE AGREEMENT',
+    signerLabel: 'SELLER',
+    companyLabel: 'BUYER',
+    paragraphs: [
+      { t: `This Purchase and Sale Agreement ("Agreement") is made on ${today} by and between ${f.signer_name || '____________'} ("Seller") and ${company} and/or assigns ("Buyer").` },
+      { h: '1. Property.', t: `Seller agrees to sell and Buyer agrees to buy the real property located at ${f.property_address || '____________'}, together with all improvements and fixtures (the "Property").` },
+      { h: '2. Purchase Price.', t: `The total purchase price shall be ${price}, payable in full at closing.` },
+      { h: '3. Earnest Money.', t: `Within three (3) business days after the Effective Date, Buyer shall deposit earnest money of ${earnest} with the closing agent, to be credited toward the purchase price at closing.` },
+      { h: '4. Closing.', t: `Closing shall occur on or before ${closing}, at a closing agent, title company, or attorney selected by Buyer. Buyer shall pay customary closing costs of Buyer; Seller shall pay customary closing costs of Seller. Real property taxes shall be prorated as of the date of closing.` },
+      { h: '5. Inspection Period.', t: `Buyer shall have ${inspectionDays} days from the Effective Date (the "Inspection Period") to inspect the Property and review title. Buyer may terminate this Agreement for any reason by written notice before the Inspection Period expires, in which case the earnest money shall be promptly refunded to Buyer and neither party shall have further obligation.` },
+      { h: '6. Title.', t: `At closing, Seller shall convey good and marketable title to the Property by appropriate deed, free and clear of all liens and encumbrances except easements and restrictions of record.` },
+      { h: '7. Condition of Property.', t: `Buyer accepts the Property in its present "AS-IS, WHERE-IS" condition. Seller shall maintain the Property in its current condition and shall not remove any fixtures prior to closing.` },
+      { h: '8. Assignment.', t: `Buyer may assign this Agreement, in whole or in part, without Seller's consent. Upon assignment, the assignee shall assume all of Buyer's obligations under this Agreement.` },
+      { h: '9. Access.', t: `Seller grants Buyer and Buyer's partners, lenders, inspectors, and contractors reasonable access to the Property prior to closing upon reasonable notice.` },
+      { h: '10. Default.', t: `If Buyer defaults after the Inspection Period, Seller's sole and exclusive remedy shall be retention of the earnest money as liquidated damages. If Seller defaults, Buyer may elect to (a) terminate and receive a refund of the earnest money, or (b) seek specific performance of this Agreement.` },
+      { h: '11. Entire Agreement; Governing Law.', t: `This Agreement constitutes the entire agreement between the parties, supersedes all prior negotiations, and may be amended only in a writing signed by both parties. This Agreement shall be governed by the laws of the State of ${state}. This Agreement may be executed electronically, and electronic signatures shall be deemed originals for all purposes. The "Effective Date" is the date the last party signs.` },
+    ],
+  };
+}
+
+// ── PDF generation (pdf-lib) ────────────────────────────────────
+const ESIGN_PAGE = { w: 612, h: 792, margin: 54 };
+
+function esignWrapText(text, font, size, maxWidth) {
+  const words = String(text).split(/\s+/);
+  const lines = [];
+  let line = '';
+  for (const w of words) {
+    const test = line ? line + ' ' + w : w;
+    if (font.widthOfTextAtSize(test, size) > maxWidth && line) {
+      lines.push(line); line = w;
+    } else line = test;
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+
+// Builds the unsigned contract PDF. Returns { bytes, sigPage, sigX, sigY }.
+async function esignBuildPdf(docType, fields, companySigner) {
+  const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
+  const content = esignContractContent(docType, fields);
+  const doc = await PDFDocument.create();
+  const font = await doc.embedFont(StandardFonts.TimesRoman);
+  const bold = await doc.embedFont(StandardFonts.TimesRomanBold);
+  const italic = await doc.embedFont(StandardFonts.TimesRomanItalic);
+  const { w, h, margin } = ESIGN_PAGE;
+  const maxW = w - margin * 2;
+  const black = rgb(0.08, 0.09, 0.11);
+
+  let page = doc.addPage([w, h]);
+  let y = h - margin;
+  const newPageIfNeeded = (needed) => {
+    if (y - needed < margin) { page = doc.addPage([w, h]); y = h - margin; }
+  };
+
+  // Title
+  for (const line of esignWrapText(content.title, bold, 14, maxW)) {
+    newPageIfNeeded(20);
+    const tw = bold.widthOfTextAtSize(line, 14);
+    page.drawText(line, { x: (w - tw) / 2, y, size: 14, font: bold, color: black });
+    y -= 20;
+  }
+  y -= 8;
+
+  // Body
+  for (const p of content.paragraphs) {
+    const text = (p.h ? p.h + ' ' : '') + p.t;
+    const lines = esignWrapText(text, font, 11, maxW);
+    newPageIfNeeded(15 * Math.min(lines.length, 3) + 8);
+    for (const line of lines) {
+      newPageIfNeeded(15);
+      if (p.h && line === lines[0]) {
+        // draw heading bold, remainder regular
+        const headW = bold.widthOfTextAtSize(p.h, 11);
+        page.drawText(p.h, { x: margin, y, size: 11, font: bold, color: black });
+        page.drawText(line.slice(p.h.length).replace(/^\s/, ' '), { x: margin + headW, y, size: 11, font, color: black });
+      } else {
+        page.drawText(line, { x: margin, y, size: 11, font, color: black });
+      }
+      y -= 15;
+    }
+    y -= 7;
+  }
+
+  // Signature blocks — keep them together on one page
+  newPageIfNeeded(190);
+  y -= 12;
+  page.drawText('IN WITNESS WHEREOF, the parties have executed this agreement.', { x: margin, y, size: 11, font, color: black });
+  y -= 40;
+
+  // Signer (seller / assignee) block — signature gets stamped above the line
+  const sigPage = doc.getPages().indexOf(page);
+  const sigX = margin;
+  const sigY = y; // signature image bottom sits on this line
+  page.drawLine({ start: { x: margin, y }, end: { x: margin + 240, y }, thickness: 0.8, color: black });
+  page.drawLine({ start: { x: margin + 280, y }, end: { x: margin + 420, y }, thickness: 0.8, color: black });
+  y -= 14;
+  page.drawText(`${content.signerLabel}: ${fields.signer_name || ''}`, { x: margin, y, size: 10, font, color: black });
+  page.drawText('Date', { x: margin + 280, y, size: 10, font, color: black });
+  y -= 46;
+
+  // Company block — typed signature applied at send time
+  const sentDate = new Date().toLocaleDateString('en-US');
+  page.drawText(companySigner, { x: margin + 6, y: y + 6, size: 15, font: italic, color: black });
+  page.drawLine({ start: { x: margin, y }, end: { x: margin + 240, y }, thickness: 0.8, color: black });
+  page.drawText(sentDate, { x: margin + 286, y: y + 6, size: 11, font, color: black });
+  page.drawLine({ start: { x: margin + 280, y }, end: { x: margin + 420, y }, thickness: 0.8, color: black });
+  y -= 14;
+  page.drawText(`${content.companyLabel}: ${esignCompanyName()}`, { x: margin, y, size: 10, font, color: black });
+  page.drawText('Date', { x: margin + 280, y, size: 10, font, color: black });
+
+  const bytes = await doc.save();
+  return { bytes: Buffer.from(bytes), sigPage, sigX, sigY };
+}
+
+// Stamps the signer's drawn signature + date onto the PDF and appends
+// a signature certificate page. Returns Buffer of the executed PDF.
+async function esignStampPdf(unsignedBytes, env, sigPngBase64) {
+  const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
+  const doc = await PDFDocument.load(unsignedBytes);
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  const bold = await doc.embedFont(StandardFonts.HelveticaBold);
+  const black = rgb(0.08, 0.09, 0.11);
+
+  // 1) stamp signature image
+  const png = await doc.embedPng(Buffer.from(sigPngBase64, 'base64'));
+  const page = doc.getPages()[env.sig_page || 0];
+  const targetH = 34;
+  const scale = targetH / png.height;
+  const targetW = Math.min(png.width * scale, 230);
+  page.drawImage(png, { x: Number(env.sig_x), y: Number(env.sig_y) + 2, width: targetW, height: targetH });
+  const signedDate = new Date().toLocaleDateString('en-US');
+  page.drawText(signedDate, { x: Number(env.sig_x) + 286, y: Number(env.sig_y) + 6, size: 11, font, color: black });
+
+  // 2) signature certificate page
+  const { w, h, margin } = ESIGN_PAGE;
+  const cert = doc.addPage([w, h]);
+  let y = h - margin;
+  cert.drawText('SIGNATURE CERTIFICATE', { x: margin, y, size: 15, font: bold, color: black });
+  y -= 14;
+  cert.drawLine({ start: { x: margin, y }, end: { x: w - margin, y }, thickness: 1, color: black });
+  y -= 24;
+  const row = (label, value) => {
+    cert.drawText(label, { x: margin, y, size: 9, font: bold, color: black });
+    const lines = esignWrapText(value || '—', font, 9, w - margin * 2 - 150);
+    for (const line of lines) {
+      cert.drawText(line, { x: margin + 150, y, size: 9, font, color: black });
+      y -= 13;
+    }
+    y -= 5;
+  };
+  row('Envelope ID', env.id);
+  row('Document', env.document_name || env.doc_type);
+  row('Status', 'Completed');
+  row('Signer', `${env.signer_name}${env.signer_email ? ' <' + env.signer_email + '>' : ''}${env.signer_phone ? ' ' + env.signer_phone : ''}`);
+  row('Company signer', env.company_signer || esignCompanySigner());
+  row('Sent', env.sent_at || '');
+  row('Viewed', env.viewed_at || '');
+  row('Signed', new Date().toISOString());
+  row('Signer IP address', env.signer_ip || '');
+  row('Signer device', env.signer_user_agent || '');
+  row('Original doc SHA-256', env.unsigned_sha256 || '');
+  row('Consent', env.consent_text || '');
+  y -= 8;
+  const foot = 'This document was signed electronically. Under the U.S. ESIGN Act (15 U.S.C. § 7001) and the Uniform Electronic Transactions Act, electronic signatures carry the same legal effect as handwritten signatures. The SHA-256 hash above uniquely identifies the document as sent; any alteration to the document changes its hash.';
+  for (const line of esignWrapText(foot, font, 8.5, w - margin * 2)) {
+    cert.drawText(line, { x: margin, y, size: 8.5, font, color: rgb(0.35, 0.36, 0.4) });
+    y -= 12;
+  }
+
+  const bytes = await doc.save();
+  return Buffer.from(bytes);
+}
+
+function esignSha256(buf) {
+  const crypto = require('crypto');
+  return crypto.createHash('sha256').update(buf).digest('hex');
+}
+function esignToken() {
+  const crypto = require('crypto');
+  return crypto.randomBytes(32).toString('hex');
+}
+function esignOrigin(event) {
+  const host = (event.headers && (event.headers.host || event.headers.Host)) || 'winwincalltoclose.netlify.app';
+  return 'https://' + host;
+}
+function esignPublicUrl(path) {
+  return `${process.env.SUPABASE_URL}/storage/v1/object/public/contracts/${path.split('/').map(encodeURIComponent).join('/')}`;
+}
+async function esignAddEvent(envId, currentEvents, type, meta) {
+  const events = Array.isArray(currentEvents) ? currentEvents.slice() : [];
+  events.push({ type, at: new Date().toISOString(), ...(meta || {}) });
+  return events;
+}
+
+// ── Public handlers (token-authenticated, bypass password gate) ─
+async function handleEsignView(event) {
+  const qs = event.queryStringParameters || {};
+  const token = qs.token || '';
+  if (!/^[a-f0-9]{64}$/.test(token)) return err('Invalid link', 400);
+  const { json: rows } = await supa(`/esign_envelopes?token=eq.${token}&limit=1`);
+  const env = rows && rows[0];
+  if (!env) return err('This signing link is invalid or has been removed.', 404);
+  if (env.status === 'voided') return err('This document has been voided by the sender.', 410);
+
+  // first open → mark viewed
+  if (env.status === 'sent') {
+    const events = await esignAddEvent(env.id, env.events, 'viewed', {
+      ip: event.headers['x-nf-client-connection-ip'] || event.headers['client-ip'] || '',
+    });
+    await supa(`/esign_envelopes?id=eq.${env.id}`, 'PATCH', {
+      status: 'viewed', viewed_at: new Date().toISOString(), events,
+    }, { Prefer: 'return=minimal' });
+  }
+
+  const content = esignContractContent(env.doc_type, { ...env.fields, signer_name: env.signer_name });
+  return ok({
+    status: env.status === 'sent' ? 'viewed' : env.status,
+    documentName: env.document_name,
+    signerName: env.signer_name,
+    companyName: esignCompanyName(),
+    title: content.title,
+    paragraphs: content.paragraphs,
+    signerLabel: content.signerLabel,
+    pdfUrl: env.status === 'signed' && env.signed_path ? esignPublicUrl(env.signed_path)
+          : (env.unsigned_path ? esignPublicUrl(env.unsigned_path) : null),
+    signedAt: env.signed_at || null,
+  });
+}
+
+async function handleEsignSubmit(event) {
+  let body = {};
+  try { body = JSON.parse(event.body || '{}'); } catch {}
+  const token = body.token || '';
+  if (!/^[a-f0-9]{64}$/.test(token)) return err('Invalid link', 400);
+  if (body.consent !== true) return err('You must agree to sign electronically.', 400);
+  const sig = String(body.signaturePng || '');
+  const m = sig.match(/^data:image\/png;base64,([A-Za-z0-9+/=]+)$/);
+  if (!m || m[1].length < 500) return err('Please draw your signature before submitting.', 400);
+  if (m[1].length > 700000) return err('Signature image too large.', 400);
+
+  const { json: rows } = await supa(`/esign_envelopes?token=eq.${token}&limit=1`);
+  const env = rows && rows[0];
+  if (!env) return err('This signing link is invalid or has been removed.', 404);
+  if (env.status === 'signed') return err('This document has already been signed.', 409);
+  if (env.status === 'voided') return err('This document has been voided by the sender.', 410);
+
+  // fetch the unsigned PDF from storage (authorized)
+  const getUrl = `${process.env.SUPABASE_URL}/storage/v1/object/contracts/${env.unsigned_path.split('/').map(encodeURIComponent).join('/')}`;
+  const pdfResp = await fetch(getUrl, { headers: { Authorization: 'Bearer ' + process.env.SUPABASE_SERVICE_ROLE_KEY } });
+  if (!pdfResp.ok) return err('Could not load the document. Please try again.', 500);
+  const unsignedBytes = Buffer.from(await pdfResp.arrayBuffer());
+
+  const ip = event.headers['x-nf-client-connection-ip'] || event.headers['client-ip'] || '';
+  const ua = event.headers['user-agent'] || '';
+  const consentText = 'I agree to use electronic records and signatures, and I intend this electronic signature to be the legal equivalent of my handwritten signature on this document.';
+  const envForStamp = { ...env, signer_ip: ip, signer_user_agent: ua, consent_text: consentText };
+
+  const signedBytes = await esignStampPdf(unsignedBytes, envForStamp, m[1]);
+  const signedSha = esignSha256(signedBytes);
+  const signedPath = env.unsigned_path.replace(/-unsigned\.pdf$/, '-signed.pdf');
+  const up = await uploadToStorage('contracts', signedPath, signedBytes.toString('base64'), 'application/pdf');
+  if (up.error) return err(up.error, 500);
+
+  const now = new Date().toISOString();
+  const events = await esignAddEvent(env.id, env.events, 'signed', { ip, ua });
+  await supa(`/esign_envelopes?id=eq.${env.id}`, 'PATCH', {
+    status: 'signed', signed_at: now, signed_path: signedPath, signed_sha256: signedSha,
+    signer_ip: ip, signer_user_agent: ua, consent_text: consentText, consented_at: now, events,
+  }, { Prefer: 'return=minimal' });
+
+  const signedUrlPublic = esignPublicUrl(signedPath);
+
+  // deliver executed copy to the signer
+  const docLabel = env.document_name || (env.doc_type === 'assignment' ? 'Assignment Agreement' : 'Purchase & Sale Agreement');
+  if (env.signer_email) {
+    const html = `<p>Hi ${env.signer_name},</p><p>Your <b>${docLabel}</b> has been fully executed. A copy is attached at the link below — please keep it for your records.</p><p><a href="${signedUrlPublic}" style="background:#111;color:#d4af37;padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:bold">📄 Download Signed Document</a></p><p>${esignCompanyName()}</p>`;
+    try { await sendViaSpacemail({ to: env.signer_email, subject: `Signed: ${docLabel}`, html }); } catch {}
+  }
+  if (env.signer_phone) {
+    try { await sendOneSms(env.signer_phone, `Your ${docLabel} is fully signed. Your copy: ${signedUrlPublic}`, env.deal_id, env.property_id); } catch {}
+  }
+
+  // notify the office
+  const notifyEmail = process.env.ESIGN_NOTIFY_EMAIL || process.env.SPACEMAIL_USER;
+  if (notifyEmail) {
+    try {
+      await sendViaSpacemail({
+        to: notifyEmail,
+        subject: `✍️ SIGNED: ${docLabel} — ${env.signer_name}`,
+        html: `<p><b>${env.signer_name}</b> just signed the <b>${docLabel}</b>.</p><p>Signed at ${now}<br>IP ${ip}</p><p><a href="${signedUrlPublic}">Download executed PDF</a></p>`,
+      });
+    } catch {}
+  }
+  if (process.env.ESIGN_NOTIFY_PHONE) {
+    try { await sendOneSms(process.env.ESIGN_NOTIFY_PHONE, `✍️ SIGNED: ${docLabel} — ${env.signer_name}. ${signedUrlPublic}`, env.deal_id, env.property_id); } catch {}
+  }
+
+  return ok({ signed: true, pdfUrl: signedUrlPublic });
+}
+
+
 exports.handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') return { statusCode: 204, headers: corsHeaders(), body: '' };
 
@@ -591,10 +1154,26 @@ exports.handler = async (event) => {
   if (action === 'twilio-status') {
     return await handleTwilioStatus(event);
   }
+  if (action === 'record-vm-twiml') {
+    return handleRecordVmTwiml(event);
+  }
+  if (action === 'record-vm-status') {
+    return await handleRecordVmStatus(event);
+  }
   // The drip processor can run via Netlify scheduled function or cron
   // hitting a special key — but to keep it simple, it's behind the
   // password gate like everything else and the admin can trigger it
   // manually, plus the frontend pings it every page load.
+
+  // ─ E-sign public endpoints (seller-facing) bypass the password ─
+  // gate. They are authenticated by the 64-char secret envelope
+  // token instead — see handleEsignView / handleEsignSubmit.
+  if (action === 'esign-view') {
+    return await handleEsignView(event);
+  }
+  if (action === 'esign-submit') {
+    return await handleEsignSubmit(event);
+  }
 
   // Password gate
   const expected = process.env.ACCESS_PASSWORD;
@@ -620,9 +1199,9 @@ exports.handler = async (event) => {
       case 'list-properties': {
         // Supabase default limit is 1000; raise it for larger lists.
         const LIMIT = 50000;
-        const { json: props }  = await supa(`/properties?select=id,owners,owner_last_name,property_address,mailing_address,email,imported_at&order=imported_at.asc,id.asc&limit=${LIMIT}`);
+        const { json: props }  = await supa(`/properties?select=id,owners,owner_last_name,property_address,mailing_address,email,imported_at,postcard_sent_at,postcard_id&order=imported_at.asc,id.asc&limit=${LIMIT}`);
         const { json: phones } = await supa(`/phones?select=property_id,e164,display,type&order=property_id.asc,id.asc&limit=${LIMIT}`);
-        const { json: leads }  = await supa(`/leads?select=property_id,called,lead_status,notes,va_notes,recording_url,sms_consent,sms_cell&limit=${LIMIT}`);
+        const { json: leads }  = await supa(`/leads?select=property_id,called,lead_status,notes,va_notes,recording_url,highlight,assigned_to,sms_consent,sms_cell&limit=${LIMIT}`);
         const phonesBy = {};
         for (const p of phones || []) (phonesBy[p.property_id] ||= []).push(p);
         const leadsBy = {};
@@ -662,9 +1241,10 @@ exports.handler = async (event) => {
         const byId = new Map();
         const seenAddrInBatch = new Map(); // normAddr -> id (first occurrence in this batch)
         let synthCounter = 0;
+        const synthPrefix = 'row-' + Date.now() + '-'; // unique per upload batch
         for (const raw of list) {
           let id = raw && raw.id != null ? String(raw.id).trim() : '';
-          if (!id) id = 'row-' + (++synthCounter);
+          if (!id) id = synthPrefix + (++synthCounter);
 
           const addrKey = normAddr(raw.property_address);
 
@@ -691,6 +1271,7 @@ exports.handler = async (event) => {
             if (!existing.email && raw.email) existing.email = raw.email;
             if (!existing.va_notes && raw.va_notes) existing.va_notes = raw.va_notes;
             if (!existing.recording_url && raw.recording_url) existing.recording_url = raw.recording_url;
+            if (!existing.highlight && raw.highlight) existing.highlight = raw.highlight;
             dupesCollapsed++;
           } else {
             byId.set(id, {
@@ -702,6 +1283,7 @@ exports.handler = async (event) => {
               va_notes: raw.va_notes || '',
               recording_url: raw.recording_url || '',
               va_lead: !!raw.va_lead,
+              highlight: raw.highlight || '',
               phones: Array.isArray(raw.phones) ? [...raw.phones] : [],
             });
             if (addrKey) seenAddrInBatch.set(addrKey, id);
@@ -721,15 +1303,44 @@ exports.handler = async (event) => {
             if (k && !addrToExistingId.has(k)) addrToExistingId.set(k, ep.id);
           }
         }
-        deduped = deduped.map(p => {
-          const k = normAddr(p.property_address);
-          const existingId = k ? addrToExistingId.get(k) : null;
-          if (existingId && existingId !== p.id) {
-            p.id = existingId;
-            dupeAddressesSkipped++;
-          }
-          return p;
-        });
+        // Skip new leads whose address already exists in the DB — never overwrite
+        // an existing lead's data with a new upload unless Replace is checked.
+        if (!body.replace) {
+          deduped = deduped.filter(p => {
+            const k = normAddr(p.property_address);
+            if (k && addrToExistingId.has(k)) {
+              dupeAddressesSkipped++;
+              return false;
+            }
+            return true;
+          });
+        } else {
+          // Replace mode: remap IDs to existing ones so the upsert updates them
+          deduped = deduped.map(p => {
+            const k = normAddr(p.property_address);
+            const existingId = k ? addrToExistingId.get(k) : null;
+            if (existingId && existingId !== p.id) {
+              p.id = existingId;
+              dupeAddressesSkipped++;
+            }
+            return p;
+          });
+        }
+
+        // ── skipDuplicates: if the caller asked to skip (not merge) dupes,
+        //    remove any property whose normalized address already exists in the
+        //    DB (we already built addrToExistingId above).  Also drop rows
+        //    whose phones ALL already exist in the phones table.
+        if (body.skipDuplicates) {
+          const { json: existingPhones } = await supa('/phones?select=e164&limit=50000');
+          const existingPhoneSet = new Set((existingPhones || []).map(p => p.e164));
+          deduped = deduped.filter(p => {
+            const k = normAddr(p.property_address);
+            if (k && addrToExistingId.has(k) && addrToExistingId.get(k) !== p.id) return false;
+            if (p.phones && p.phones.length && p.phones.every(ph => existingPhoneSet.has(ph.e164))) return false;
+            return true;
+          });
+        }
 
         // Upsert properties
         // Helper: derive owner_last_name from owners string
@@ -762,16 +1373,24 @@ exports.handler = async (event) => {
           await supa('/properties?on_conflict=id', 'POST', propRows.slice(i, i + 500), { Prefer: 'resolution=merge-duplicates,return=minimal' });
         }
 
-        // Replace phones for these properties
-        const ids = propRows.map(p => p.id);
-        const idChunks = [];
-        for (let i = 0; i < ids.length; i += 200) idChunks.push(ids.slice(i, i + 200));
-        for (const chunk of idChunks) {
-          const inList = chunk.map(id => `"${id.replace(/"/g, '\\"')}"`).join(',');
-          await supa(`/phones?property_id=in.(${encodeURIComponent(inList)})`, 'DELETE');
+        // Only delete + replace phones for NEW properties (ones not already
+        // in the DB before this upload). Existing properties keep their phones
+        // untouched so uploading a second list never wipes the first list's data.
+        const existingIdSet = new Set(addrToExistingId.values());
+        const newPropertyIds = propRows.map(p => p.id).filter(id => !existingIdSet.has(id));
+
+        if (newPropertyIds.length) {
+          const idChunks = [];
+          for (let i = 0; i < newPropertyIds.length; i += 200) idChunks.push(newPropertyIds.slice(i, i + 200));
+          for (const chunk of idChunks) {
+            const inList = chunk.map(id => `"${id.replace(/"/g, '\\"')}"`).join(',');
+            await supa(`/phones?property_id=in.(${encodeURIComponent(inList)})`, 'DELETE');
+          }
         }
         const phoneRows = [];
         for (const p of deduped) {
+          // Skip phones for existing properties
+          if (existingIdSet.has(p.id)) continue;
           for (const ph of p.phones || []) {
             if (!ph.e164) continue;
             phoneRows.push({
@@ -786,18 +1405,27 @@ exports.handler = async (event) => {
           await supa('/phones', 'POST', phoneRows.slice(i, i + 500), { Prefer: 'return=minimal' });
         }
 
-        // Persist va_notes + recording_url onto the leads row
+        // Persist va_notes + recording_url + highlight (+ batch assignee) onto the leads row
+        const assignedToRaw = (body.assignedTo != null && body.assignedTo !== '')
+          ? parseInt(body.assignedTo, 10) : null;
+        const batchAssignee = Number.isFinite(assignedToRaw) ? assignedToRaw : null;
         const leadRows = [];
         for (const p of deduped) {
           const va = (p.va_notes || '').trim();
           const rec = (p.recording_url || '').trim();
-          if (va || rec) {
-            leadRows.push({
+          const hl = (p.highlight || '').trim();
+          // Create a lead row when there are notes/recording/highlight OR a caller
+          // was chosen for this list (so the assignment sticks even with no notes).
+          if (va || rec || hl || batchAssignee != null) {
+            const lr = {
               property_id: p.id,
               va_notes: va,
               recording_url: rec,
+              highlight: hl,
               updated_at: new Date().toISOString(),
-            });
+            };
+            if (batchAssignee != null) lr.assigned_to = batchAssignee;
+            leadRows.push(lr);
           }
         }
         for (let i = 0; i < leadRows.length; i += 500) {
@@ -815,6 +1443,8 @@ exports.handler = async (event) => {
         if ('leadStatus'   in body) patch.lead_status   = body.leadStatus || '';
         if ('notes'        in body) patch.notes         = body.notes || '';
         if ('recordingUrl' in body) patch.recording_url = body.recordingUrl || '';
+        if ('highlight'    in body) patch.highlight     = body.highlight || '';
+        if ('assignedTo'   in body) patch.assigned_to   = body.assignedTo || null;
         // Implied: any non-empty status means called
         if (patch.lead_status) patch.called = true;
         await supa('/leads?on_conflict=property_id', 'POST', [patch], { Prefer: 'resolution=merge-duplicates,return=minimal' });
@@ -892,6 +1522,51 @@ exports.handler = async (event) => {
         return ok({ sid: j.sid, status: j.status });
       }
 
+      // ── Power Dialer: place a call in a power dial session ─────
+      // Calls the agent's phone first, then when they answer bridges
+      // to the seller. The status callback URL triggers the next call
+      // automatically when the session call completes.
+      case 'power-dial-call': {
+        if (!body.to)        return err('to required');
+        if (!body.from)      return err('from required');
+        if (!body.agentPhone)return err('agentPhone required');
+
+        const baseUrl = 'https://winwincalltoclose.netlify.app/api';
+        const sessionId = body.sessionId || '';
+        const propertyId = body.propertyId || '';
+
+        // TwiML played to the agent when they answer:
+        // say the seller name then dial out to the seller
+        const sellerName = (body.sellerName || 'your next lead').replace(/[<>&"]/g, '');
+        const connectTwiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Say voice="alice">Connecting to ${sellerName}</Say><Dial callerId="${escapeXml(body.from)}" timeout="30" answerOnBridge="true"><Number>${escapeXml(body.to)}</Number></Dial></Response>`;
+
+        // Status callback so we know when this leg ends
+        const statusCb = `${baseUrl}?action=twilio-status&sid=SID_PLACEHOLDER`;
+
+        const j = await tw(`/Accounts/${twilioSid()}/Calls.json`, 'POST', {
+          From: body.from,
+          To:   body.agentPhone,
+          Twiml: connectTwiml,
+          StatusCallback: `${baseUrl}?action=twilio-status`,
+          StatusCallbackMethod: 'POST',
+          StatusCallbackEvent: 'completed',
+        });
+
+        // Persist call record
+        try {
+          await supa('/calls', 'POST', [{
+            twilio_sid: j.sid,
+            property_id: propertyId ? String(propertyId) : null,
+            from_number: body.from,
+            to_number:   body.to,
+            status: j.status || 'queued',
+            profile_id: body.profileId || null,
+          }], { Prefer: 'return=minimal' });
+        } catch (e) { console.warn('power dial persist failed', e.message); }
+
+        return ok({ sid: j.sid, status: j.status });
+      }
+
       case 'call-status': {
         if (!qs.sid) return err('sid required');
         const j = await tw(`/Accounts/${twilioSid()}/Calls/${encodeURIComponent(qs.sid)}.json`);
@@ -913,6 +1588,121 @@ exports.handler = async (event) => {
         if (!body.sid) return err('sid required');
         await tw(`/Accounts/${twilioSid()}/Calls/${encodeURIComponent(body.sid)}.json`, 'POST', { Status: 'completed' });
         return ok({ ended: true });
+      }
+
+      // Calls the rep's own phone and records their voicemail-drop message
+      case 'start-vm-recording': {
+        if (!body.profileId) return err('profileId required');
+        if (!body.phone)     return err('phone required (your forwarding number)');
+        if (!body.from)      return err('from required (a Twilio number you own)');
+        const baseUrl = 'https://winwincalltoclose.netlify.app/api';
+        const url = `${baseUrl}?action=record-vm-twiml&profileId=${encodeURIComponent(body.profileId)}`;
+        const j = await tw(`/Accounts/${twilioSid()}/Calls.json`, 'POST', {
+          From: body.from, To: body.phone, Url: url, Method: 'POST',
+        });
+        return ok({ sid: j.sid, status: j.status });
+      }
+
+      // Lets Settings show whether a recording is saved yet
+      case 'vm-recording-status': {
+        if (!qs.profileId) return err('profileId required');
+        const { json: profiles } = await supa(`/profiles?id=eq.${encodeURIComponent(qs.profileId)}&select=vm_recording_sid,vm_recording_duration,vm_recorded_at`);
+        const profile = Array.isArray(profiles) && profiles[0];
+        return ok({
+          hasRecording: !!(profile && profile.vm_recording_sid),
+          durationSec: profile ? profile.vm_recording_duration || 0 : 0,
+          recordedAt: profile ? profile.vm_recorded_at || null : null,
+        });
+      }
+
+      // Drops a voicemail into the LEAD's leg of a live call. Prefers
+      // the rep's recorded audio; falls back to a text-to-speech
+      // message if no recording has been saved yet.
+      case 'drop-voicemail': {
+        if (!body.sid) return err('sid required (the parent call sid)');
+        let playUrl = null;
+        if (body.profileId) {
+          try {
+            const { json: profiles } = await supa(`/profiles?id=eq.${encodeURIComponent(body.profileId)}&select=vm_recording_sid`);
+            const profile = Array.isArray(profiles) && profiles[0];
+            if (profile && profile.vm_recording_sid) playUrl = recordingPlaybackUrl(profile.vm_recording_sid);
+          } catch (e) { console.warn('vm profile lookup failed', e.message); }
+        }
+        if (!playUrl && !body.message) return err('No recorded voicemail message and no fallback text provided');
+
+        const { json: childCalls } = await tw(`/Accounts/${twilioSid()}/Calls.json?ParentCallSid=${encodeURIComponent(body.sid)}`);
+        const childCall = childCalls && childCalls.calls && childCalls.calls[0];
+        if (!childCall) return err('Could not find the lead\'s call leg — they may have already hung up');
+
+        const inner = playUrl
+          ? `<Play>${escapeXml(playUrl)}</Play>`
+          : `<Say voice="alice">${escapeXml(body.message)}</Say>`;
+        const dropTwiml = `<?xml version="1.0" encoding="UTF-8"?><Response>${inner}<Hangup/></Response>`;
+        await tw(`/Accounts/${twilioSid()}/Calls/${encodeURIComponent(childCall.sid)}.json`, 'POST', { Twiml: dropTwiml });
+        return ok({ dropped: true, usedRecording: !!playUrl });
+      }
+
+      // ════════════════════════════════════════════════════════
+      // POSTCARDS — PostGrid
+      // ════════════════════════════════════════════════════════
+      case 'send-postcard': {
+        if (!body.propertyId) return err('propertyId required');
+        if (!postgridApiKey()) return err(`PostGrid ${postgridMode()} API key not configured on the server`);
+        const templateId = process.env.POSTGRID_TEMPLATE_ID;
+        if (!templateId) return err('POSTGRID_TEMPLATE_ID not configured on the server');
+
+        const { json: props } = await supa(`/properties?id=eq.${encodeURIComponent(body.propertyId)}&select=id,owners,owner_last_name,property_address,mailing_address`);
+        const prop = Array.isArray(props) && props[0];
+        if (!prop) return err('Lead not found');
+
+        const rawAddress = prop.mailing_address || prop.property_address;
+        if (!rawAddress) return err('No mailing address on file for this lead');
+        const addr = parseMailingAddress(rawAddress);
+        if (!addr.addressLine1 || !addr.provinceOrState) {
+          return err('Could not parse a complete mailing address (need street + state) for this lead');
+        }
+
+        const first = firstName(prop.owners);
+        const firstClean = first === 'there' ? '' : first;
+        const message = String(body.message || '').replace(/\{FirstName\}/gi, firstClean || 'there');
+
+        let result;
+        try {
+          result = await postgrid('/print-mail/v1/postcards', {
+            to: {
+              firstName: firstClean,
+              lastName: prop.owner_last_name || '',
+              addressLine1: addr.addressLine1,
+              city: addr.city,
+              provinceOrState: addr.provinceOrState,
+              postalOrZip: addr.postalOrZip,
+              countryCode: 'US',
+            },
+            from: {
+              companyName: 'Win Win Property Solutions NY',
+              addressLine1: '92 Virginia Ave',
+              city: 'Freeport',
+              provinceOrState: 'NY',
+              postalOrZip: '11520',
+              countryCode: 'US',
+            },
+            size: '6x4',
+            template: templateId,
+            mailingClass: 'standard_class',
+            mergeVariables: { message, first_name: firstClean },
+          });
+        } catch (e) {
+          return err('PostGrid: ' + e.message);
+        }
+
+        try {
+          await supa(`/properties?id=eq.${encodeURIComponent(body.propertyId)}`, 'PATCH', {
+            postcard_sent_at: new Date().toISOString(),
+            postcard_id: result.id || null,
+          });
+        } catch (e) { console.warn('postcard tracking update failed', e.message); }
+
+        return ok({ sent: true, id: result.id, status: result.status, mode: postgridMode() });
       }
 
       // List calls in window (for KPIs/log). Pulls from DB; refreshes any non-final from Twilio first.
@@ -1534,90 +2324,232 @@ exports.handler = async (event) => {
         if (!body.contractUrl)  return err('contractUrl required');
         if (!body.sellerName)   return err('sellerName required');
 
-        const ZOHO_USER = 'leadmanager@zohomail.com';
-        const ZOHO_PASS = process.env.ZOHO_APP_PASSWORD || 'i0ZQgzZKQVTN';
-
         const subject  = body.subject  || `Contract for ${body.propertyAddress || 'your property'}`;
-        const message  = body.message  || `Hi ${body.sellerName},\n\nPlease find your contract attached via the link below.\n\n${body.contractUrl}\n\nLet me know if you have any questions.\n\nBest regards`;
+        const message  = body.message  || `Hi ${body.sellerName},\n\nPlease find your contract at the link below.\n\n${body.contractUrl}\n\nLet me know if you have any questions.\n\nBest regards`;
+        const html = `<p>${message.replace(/\n/g,'<br>')}</p>
+                 <p><a href="${body.contractUrl}" style="background:#1a56db;color:#fff;padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:bold">📄 Open Contract</a></p>`;
 
-        // Send via Zoho SMTP using fetch to smtp2http or nodemailer-style raw SMTP
-        // We use Zoho's SMTP via a lightweight raw SMTP approach with node's net/tls
-        const nodemailer = require('nodemailer');
-        const transporter = nodemailer.createTransport({
-          host: 'smtp.zoho.com',
-          port: 465,
-          secure: true,
-          auth: { user: ZOHO_USER, pass: ZOHO_PASS },
-        });
-
-        await transporter.sendMail({
-          from: `WinWin Dialer <${ZOHO_USER}>`,
-          to: body.toEmail,
-          subject,
-          text: message,
-          html: `<p>${message.replace(/\n/g,'<br>')}</p>
-                 <p><a href="${body.contractUrl}" style="background:#1a56db;color:#fff;padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:bold">📄 Open Contract</a></p>`,
-        });
-
-        return ok({ sent: true });
+        const contractRes = await sendViaSpacemail({ to: body.toEmail, subject, text: message, html });
+        if (contractRes.error) return err(contractRes.error, 500);
+        return ok({ sent: true, id: contractRes.id });
       }
 
       // ════════════════════════════════════════════════════════
-      // E-SIGNATURE — SignWell (Purchase & Sale + Assignment)
+      // SPACEMAIL — send any email from the app
+      // ════════════════════════════════════════════════════════
+      case 'send-email': {
+        if (!body.to) return err('to (recipient) required');
+        const res = await sendViaSpacemail({
+          to: body.to,
+          cc: body.cc,
+          replyTo: body.replyTo,
+          subject: body.subject,
+          html: body.html,
+          text: body.text,
+        });
+        if (res.error) return err(res.error, 500);
+        return ok({ sent: true, id: res.id });
+      }
+
+      // ════════════════════════════════════════════════════════
+      // SPACEMAIL — pull recent inbox messages via IMAP
+      // Optional body.search filters by sender address or subject.
+      // ════════════════════════════════════════════════════════
+      case 'fetch-inbox': {
+        if (!spacemailReady()) return err('SPACEMAIL_USER / SPACEMAIL_PASS not set in Netlify env vars', 500);
+        const limit  = Math.min(parseInt(body.limit, 10) || 30, 50);
+        const search = (body.search || '').trim().toLowerCase();
+        const client = spacemailImapClient();
+        const messages = [];
+        try {
+          await client.connect();
+          const lock = await client.getMailboxLock('INBOX');
+          try {
+            const status = await client.status('INBOX', { messages: true });
+            const total = status.messages || 0;
+            if (total > 0) {
+              const windowSize = search ? total : Math.min(total, limit);
+              const start = Math.max(1, total - windowSize + 1);
+              for await (const msg of client.fetch(`${start}:*`, { envelope: true, flags: true, internalDate: true }, { uid: false })) {
+                const env = msg.envelope || {};
+                const fromObj = (env.from && env.from[0]) || {};
+                const fromAddr = (fromObj.address || '').toLowerCase();
+                const subj = env.subject || '';
+                if (search && !(fromAddr.includes(search) || subj.toLowerCase().includes(search))) continue;
+                let iso = '';
+                const d = env.date || msg.internalDate;
+                try { iso = d ? new Date(d).toISOString() : ''; } catch { iso = ''; }
+                let seen = false;
+                try { seen = msg.flags ? msg.flags.has('\\Seen') : false; } catch { seen = false; }
+                messages.push({
+                  uid: msg.uid,
+                  from: fromObj.address || '',
+                  fromName: fromObj.name || fromObj.address || '',
+                  subject: subj || '(no subject)',
+                  date: iso,
+                  seen,
+                });
+              }
+            }
+          } finally { lock.release(); }
+          await client.logout();
+        } catch (e) {
+          try { await client.close(); } catch {}
+          return err('IMAP error: ' + (e.message || e), 502);
+        }
+        messages.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+        return ok({ messages: messages.slice(0, limit) });
+      }
+
+      // ════════════════════════════════════════════════════════
+      // SPACEMAIL — fetch full body of one message (marks as read)
+      // ════════════════════════════════════════════════════════
+      case 'fetch-email': {
+        const uid = parseInt(body.uid, 10);
+        if (!uid) return err('uid required');
+        if (!spacemailReady()) return err('SPACEMAIL_USER / SPACEMAIL_PASS not set', 500);
+        const { simpleParser } = require('mailparser');
+        const client = spacemailImapClient();
+        let result = null;
+        try {
+          await client.connect();
+          const lock = await client.getMailboxLock('INBOX');
+          try {
+            const msg = await client.fetchOne(String(uid), { source: true }, { uid: true });
+            if (!msg || !msg.source) {
+              result = { error: 'not found' };
+            } else {
+              const parsed = await simpleParser(msg.source);
+              result = {
+                uid,
+                from: (parsed.from && parsed.from.text) || '',
+                to: (parsed.to && parsed.to.text) || '',
+                subject: parsed.subject || '(no subject)',
+                date: parsed.date ? parsed.date.toISOString() : '',
+                messageId: parsed.messageId || '',
+                html: parsed.html || parsed.textAsHtml || '',
+                text: parsed.text || '',
+              };
+              try { await client.messageFlagsAdd(String(uid), ['\\Seen'], { uid: true }); } catch {}
+            }
+          } finally { lock.release(); }
+          await client.logout();
+        } catch (e) {
+          try { await client.close(); } catch {}
+          return err('IMAP error: ' + (e.message || e), 502);
+        }
+        if (result && result.error) return err(result.error, 404);
+        return ok(result);
+      }
+
+      // ════════════════════════════════════════════════════════
+      // E-SIGNATURE — Win Win E-Sign (built-in, no third party)
       // ════════════════════════════════════════════════════════
 
-      case 'send-for-signature': {
-        if (!body.templateId)   return err('templateId required');
-        if (!body.signerEmail)  return err('signerEmail required');
-        if (!body.signerName)   return err('signerName required');
+      case 'esign-send': {
+        const docType = body.docType === 'assignment' ? 'assignment' : 'purchase_sale';
+        if (!body.signerName) return err('signerName required');
+        const email = (body.signerEmail || '').trim();
+        const phone = (body.signerPhone || '').trim();
+        let deliver = body.deliver || (email && phone ? 'both' : (phone ? 'sms' : 'email'));
+        if ((deliver === 'email' || deliver === 'both') && !email) return err('Signer email required for email delivery');
+        if ((deliver === 'sms' || deliver === 'both') && !phone) return err('Signer phone required for text delivery');
 
-        const SIGNWELL_KEY = process.env.SIGNWELL_API_KEY || 'YWNjZXNzOjhjOTYxY2I3NDlhMmIzNjAxOTI0ZTVlM2QwY2IzNTA4';
+        const fields = { ...(body.fields || {}), signer_name: body.signerName };
+        const companySigner = esignCompanySigner();
+        const docLabel = body.documentName ||
+          (docType === 'assignment' ? `Assignment Agreement — ${body.signerName}` : `Purchase & Sale Agreement — ${body.signerName}`);
 
-        const payload = {
-          template_id: body.templateId,
-          name: body.documentName || `Contract — ${body.signerName}`,
-          subject: body.subject || 'Please sign your contract',
-          message: body.message || `Hi ${body.signerName}, please review and sign the attached document.`,
-          recipients: [
-            {
-              id: '1',
-              name: body.signerName,
-              email: body.signerEmail,
-              placeholder_name: body.placeholderName || 'Signer 1',
-            },
-          ],
-          draft: false,
-          test_mode: body.testMode === true,
-        };
+        // 1) build the contract PDF
+        const built = await esignBuildPdf(docType, fields, companySigner);
+        const sha = esignSha256(built.bytes);
 
-        // Pre-fill template fields (e.g. purchase price, address, closing date)
-        if (body.fields && typeof body.fields === 'object') {
-          payload.template_fields = Object.entries(body.fields).map(([api_id, value]) => ({ api_id, value }));
+        // 2) store it (random secret in the path = unguessable link)
+        const crypto = require('crypto');
+        const id = crypto.randomUUID();
+        const secret = crypto.randomBytes(16).toString('hex');
+        const unsignedPath = `esign/${id}-${secret}-unsigned.pdf`;
+        const up = await uploadToStorage('contracts', unsignedPath, built.bytes.toString('base64'), 'application/pdf');
+        if (up.error) return err(up.error, 500);
+
+        // 3) create the envelope
+        const token = esignToken();
+        const now = new Date().toISOString();
+        const { json: inserted } = await supa('/esign_envelopes', 'POST', [{
+          id,
+          doc_type: docType,
+          document_name: docLabel,
+          property_id: body.propertyId || null,
+          deal_id: body.dealId || null,
+          buyer_id: body.buyerId || null,
+          signer_name: body.signerName,
+          signer_email: email || null,
+          signer_phone: phone || null,
+          fields,
+          token,
+          unsigned_path: unsignedPath,
+          unsigned_sha256: sha,
+          sig_page: built.sigPage,
+          sig_x: built.sigX,
+          sig_y: built.sigY,
+          status: 'sent',
+          sent_via: deliver,
+          sent_at: now,
+          company_signer: companySigner,
+          events: [{ type: 'sent', at: now, via: deliver }],
+        }]);
+        if (!inserted || !inserted[0]) return err('Could not create envelope (did you run esign-migration.sql?)', 500);
+
+        // 4) deliver the signing link
+        const signUrl = `${esignOrigin(event)}/sign.html?t=${token}`;
+        const results = {};
+        if (deliver === 'email' || deliver === 'both') {
+          const html = `<p>Hi ${body.signerName},</p>
+            <p>${esignCompanyName()} has sent you a <b>${docLabel.replace(/ — .*/, '')}</b> to review and sign electronically.</p>
+            <p><a href="${signUrl}" style="background:#111;color:#d4af37;padding:14px 28px;border-radius:6px;text-decoration:none;font-weight:bold">✍️ Review &amp; Sign</a></p>
+            <p style="color:#6b7280;font-size:13px">Or copy this link into your browser:<br>${signUrl}</p>`;
+          const r = await sendViaSpacemail({ to: email, subject: body.subject || `Please sign: ${docLabel.replace(/ — .*/, '')}`, html });
+          results.email = r.error ? { error: r.error } : { sent: true };
+        }
+        if (deliver === 'sms' || deliver === 'both') {
+          const r = await sendOneSms(phone, `${esignCompanyName()}: please review & sign your ${docType === 'assignment' ? 'Assignment Agreement' : 'Purchase & Sale Agreement'}: ${signUrl}`, body.dealId, body.propertyId);
+          results.sms = r && r.error ? { error: r.error } : (r && r.skipped ? { skipped: r.reason } : { sent: true });
         }
 
-        const resp = await fetch('https://www.signwell.com/api/v1/document_templates/' + encodeURIComponent(body.templateId) + '/documents', {
-          method: 'POST',
-          headers: {
-            'X-Api-Key': SIGNWELL_KEY,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(payload),
-        });
-        const json = await resp.json();
-        if (!resp.ok) return err(json.message || json.error || 'SignWell request failed', resp.status);
-
-        return ok({ document: json });
+        const emailFailed = results.email && results.email.error;
+        const smsFailed = results.sms && (results.sms.error || results.sms.skipped);
+        if ((deliver === 'email' && emailFailed) || (deliver === 'sms' && smsFailed) || (deliver === 'both' && emailFailed && smsFailed)) {
+          return err('Envelope created but delivery failed: ' + JSON.stringify(results) + ' — you can copy the link manually: ' + signUrl, 502);
+        }
+        return ok({ envelopeId: id, signUrl, delivery: results });
       }
 
-      case 'check-signature-status': {
-        if (!body.documentId) return err('documentId required');
-        const SIGNWELL_KEY = process.env.SIGNWELL_API_KEY || 'YWNjZXNzOjhjOTYxY2I3NDlhMmIzNjAxOTI0ZTVlM2QwY2IzNTA4';
-        const resp = await fetch('https://www.signwell.com/api/v1/documents/' + encodeURIComponent(body.documentId), {
-          headers: { 'X-Api-Key': SIGNWELL_KEY },
+      case 'esign-list': {
+        let q = '/esign_envelopes?select=id,doc_type,document_name,property_id,deal_id,buyer_id,signer_name,signer_email,signer_phone,status,sent_via,sent_at,viewed_at,signed_at,signed_path,unsigned_path,token&order=created_at.desc';
+        if (body.propertyId) q += `&property_id=eq.${encodeURIComponent(body.propertyId)}`;
+        else if (body.dealId) q += `&deal_id=eq.${encodeURIComponent(body.dealId)}`;
+        else q += '&limit=50';
+        const { json: rows } = await supa(q);
+        const origin = esignOrigin(event);
+        return ok({
+          envelopes: (rows || []).map(r => ({
+            ...r,
+            token: undefined,
+            signUrl: r.status === 'signed' || r.status === 'voided' ? null : `${origin}/sign.html?t=${r.token}`,
+            pdfUrl: r.signed_path ? esignPublicUrl(r.signed_path) : (r.unsigned_path ? esignPublicUrl(r.unsigned_path) : null),
+          })),
         });
-        const json = await resp.json();
-        if (!resp.ok) return err(json.message || 'Status check failed', resp.status);
-        return ok({ status: json.status, document: json });
+      }
+
+      case 'esign-void': {
+        if (!body.envelopeId) return err('envelopeId required');
+        const { json: rows } = await supa(`/esign_envelopes?id=eq.${encodeURIComponent(body.envelopeId)}&limit=1`);
+        const env2 = rows && rows[0];
+        if (!env2) return err('Envelope not found', 404);
+        if (env2.status === 'signed') return err('Cannot void a signed document', 409);
+        const events = await esignAddEvent(env2.id, env2.events, 'voided');
+        await supa(`/esign_envelopes?id=eq.${env2.id}`, 'PATCH', { status: 'voided', events }, { Prefer: 'return=minimal' });
+        return ok({ voided: true });
       }
 
       // ════════════════════════════════════════════════════════
@@ -1685,6 +2617,73 @@ exports.handler = async (event) => {
           properties: (json2 && json2.properties) || [],
           resultCount: (json2 && json2.meta && json2.meta.resultCount) || 0,
         });
+      }
+
+      // ════════════════════════════════════════════════════════
+      // REALTOR SEARCH — Apify (Realtor.com Agents Scraper)
+      // ════════════════════════════════════════════════════════
+
+      case 'search-realtors': {
+        if (!body.zipCode) return err('zipCode required');
+        const APIFY_TOKEN = process.env.APIFY_API_TOKEN || 'apify_api_BzvtdXSFSTGcWCqj6yK784P6cDJkEJ1zJKzm';
+        const page = parseInt(body.page || 0); // shuffle page offset
+
+        const runResp = await fetch(
+          `https://api.apify.com/v2/acts/automation-lab~realtor-agents-scraper/run-sync-get-dataset-items?token=${APIFY_TOKEN}&timeout=90`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              location: String(body.zipCode),
+              listingType: 'both',
+              maxResults: 100,
+            }),
+          }
+        );
+
+        const rawText = await runResp.text();
+        let agents = [];
+        try { agents = JSON.parse(rawText); }
+        catch(e) { return err('Apify returned unexpected response: ' + rawText.slice(0, 200), 502); }
+
+        if (!runResp.ok) {
+          const msg = (Array.isArray(agents) ? '' : (agents?.message || agents?.error)) || 'Apify request failed';
+          return err(msg, runResp.status);
+        }
+
+        const extractPhone = (a) =>
+          a.phone || a.mobilePhone || a.officePhone || a.directPhone ||
+          a.cellPhone || a.phoneNumber || a.mobile ||
+          (a.phones && (a.phones[0]?.number || a.phones[0])) ||
+          (a.contact && a.contact.phone) || '';
+
+        let pool = (Array.isArray(agents) ? agents : []).map(a => ({
+          name:       a.name || a.fullName || a.agentName || '',
+          phone:      extractPhone(a),
+          email:      a.email || a.emailAddress || '',
+          brokerage:  a.officeName || a.brokerage || a.office || '',
+          listings:   a.listingCount || a.activeListings || 0,
+          sold:       a.soldCount || a.recentlySold || 0,
+          rating:     parseFloat(a.rating || a.reviewScore || a.averageRating || 0),
+          reviewCount:a.reviewCount || a.totalReviews || 0,
+          photo:      a.photo || a.profilePhoto || a.photoUrl || '',
+          profileUrl: a.profileUrl || a.url || a.realtorUrl || '',
+        })).filter(a => a.name && (a.rating === 0 || a.rating >= 4));
+
+        // Shuffle using page as seed so each "refresh" gives a different 20
+        const seed = page * 7919;
+        pool = pool.sort((a, b) => {
+          const ha = Math.sin(seed + pool.indexOf(a)) * 10000;
+          const hb = Math.sin(seed + pool.indexOf(b)) * 10000;
+          return (ha - Math.floor(ha)) - (hb - Math.floor(hb));
+        });
+
+        const start = (page * 20) % Math.max(pool.length, 1);
+        const slice = pool.slice(start, start + 20);
+        // If we hit the end wrap around
+        const result = slice.length === 20 ? slice : [...slice, ...pool.slice(0, 20 - slice.length)];
+
+        return ok({ agents: result.slice(0, 20), total: pool.length, page });
       }
 
       default:
