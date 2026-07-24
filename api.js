@@ -10,13 +10,6 @@
  *
  * Fallback if you don't make a Twilio API key:
  *   TWILIO_AUTH_TOKEN
- *
- * E-SIGN (built-in, optional env vars):
- *   ESIGN_COMPANY_NAME   shown on contracts (default: Win Win Property Solutions NY)
- *   ESIGN_COMPANY_SIGNER typed company signature on contracts (default: company name)
- *   ESIGN_NOTIFY_EMAIL   email to ping when a doc is signed (default: SPACEMAIL_USER)
- *   ESIGN_NOTIFY_PHONE   E.164 cell to text when a doc is signed (optional)
- * Requires "pdf-lib" in package.json dependencies.
  */
 
 const TWILIO_BASE = 'https://api.twilio.com/2010-04-01';
@@ -765,376 +758,6 @@ async function cleanupExpiredRecordings() {
 }
 
 // ── Main handler ──────────────────────────────────────────────
-// ════════════════════════════════════════════════════════════════
-// WIN WIN E-SIGN — built-in e-signature engine (replaces SignWell)
-// Generates contract PDFs with pdf-lib, sends a secure signing link
-// by email/SMS, captures a drawn signature on sign.html, stamps the
-// PDF, appends a signature certificate page, and stores everything
-// in Supabase (esign_envelopes table + contracts/esign storage).
-// ════════════════════════════════════════════════════════════════
-
-function esignFmtMoney(v) {
-  if (v === undefined || v === null || v === '') return '____________';
-  const n = Number(String(v).replace(/[^0-9.]/g, ''));
-  if (!isFinite(n) || n === 0) return String(v);
-  return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
-function esignFmtDate(v) {
-  if (!v) return '____________';
-  const d = new Date(v + (String(v).length === 10 ? 'T12:00:00' : ''));
-  if (isNaN(d)) return String(v);
-  return d.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
-}
-function esignStateFrom(fields) {
-  if (fields.state) return String(fields.state).toUpperCase();
-  const m = String(fields.property_address || '').match(/,\s*([A-Za-z]{2})\s*\d{5}?/);
-  return m ? m[1].toUpperCase() : '____';
-}
-function esignCompanyName() {
-  return process.env.ESIGN_COMPANY_NAME || 'Win Win Property Solutions NY';
-}
-function esignCompanySigner() {
-  return process.env.ESIGN_COMPANY_SIGNER || esignCompanyName();
-}
-
-// ── Contract templates ──────────────────────────────────────────
-// Returns { title, paragraphs: [{h?, t}], signerLabel, companyLabel }
-// Single source of truth: the same text is rendered on sign.html
-// and laid out into the PDF, so what the seller reads is what gets
-// signed.
-function esignContractContent(docType, f) {
-  const company = esignCompanyName();
-  const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
-  const state = esignStateFrom(f);
-
-  if (docType === 'assignment') {
-    const fee = esignFmtMoney(f.assignment_fee);
-    const deposit = f.deposit ? esignFmtMoney(f.deposit) : fee;
-    return {
-      title: 'ASSIGNMENT OF PURCHASE AND SALE AGREEMENT',
-      signerLabel: 'ASSIGNEE (Buyer)',
-      companyLabel: 'ASSIGNOR',
-      paragraphs: [
-        { t: `This Assignment of Purchase and Sale Agreement ("Assignment") is made on ${today} by and between ${company} ("Assignor") and ${f.signer_name || '____________'} ("Assignee").` },
-        { t: `Assignor is the buyer under a Purchase and Sale Agreement${f.original_contract_date ? ' dated ' + esignFmtDate(f.original_contract_date) : ''} (the "Contract") for the purchase of the real property located at ${f.property_address || '____________'} (the "Property").` },
-        { h: '1. Assignment.', t: `Assignor hereby assigns, transfers, and conveys to Assignee all of Assignor's rights, title, and interest in and to the Contract, in consideration of an assignment fee of ${fee} (the "Assignment Fee").` },
-        { h: '2. Deposit.', t: `Upon execution of this Assignment, Assignee shall deliver a non-refundable deposit of ${deposit}, which shall be credited toward the Assignment Fee. The balance of the Assignment Fee, if any, shall be paid at closing and reflected on the settlement statement.` },
-        { h: '3. Assumption.', t: `Assignee accepts the assignment and assumes and agrees to perform all obligations of the buyer under the Contract, including payment of the full purchase price and all closing costs required of the buyer, and shall close on or before the closing date set forth in the Contract.` },
-        { h: '4. Earnest Money.', t: `Any earnest money deposited by Assignor under the Contract shall be reimbursed to Assignor at closing or credited as agreed by the parties.` },
-        { h: '5. No Further Liability.', t: `Upon execution of this Assignment and receipt of the deposit, Assignor shall have no further obligation to perform under the Contract. If Assignee fails to close for any reason other than Seller's default or a title defect, the deposit and any portion of the Assignment Fee already paid shall be retained by Assignor.` },
-        { h: '6. Entire Agreement; Governing Law.', t: `This Assignment, together with the Contract, constitutes the entire agreement between the parties and shall be governed by the laws of the State of ${state}. This Assignment may be executed electronically, and electronic signatures shall be deemed originals for all purposes.` },
-      ],
-    };
-  }
-
-  // purchase_sale (default)
-  const price = esignFmtMoney(f.purchase_price);
-  const earnest = f.earnest_money ? esignFmtMoney(f.earnest_money) : '$100.00';
-  const closing = esignFmtDate(f.closing_date);
-  const inspectionDays = f.inspection_days || '14';
-  return {
-    title: 'PURCHASE AND SALE AGREEMENT',
-    signerLabel: 'SELLER',
-    companyLabel: 'BUYER',
-    paragraphs: [
-      { t: `This Purchase and Sale Agreement ("Agreement") is made on ${today} by and between ${f.signer_name || '____________'} ("Seller") and ${company} and/or assigns ("Buyer").` },
-      { h: '1. Property.', t: `Seller agrees to sell and Buyer agrees to buy the real property located at ${f.property_address || '____________'}, together with all improvements and fixtures (the "Property").` },
-      { h: '2. Purchase Price.', t: `The total purchase price shall be ${price}, payable in full at closing.` },
-      { h: '3. Earnest Money.', t: `Within three (3) business days after the Effective Date, Buyer shall deposit earnest money of ${earnest} with the closing agent, to be credited toward the purchase price at closing.` },
-      { h: '4. Closing.', t: `Closing shall occur on or before ${closing}, at a closing agent, title company, or attorney selected by Buyer. Buyer shall pay customary closing costs of Buyer; Seller shall pay customary closing costs of Seller. Real property taxes shall be prorated as of the date of closing.` },
-      { h: '5. Inspection Period.', t: `Buyer shall have ${inspectionDays} days from the Effective Date (the "Inspection Period") to inspect the Property and review title. Buyer may terminate this Agreement for any reason by written notice before the Inspection Period expires, in which case the earnest money shall be promptly refunded to Buyer and neither party shall have further obligation.` },
-      { h: '6. Title.', t: `At closing, Seller shall convey good and marketable title to the Property by appropriate deed, free and clear of all liens and encumbrances except easements and restrictions of record.` },
-      { h: '7. Condition of Property.', t: `Buyer accepts the Property in its present "AS-IS, WHERE-IS" condition. Seller shall maintain the Property in its current condition and shall not remove any fixtures prior to closing.` },
-      { h: '8. Assignment.', t: `Buyer may assign this Agreement, in whole or in part, without Seller's consent. Upon assignment, the assignee shall assume all of Buyer's obligations under this Agreement.` },
-      { h: '9. Access.', t: `Seller grants Buyer and Buyer's partners, lenders, inspectors, and contractors reasonable access to the Property prior to closing upon reasonable notice.` },
-      { h: '10. Default.', t: `If Buyer defaults after the Inspection Period, Seller's sole and exclusive remedy shall be retention of the earnest money as liquidated damages. If Seller defaults, Buyer may elect to (a) terminate and receive a refund of the earnest money, or (b) seek specific performance of this Agreement.` },
-      { h: '11. Entire Agreement; Governing Law.', t: `This Agreement constitutes the entire agreement between the parties, supersedes all prior negotiations, and may be amended only in a writing signed by both parties. This Agreement shall be governed by the laws of the State of ${state}. This Agreement may be executed electronically, and electronic signatures shall be deemed originals for all purposes. The "Effective Date" is the date the last party signs.` },
-    ],
-  };
-}
-
-// ── PDF generation (pdf-lib) ────────────────────────────────────
-const ESIGN_PAGE = { w: 612, h: 792, margin: 54 };
-
-function esignWrapText(text, font, size, maxWidth) {
-  const words = String(text).split(/\s+/);
-  const lines = [];
-  let line = '';
-  for (const w of words) {
-    const test = line ? line + ' ' + w : w;
-    if (font.widthOfTextAtSize(test, size) > maxWidth && line) {
-      lines.push(line); line = w;
-    } else line = test;
-  }
-  if (line) lines.push(line);
-  return lines;
-}
-
-// Builds the unsigned contract PDF. Returns { bytes, sigPage, sigX, sigY }.
-async function esignBuildPdf(docType, fields, companySigner) {
-  const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
-  const content = esignContractContent(docType, fields);
-  const doc = await PDFDocument.create();
-  const font = await doc.embedFont(StandardFonts.TimesRoman);
-  const bold = await doc.embedFont(StandardFonts.TimesRomanBold);
-  const italic = await doc.embedFont(StandardFonts.TimesRomanItalic);
-  const { w, h, margin } = ESIGN_PAGE;
-  const maxW = w - margin * 2;
-  const black = rgb(0.08, 0.09, 0.11);
-
-  let page = doc.addPage([w, h]);
-  let y = h - margin;
-  const newPageIfNeeded = (needed) => {
-    if (y - needed < margin) { page = doc.addPage([w, h]); y = h - margin; }
-  };
-
-  // Title
-  for (const line of esignWrapText(content.title, bold, 14, maxW)) {
-    newPageIfNeeded(20);
-    const tw = bold.widthOfTextAtSize(line, 14);
-    page.drawText(line, { x: (w - tw) / 2, y, size: 14, font: bold, color: black });
-    y -= 20;
-  }
-  y -= 8;
-
-  // Body
-  for (const p of content.paragraphs) {
-    const text = (p.h ? p.h + ' ' : '') + p.t;
-    const lines = esignWrapText(text, font, 11, maxW);
-    newPageIfNeeded(15 * Math.min(lines.length, 3) + 8);
-    for (const line of lines) {
-      newPageIfNeeded(15);
-      if (p.h && line === lines[0]) {
-        // draw heading bold, remainder regular
-        const headW = bold.widthOfTextAtSize(p.h, 11);
-        page.drawText(p.h, { x: margin, y, size: 11, font: bold, color: black });
-        page.drawText(line.slice(p.h.length).replace(/^\s/, ' '), { x: margin + headW, y, size: 11, font, color: black });
-      } else {
-        page.drawText(line, { x: margin, y, size: 11, font, color: black });
-      }
-      y -= 15;
-    }
-    y -= 7;
-  }
-
-  // Signature blocks — keep them together on one page
-  newPageIfNeeded(190);
-  y -= 12;
-  page.drawText('IN WITNESS WHEREOF, the parties have executed this agreement.', { x: margin, y, size: 11, font, color: black });
-  y -= 40;
-
-  // Signer (seller / assignee) block — signature gets stamped above the line
-  const sigPage = doc.getPages().indexOf(page);
-  const sigX = margin;
-  const sigY = y; // signature image bottom sits on this line
-  page.drawLine({ start: { x: margin, y }, end: { x: margin + 240, y }, thickness: 0.8, color: black });
-  page.drawLine({ start: { x: margin + 280, y }, end: { x: margin + 420, y }, thickness: 0.8, color: black });
-  y -= 14;
-  page.drawText(`${content.signerLabel}: ${fields.signer_name || ''}`, { x: margin, y, size: 10, font, color: black });
-  page.drawText('Date', { x: margin + 280, y, size: 10, font, color: black });
-  y -= 46;
-
-  // Company block — typed signature applied at send time
-  const sentDate = new Date().toLocaleDateString('en-US');
-  page.drawText(companySigner, { x: margin + 6, y: y + 6, size: 15, font: italic, color: black });
-  page.drawLine({ start: { x: margin, y }, end: { x: margin + 240, y }, thickness: 0.8, color: black });
-  page.drawText(sentDate, { x: margin + 286, y: y + 6, size: 11, font, color: black });
-  page.drawLine({ start: { x: margin + 280, y }, end: { x: margin + 420, y }, thickness: 0.8, color: black });
-  y -= 14;
-  page.drawText(`${content.companyLabel}: ${esignCompanyName()}`, { x: margin, y, size: 10, font, color: black });
-  page.drawText('Date', { x: margin + 280, y, size: 10, font, color: black });
-
-  const bytes = await doc.save();
-  return { bytes: Buffer.from(bytes), sigPage, sigX, sigY };
-}
-
-// Stamps the signer's drawn signature + date onto the PDF and appends
-// a signature certificate page. Returns Buffer of the executed PDF.
-async function esignStampPdf(unsignedBytes, env, sigPngBase64) {
-  const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
-  const doc = await PDFDocument.load(unsignedBytes);
-  const font = await doc.embedFont(StandardFonts.Helvetica);
-  const bold = await doc.embedFont(StandardFonts.HelveticaBold);
-  const black = rgb(0.08, 0.09, 0.11);
-
-  // 1) stamp signature image
-  const png = await doc.embedPng(Buffer.from(sigPngBase64, 'base64'));
-  const page = doc.getPages()[env.sig_page || 0];
-  const targetH = 34;
-  const scale = targetH / png.height;
-  const targetW = Math.min(png.width * scale, 230);
-  page.drawImage(png, { x: Number(env.sig_x), y: Number(env.sig_y) + 2, width: targetW, height: targetH });
-  const signedDate = new Date().toLocaleDateString('en-US');
-  page.drawText(signedDate, { x: Number(env.sig_x) + 286, y: Number(env.sig_y) + 6, size: 11, font, color: black });
-
-  // 2) signature certificate page
-  const { w, h, margin } = ESIGN_PAGE;
-  const cert = doc.addPage([w, h]);
-  let y = h - margin;
-  cert.drawText('SIGNATURE CERTIFICATE', { x: margin, y, size: 15, font: bold, color: black });
-  y -= 14;
-  cert.drawLine({ start: { x: margin, y }, end: { x: w - margin, y }, thickness: 1, color: black });
-  y -= 24;
-  const row = (label, value) => {
-    cert.drawText(label, { x: margin, y, size: 9, font: bold, color: black });
-    const lines = esignWrapText(value || '—', font, 9, w - margin * 2 - 150);
-    for (const line of lines) {
-      cert.drawText(line, { x: margin + 150, y, size: 9, font, color: black });
-      y -= 13;
-    }
-    y -= 5;
-  };
-  row('Envelope ID', env.id);
-  row('Document', env.document_name || env.doc_type);
-  row('Status', 'Completed');
-  row('Signer', `${env.signer_name}${env.signer_email ? ' <' + env.signer_email + '>' : ''}${env.signer_phone ? ' ' + env.signer_phone : ''}`);
-  row('Company signer', env.company_signer || esignCompanySigner());
-  row('Sent', env.sent_at || '');
-  row('Viewed', env.viewed_at || '');
-  row('Signed', new Date().toISOString());
-  row('Signer IP address', env.signer_ip || '');
-  row('Signer device', env.signer_user_agent || '');
-  row('Original doc SHA-256', env.unsigned_sha256 || '');
-  row('Consent', env.consent_text || '');
-  y -= 8;
-  const foot = 'This document was signed electronically. Under the U.S. ESIGN Act (15 U.S.C. § 7001) and the Uniform Electronic Transactions Act, electronic signatures carry the same legal effect as handwritten signatures. The SHA-256 hash above uniquely identifies the document as sent; any alteration to the document changes its hash.';
-  for (const line of esignWrapText(foot, font, 8.5, w - margin * 2)) {
-    cert.drawText(line, { x: margin, y, size: 8.5, font, color: rgb(0.35, 0.36, 0.4) });
-    y -= 12;
-  }
-
-  const bytes = await doc.save();
-  return Buffer.from(bytes);
-}
-
-function esignSha256(buf) {
-  const crypto = require('crypto');
-  return crypto.createHash('sha256').update(buf).digest('hex');
-}
-function esignToken() {
-  const crypto = require('crypto');
-  return crypto.randomBytes(32).toString('hex');
-}
-function esignOrigin(event) {
-  const host = (event.headers && (event.headers.host || event.headers.Host)) || 'winwincalltoclose.netlify.app';
-  return 'https://' + host;
-}
-function esignPublicUrl(path) {
-  return `${process.env.SUPABASE_URL}/storage/v1/object/public/contracts/${path.split('/').map(encodeURIComponent).join('/')}`;
-}
-async function esignAddEvent(envId, currentEvents, type, meta) {
-  const events = Array.isArray(currentEvents) ? currentEvents.slice() : [];
-  events.push({ type, at: new Date().toISOString(), ...(meta || {}) });
-  return events;
-}
-
-// ── Public handlers (token-authenticated, bypass password gate) ─
-async function handleEsignView(event) {
-  const qs = event.queryStringParameters || {};
-  const token = qs.token || '';
-  if (!/^[a-f0-9]{64}$/.test(token)) return err('Invalid link', 400);
-  const { json: rows } = await supa(`/esign_envelopes?token=eq.${token}&limit=1`);
-  const env = rows && rows[0];
-  if (!env) return err('This signing link is invalid or has been removed.', 404);
-  if (env.status === 'voided') return err('This document has been voided by the sender.', 410);
-
-  // first open → mark viewed
-  if (env.status === 'sent') {
-    const events = await esignAddEvent(env.id, env.events, 'viewed', {
-      ip: event.headers['x-nf-client-connection-ip'] || event.headers['client-ip'] || '',
-    });
-    await supa(`/esign_envelopes?id=eq.${env.id}`, 'PATCH', {
-      status: 'viewed', viewed_at: new Date().toISOString(), events,
-    }, { Prefer: 'return=minimal' });
-  }
-
-  const content = esignContractContent(env.doc_type, { ...env.fields, signer_name: env.signer_name });
-  return ok({
-    status: env.status === 'sent' ? 'viewed' : env.status,
-    documentName: env.document_name,
-    signerName: env.signer_name,
-    companyName: esignCompanyName(),
-    title: content.title,
-    paragraphs: content.paragraphs,
-    signerLabel: content.signerLabel,
-    pdfUrl: env.status === 'signed' && env.signed_path ? esignPublicUrl(env.signed_path)
-          : (env.unsigned_path ? esignPublicUrl(env.unsigned_path) : null),
-    signedAt: env.signed_at || null,
-  });
-}
-
-async function handleEsignSubmit(event) {
-  let body = {};
-  try { body = JSON.parse(event.body || '{}'); } catch {}
-  const token = body.token || '';
-  if (!/^[a-f0-9]{64}$/.test(token)) return err('Invalid link', 400);
-  if (body.consent !== true) return err('You must agree to sign electronically.', 400);
-  const sig = String(body.signaturePng || '');
-  const m = sig.match(/^data:image\/png;base64,([A-Za-z0-9+/=]+)$/);
-  if (!m || m[1].length < 500) return err('Please draw your signature before submitting.', 400);
-  if (m[1].length > 700000) return err('Signature image too large.', 400);
-
-  const { json: rows } = await supa(`/esign_envelopes?token=eq.${token}&limit=1`);
-  const env = rows && rows[0];
-  if (!env) return err('This signing link is invalid or has been removed.', 404);
-  if (env.status === 'signed') return err('This document has already been signed.', 409);
-  if (env.status === 'voided') return err('This document has been voided by the sender.', 410);
-
-  // fetch the unsigned PDF from storage (authorized)
-  const getUrl = `${process.env.SUPABASE_URL}/storage/v1/object/contracts/${env.unsigned_path.split('/').map(encodeURIComponent).join('/')}`;
-  const pdfResp = await fetch(getUrl, { headers: { Authorization: 'Bearer ' + process.env.SUPABASE_SERVICE_ROLE_KEY } });
-  if (!pdfResp.ok) return err('Could not load the document. Please try again.', 500);
-  const unsignedBytes = Buffer.from(await pdfResp.arrayBuffer());
-
-  const ip = event.headers['x-nf-client-connection-ip'] || event.headers['client-ip'] || '';
-  const ua = event.headers['user-agent'] || '';
-  const consentText = 'I agree to use electronic records and signatures, and I intend this electronic signature to be the legal equivalent of my handwritten signature on this document.';
-  const envForStamp = { ...env, signer_ip: ip, signer_user_agent: ua, consent_text: consentText };
-
-  const signedBytes = await esignStampPdf(unsignedBytes, envForStamp, m[1]);
-  const signedSha = esignSha256(signedBytes);
-  const signedPath = env.unsigned_path.replace(/-unsigned\.pdf$/, '-signed.pdf');
-  const up = await uploadToStorage('contracts', signedPath, signedBytes.toString('base64'), 'application/pdf');
-  if (up.error) return err(up.error, 500);
-
-  const now = new Date().toISOString();
-  const events = await esignAddEvent(env.id, env.events, 'signed', { ip, ua });
-  await supa(`/esign_envelopes?id=eq.${env.id}`, 'PATCH', {
-    status: 'signed', signed_at: now, signed_path: signedPath, signed_sha256: signedSha,
-    signer_ip: ip, signer_user_agent: ua, consent_text: consentText, consented_at: now, events,
-  }, { Prefer: 'return=minimal' });
-
-  const signedUrlPublic = esignPublicUrl(signedPath);
-
-  // deliver executed copy to the signer
-  const docLabel = env.document_name || (env.doc_type === 'assignment' ? 'Assignment Agreement' : 'Purchase & Sale Agreement');
-  if (env.signer_email) {
-    const html = `<p>Hi ${env.signer_name},</p><p>Your <b>${docLabel}</b> has been fully executed. A copy is attached at the link below — please keep it for your records.</p><p><a href="${signedUrlPublic}" style="background:#111;color:#d4af37;padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:bold">📄 Download Signed Document</a></p><p>${esignCompanyName()}</p>`;
-    try { await sendViaSpacemail({ to: env.signer_email, subject: `Signed: ${docLabel}`, html }); } catch {}
-  }
-  if (env.signer_phone) {
-    try { await sendOneSms(env.signer_phone, `Your ${docLabel} is fully signed. Your copy: ${signedUrlPublic}`, env.deal_id, env.property_id); } catch {}
-  }
-
-  // notify the office
-  const notifyEmail = process.env.ESIGN_NOTIFY_EMAIL || process.env.SPACEMAIL_USER;
-  if (notifyEmail) {
-    try {
-      await sendViaSpacemail({
-        to: notifyEmail,
-        subject: `✍️ SIGNED: ${docLabel} — ${env.signer_name}`,
-        html: `<p><b>${env.signer_name}</b> just signed the <b>${docLabel}</b>.</p><p>Signed at ${now}<br>IP ${ip}</p><p><a href="${signedUrlPublic}">Download executed PDF</a></p>`,
-      });
-    } catch {}
-  }
-  if (process.env.ESIGN_NOTIFY_PHONE) {
-    try { await sendOneSms(process.env.ESIGN_NOTIFY_PHONE, `✍️ SIGNED: ${docLabel} — ${env.signer_name}. ${signedUrlPublic}`, env.deal_id, env.property_id); } catch {}
-  }
-
-  return ok({ signed: true, pdfUrl: signedUrlPublic });
-}
-
-
 exports.handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') return { statusCode: 204, headers: corsHeaders(), body: '' };
 
@@ -1164,16 +787,6 @@ exports.handler = async (event) => {
   // hitting a special key — but to keep it simple, it's behind the
   // password gate like everything else and the admin can trigger it
   // manually, plus the frontend pings it every page load.
-
-  // ─ E-sign public endpoints (seller-facing) bypass the password ─
-  // gate. They are authenticated by the 64-char secret envelope
-  // token instead — see handleEsignView / handleEsignSubmit.
-  if (action === 'esign-view') {
-    return await handleEsignView(event);
-  }
-  if (action === 'esign-submit') {
-    return await handleEsignSubmit(event);
-  }
 
   // Password gate
   const expected = process.env.ACCESS_PASSWORD;
@@ -2443,113 +2056,68 @@ exports.handler = async (event) => {
       }
 
       // ════════════════════════════════════════════════════════
-      // E-SIGNATURE — Win Win E-Sign (built-in, no third party)
+      // E-SIGNATURE — SignWell (Purchase & Sale + Assignment)
       // ════════════════════════════════════════════════════════
 
-      case 'esign-send': {
-        const docType = body.docType === 'assignment' ? 'assignment' : 'purchase_sale';
-        if (!body.signerName) return err('signerName required');
-        const email = (body.signerEmail || '').trim();
-        const phone = (body.signerPhone || '').trim();
-        let deliver = body.deliver || (email && phone ? 'both' : (phone ? 'sms' : 'email'));
-        if ((deliver === 'email' || deliver === 'both') && !email) return err('Signer email required for email delivery');
-        if ((deliver === 'sms' || deliver === 'both') && !phone) return err('Signer phone required for text delivery');
+      // NOTE: 'esign-send' is an alias the frontend uses for this same
+      // handler. Both names route here so either spelling works.
+      case 'esign-send':
+      case 'send-for-signature': {
+        if (!body.templateId)   return err('templateId required');
+        if (!body.signerEmail)  return err('signerEmail required');
+        if (!body.signerName)   return err('signerName required');
 
-        const fields = { ...(body.fields || {}), signer_name: body.signerName };
-        const companySigner = esignCompanySigner();
-        const docLabel = body.documentName ||
-          (docType === 'assignment' ? `Assignment Agreement — ${body.signerName}` : `Purchase & Sale Agreement — ${body.signerName}`);
+        const SIGNWELL_KEY = process.env.SIGNWELL_API_KEY;
+        if (!SIGNWELL_KEY) return err('SIGNWELL_API_KEY not set in Netlify env vars', 500);
 
-        // 1) build the contract PDF
-        const built = await esignBuildPdf(docType, fields, companySigner);
-        const sha = esignSha256(built.bytes);
+        const payload = {
+          template_id: body.templateId,
+          name: body.documentName || `Contract — ${body.signerName}`,
+          subject: body.subject || 'Please sign your contract',
+          message: body.message || `Hi ${body.signerName}, please review and sign the attached document.`,
+          recipients: [
+            {
+              id: '1',
+              name: body.signerName,
+              email: body.signerEmail,
+              placeholder_name: body.placeholderName || 'Signer 1',
+            },
+          ],
+          draft: false,
+          test_mode: body.testMode === true,
+        };
 
-        // 2) store it (random secret in the path = unguessable link)
-        const crypto = require('crypto');
-        const id = crypto.randomUUID();
-        const secret = crypto.randomBytes(16).toString('hex');
-        const unsignedPath = `esign/${id}-${secret}-unsigned.pdf`;
-        const up = await uploadToStorage('contracts', unsignedPath, built.bytes.toString('base64'), 'application/pdf');
-        if (up.error) return err(up.error, 500);
-
-        // 3) create the envelope
-        const token = esignToken();
-        const now = new Date().toISOString();
-        const { json: inserted } = await supa('/esign_envelopes', 'POST', [{
-          id,
-          doc_type: docType,
-          document_name: docLabel,
-          property_id: body.propertyId || null,
-          deal_id: body.dealId || null,
-          buyer_id: body.buyerId || null,
-          signer_name: body.signerName,
-          signer_email: email || null,
-          signer_phone: phone || null,
-          fields,
-          token,
-          unsigned_path: unsignedPath,
-          unsigned_sha256: sha,
-          sig_page: built.sigPage,
-          sig_x: built.sigX,
-          sig_y: built.sigY,
-          status: 'sent',
-          sent_via: deliver,
-          sent_at: now,
-          company_signer: companySigner,
-          events: [{ type: 'sent', at: now, via: deliver }],
-        }]);
-        if (!inserted || !inserted[0]) return err('Could not create envelope (did you run esign-migration.sql?)', 500);
-
-        // 4) deliver the signing link
-        const signUrl = `${esignOrigin(event)}/sign.html?t=${token}`;
-        const results = {};
-        if (deliver === 'email' || deliver === 'both') {
-          const html = `<p>Hi ${body.signerName},</p>
-            <p>${esignCompanyName()} has sent you a <b>${docLabel.replace(/ — .*/, '')}</b> to review and sign electronically.</p>
-            <p><a href="${signUrl}" style="background:#111;color:#d4af37;padding:14px 28px;border-radius:6px;text-decoration:none;font-weight:bold">✍️ Review &amp; Sign</a></p>
-            <p style="color:#6b7280;font-size:13px">Or copy this link into your browser:<br>${signUrl}</p>`;
-          const r = await sendViaSpacemail({ to: email, subject: body.subject || `Please sign: ${docLabel.replace(/ — .*/, '')}`, html });
-          results.email = r.error ? { error: r.error } : { sent: true };
-        }
-        if (deliver === 'sms' || deliver === 'both') {
-          const r = await sendOneSms(phone, `${esignCompanyName()}: please review & sign your ${docType === 'assignment' ? 'Assignment Agreement' : 'Purchase & Sale Agreement'}: ${signUrl}`, body.dealId, body.propertyId);
-          results.sms = r && r.error ? { error: r.error } : (r && r.skipped ? { skipped: r.reason } : { sent: true });
+        // Pre-fill template fields (e.g. purchase price, address, closing date)
+        if (body.fields && typeof body.fields === 'object') {
+          payload.template_fields = Object.entries(body.fields).map(([api_id, value]) => ({ api_id, value }));
         }
 
-        const emailFailed = results.email && results.email.error;
-        const smsFailed = results.sms && (results.sms.error || results.sms.skipped);
-        if ((deliver === 'email' && emailFailed) || (deliver === 'sms' && smsFailed) || (deliver === 'both' && emailFailed && smsFailed)) {
-          return err('Envelope created but delivery failed: ' + JSON.stringify(results) + ' — you can copy the link manually: ' + signUrl, 502);
-        }
-        return ok({ envelopeId: id, signUrl, delivery: results });
-      }
-
-      case 'esign-list': {
-        let q = '/esign_envelopes?select=id,doc_type,document_name,property_id,deal_id,buyer_id,signer_name,signer_email,signer_phone,status,sent_via,sent_at,viewed_at,signed_at,signed_path,unsigned_path,token&order=created_at.desc';
-        if (body.propertyId) q += `&property_id=eq.${encodeURIComponent(body.propertyId)}`;
-        else if (body.dealId) q += `&deal_id=eq.${encodeURIComponent(body.dealId)}`;
-        else q += '&limit=50';
-        const { json: rows } = await supa(q);
-        const origin = esignOrigin(event);
-        return ok({
-          envelopes: (rows || []).map(r => ({
-            ...r,
-            token: undefined,
-            signUrl: r.status === 'signed' || r.status === 'voided' ? null : `${origin}/sign.html?t=${r.token}`,
-            pdfUrl: r.signed_path ? esignPublicUrl(r.signed_path) : (r.unsigned_path ? esignPublicUrl(r.unsigned_path) : null),
-          })),
+        const resp = await fetch('https://www.signwell.com/api/v1/document_templates/' + encodeURIComponent(body.templateId) + '/documents', {
+          method: 'POST',
+          headers: {
+            'X-Api-Key': SIGNWELL_KEY,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(payload),
         });
+        const json = await resp.json();
+        if (!resp.ok) return err(json.message || json.error || 'SignWell request failed', resp.status);
+
+        return ok({ document: json });
       }
 
-      case 'esign-void': {
-        if (!body.envelopeId) return err('envelopeId required');
-        const { json: rows } = await supa(`/esign_envelopes?id=eq.${encodeURIComponent(body.envelopeId)}&limit=1`);
-        const env2 = rows && rows[0];
-        if (!env2) return err('Envelope not found', 404);
-        if (env2.status === 'signed') return err('Cannot void a signed document', 409);
-        const events = await esignAddEvent(env2.id, env2.events, 'voided');
-        await supa(`/esign_envelopes?id=eq.${env2.id}`, 'PATCH', { status: 'voided', events }, { Prefer: 'return=minimal' });
-        return ok({ voided: true });
+      // 'esign-status' alias kept for the same reason as above.
+      case 'esign-status':
+      case 'check-signature-status': {
+        if (!body.documentId) return err('documentId required');
+        const SIGNWELL_KEY = process.env.SIGNWELL_API_KEY;
+        if (!SIGNWELL_KEY) return err('SIGNWELL_API_KEY not set in Netlify env vars', 500);
+        const resp = await fetch('https://www.signwell.com/api/v1/documents/' + encodeURIComponent(body.documentId), {
+          headers: { 'X-Api-Key': SIGNWELL_KEY },
+        });
+        const json = await resp.json();
+        if (!resp.ok) return err(json.message || 'Status check failed', resp.status);
+        return ok({ status: json.status, document: json });
       }
 
       // ════════════════════════════════════════════════════════
@@ -2559,7 +2127,8 @@ exports.handler = async (event) => {
       case 'get-comparables': {
         if (!body.address) return err('address required');
 
-        const PROPERTYREACH_KEY = process.env.PROPERTYREACH_API_KEY || 'test_Od67q03Md5PMJ1xykK9UBhKZbEQe3YlfTk6';
+        const PROPERTYREACH_KEY = process.env.PROPERTYREACH_API_KEY;
+        if (!PROPERTYREACH_KEY) return err('PROPERTYREACH_API_KEY not set in Netlify env vars', 500);
 
         // Parse "123 Main St, Springfield, NY 11735" into street/city/state/zip.
         // PropertyReach's target object accepts these as separate fields.
@@ -2625,7 +2194,8 @@ exports.handler = async (event) => {
 
       case 'search-realtors': {
         if (!body.zipCode) return err('zipCode required');
-        const APIFY_TOKEN = process.env.APIFY_API_TOKEN || 'apify_api_BzvtdXSFSTGcWCqj6yK784P6cDJkEJ1zJKzm';
+        const APIFY_TOKEN = process.env.APIFY_API_TOKEN;
+        if (!APIFY_TOKEN) return err('APIFY_API_TOKEN not set in Netlify env vars', 500);
         const page = parseInt(body.page || 0); // shuffle page offset
 
         const runResp = await fetch(
