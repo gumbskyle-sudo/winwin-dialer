@@ -1889,7 +1889,7 @@ function renderPage(){
             ✍️ Send Purchase &amp; Sale Agreement (e-sign) <span class="toggle-arrow">▼</span>
           </button>
           <div class="pre-call-content hide">
-            <div class="esign-form" data-esign-pid="${escapeHtml(p.id)}" data-esign-template="PURCHASE_SALE_TEMPLATE_ID">
+            <div class="esign-form" data-esign-pid="${escapeHtml(p.id)}">
               <div class="iq-field">
                 <label>Seller Name</label>
                 <input type="text" data-esign-name value="${escapeHtml(p.owners||'')}">
@@ -1899,14 +1899,32 @@ function renderPage(){
                 <input type="email" data-esign-email placeholder="Seller's email" value="${escapeHtml(p.email||lead.email||'')}">
               </div>
               <div class="iq-field">
+                <label>Seller Cell (for text delivery)</label>
+                <input type="tel" data-esign-phone placeholder="+1..." value="${escapeHtml((p.phones&&p.phones[0]&&p.phones[0].e164)||'')}">
+              </div>
+              <div class="iq-field">
                 <label>Purchase Price</label>
-                <input type="text" data-esign-price placeholder="$0">
+                <input type="text" data-esign-price placeholder="$0" inputmode="decimal">
+              </div>
+              <div class="iq-field">
+                <label>Earnest Money (optional — defaults to $100)</label>
+                <input type="text" data-esign-earnest placeholder="$100" inputmode="decimal">
               </div>
               <div class="iq-field">
                 <label>Closing Date</label>
                 <input type="date" data-esign-closing>
               </div>
+              <div class="iq-field">
+                <label>Send Via</label>
+                <select data-esign-deliver>
+                  <option value="both">📧 Email + 📱 Text</option>
+                  <option value="sms">📱 Text only</option>
+                  <option value="email">📧 Email only</option>
+                </select>
+              </div>
               <button class="iq-save-btn" data-sendesign="${escapeHtml(p.id)}" style="background:#0891b2">✍️ Send for Signature</button>
+              <button class="iq-save-btn" data-esign-status="${escapeHtml(p.id)}" style="background:#374151;margin-top:6px">🔄 Check Signature Status</button>
+              <div data-esign-statusbox style="font-size:12px;margin-top:8px"></div>
             </div>
           </div>
         </div>
@@ -4694,24 +4712,32 @@ document.addEventListener('click', async e => {
   const buyerId = btn.dataset.sendAssignment;
   const buyer = allBuyers.find(b => b.id === buyerId);
   if(!buyer){ toast('Buyer not found','err'); return; }
-  if(!buyer.email){ toast('This buyer has no email on file','err'); return; }
-  const ASSIGNMENT_TEMPLATE_ID = 'ASSIGNMENT_TEMPLATE_ID'; // ← replace with real SignWell template ID
-  if(ASSIGNMENT_TEMPLATE_ID === 'ASSIGNMENT_TEMPLATE_ID'){
-    toast('No SignWell template ID configured yet — add it in the code once your template is ready','err');
-    return;
-  }
+  if(!buyer.email && !buyer.phone){ toast('This buyer has no email or phone on file','err'); return; }
   const d = openDealData?.deal;
+  const fee = prompt('Assignment fee (e.g. 10000):', d?.assignment_fee || '');
+  if(fee === null) return;
+  if(!fee.trim()){ toast('Assignment fee is required','err'); return; }
+  const deposit = prompt('Non-refundable deposit due on signing (blank = full fee):', '');
+  if(deposit === null) return;
   btn.disabled = true; btn.textContent = 'Sending…';
   try {
-    await api('send-for-signature', {method:'POST', body:{
-      templateId: ASSIGNMENT_TEMPLATE_ID,
+    await api('esign-send', {method:'POST', body:{
+      docType: 'assignment',
+      dealId: d?.id || null,
+      propertyId: d?.property_id || null,
+      buyerId,
       signerName: buyer.name,
-      signerEmail: buyer.email,
-      documentName: `Assignment Agreement — ${buyer.name}`,
-      subject: 'Please sign your Assignment Agreement',
-      fields: { property_address: d?.property_address || '', assignment_fee: d?.assignment_fee || '' },
+      signerEmail: buyer.email || '',
+      signerPhone: buyer.phone || '',
+      deliver: buyer.email && buyer.phone ? 'both' : (buyer.email ? 'email' : 'sms'),
+      fields: {
+        property_address: d?.property_address || '',
+        assignment_fee: fee,
+        deposit: deposit.trim(),
+        original_contract_date: d?.contract_date || '',
+      },
     }});
-    toast('Assignment agreement sent ✓ — ' + buyer.email,'ok');
+    toast('Assignment agreement sent ✓','ok');
     btn.textContent = 'Sent ✓';
     setTimeout(()=>{ btn.disabled=false; btn.textContent='✍️ Send Assignment Agreement'; }, 3000);
   } catch(err) {
@@ -4725,34 +4751,94 @@ document.addEventListener('click', async e => {
   const btn = e.target.closest('[data-sendesign]');
   if(!btn) return;
   const form = btn.closest('.esign-form');
-  const templateId = form.dataset.esignTemplate;
-  const name  = form.querySelector('[data-esign-name]').value.trim();
-  const email = form.querySelector('[data-esign-email]').value.trim();
-  const price = form.querySelector('[data-esign-price]').value.trim();
+  const pid = form.dataset.esignPid;
+  const prop = properties.find(x => x.id === pid);
+  const name    = form.querySelector('[data-esign-name]').value.trim();
+  const email   = form.querySelector('[data-esign-email]').value.trim();
+  const phone   = form.querySelector('[data-esign-phone]').value.trim();
+  const price   = form.querySelector('[data-esign-price]').value.trim();
+  const earnest = form.querySelector('[data-esign-earnest]').value.trim();
   const closing = form.querySelector('[data-esign-closing]').value.trim();
-  if(!email){ toast("Please enter the seller's email",'err'); return; }
+  const deliver = form.querySelector('[data-esign-deliver]').value;
   if(!name){ toast("Please enter the seller's name",'err'); return; }
-  if(!templateId || templateId === 'PURCHASE_SALE_TEMPLATE_ID'){
-    toast('No SignWell template ID configured yet — add it in the code once your template is ready','err');
-    return;
-  }
+  if((deliver==='email'||deliver==='both') && !email){ toast("Please enter the seller's email (or switch to Text only)",'err'); return; }
+  if((deliver==='sms'||deliver==='both') && !phone){ toast("Please enter the seller's cell (or switch to Email only)",'err'); return; }
+  if(!price){ toast('Please enter the purchase price','err'); return; }
   btn.disabled = true; btn.textContent = 'Sending…';
   try {
-    await api('send-for-signature', {method:'POST', body:{
-      templateId,
+    const res = await api('esign-send', {method:'POST', body:{
+      docType: 'purchase_sale',
+      propertyId: pid,
       signerName: name,
       signerEmail: email,
-      documentName: `Purchase & Sale Agreement — ${name}`,
-      subject: 'Please sign your Purchase & Sale Agreement',
-      fields: { purchase_price: price, closing_date: closing },
+      signerPhone: phone,
+      deliver,
+      fields: {
+        property_address: prop?.property_address || '',
+        purchase_price: price,
+        earnest_money: earnest,
+        closing_date: closing,
+      },
     }});
-    toast('Sent for signature ✓ — ' + email,'ok');
+    toast('Sent for signature ✓','ok');
     btn.textContent = 'Sent ✓';
+    loadEsignStatus(form);
     setTimeout(()=>{ btn.disabled=false; btn.textContent='✍️ Send for Signature'; }, 3000);
   } catch(err) {
     toast('Send failed: '+err.message,'err');
     btn.disabled=false; btn.textContent='✍️ Send for Signature';
   }
+});
+
+// ── E-sign status on a lead card ─────────────────────────────────
+async function loadEsignStatus(form){
+  const box = form.querySelector('[data-esign-statusbox]');
+  if(!box) return;
+  box.textContent = 'Loading…';
+  try {
+    const res = await api('esign-list', {method:'POST', body:{ propertyId: form.dataset.esignPid }});
+    const envs = res.envelopes || [];
+    if(!envs.length){ box.innerHTML = '<span style="color:#9ca3af">No documents sent yet.</span>'; return; }
+    const icon = s => s==='signed'?'✅':s==='viewed'?'👀':s==='voided'?'🚫':'📤';
+    box.innerHTML = envs.map(v => `
+      <div style="padding:7px 0;border-bottom:1px solid #f3f4f6">
+        <div style="display:flex;justify-content:space-between;gap:8px">
+          <span>${icon(v.status)} <b>${escapeHtml(v.status.toUpperCase())}</b> — ${escapeHtml(v.document_name||v.doc_type)}</span>
+        </div>
+        <div style="color:#9ca3af;font-size:11px;margin-top:2px">
+          Sent ${v.sent_at ? new Date(v.sent_at).toLocaleString() : ''}${v.signed_at ? ' · Signed ' + new Date(v.signed_at).toLocaleString() : ''}
+        </div>
+        <div style="margin-top:4px;display:flex;gap:10px;flex-wrap:wrap">
+          ${v.pdfUrl ? `<a href="${v.pdfUrl}" target="_blank" rel="noopener" style="font-size:11px">📄 ${v.status==='signed'?'Signed PDF':'PDF'}</a>` : ''}
+          ${v.signUrl ? `<a href="#" data-copy-signlink="${v.signUrl}" style="font-size:11px">🔗 Copy signing link</a>` : ''}
+          ${v.status!=='signed'&&v.status!=='voided' ? `<a href="#" data-esign-void="${v.id}" data-esign-pid2="${escapeHtml(form.dataset.esignPid)}" style="font-size:11px;color:#dc2626">Void</a>` : ''}
+        </div>
+      </div>`).join('');
+  } catch(e){ box.innerHTML = '<span style="color:#dc2626">Could not load status: '+escapeHtml(e.message)+'</span>'; }
+}
+document.addEventListener('click', e => {
+  const btn = e.target.closest('[data-esign-status]');
+  if(!btn) return;
+  loadEsignStatus(btn.closest('.esign-form'));
+});
+document.addEventListener('click', async e => {
+  const a = e.target.closest('[data-copy-signlink]');
+  if(!a) return;
+  e.preventDefault();
+  try { await navigator.clipboard.writeText(a.dataset.copySignlink); toast('Signing link copied ✓','ok'); }
+  catch { prompt('Copy this signing link:', a.dataset.copySignlink); }
+});
+document.addEventListener('click', async e => {
+  const a = e.target.closest('[data-esign-void]');
+  if(!a) return;
+  e.preventDefault();
+  if(!confirm('Void this document? The signing link will stop working.')) return;
+  try {
+    await api('esign-void', {method:'POST', body:{ envelopeId: a.dataset.esignVoid }});
+    toast('Document voided','ok');
+    const form = a.closest('.esign-form');
+    if(form) loadEsignStatus(form);
+  } catch(err){ toast('Void failed: '+err.message,'err'); }
 });
 
 // ── Show comparables panel on a lead card ────────────────────────
