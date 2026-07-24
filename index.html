@@ -654,16 +654,6 @@ body.view-realtors #realtorsView{display:block}
   font-size:14px;padding:2px 5px;flex-shrink:0;
 }
 .rec-link .del-btn:hover{color:#b91c1c}
-.rec-upload-btn{
-  display:inline-flex;align-items:center;gap:5px;
-  background:#faf3e0;color:#96751A;border:1px dashed #d9b563;
-  padding:6px 11px;border-radius:6px;font-size:11px;font-weight:600;
-  cursor:pointer;margin-top:6px;font-family:inherit;
-}
-.rec-upload-btn:hover{background:#f5e6c0;border-style:solid}
-.rec-upload-btn input[type=file]{display:none}
-.rec-uploading{font-size:11px;color:#6b7280;margin-top:6px;font-style:italic}
-
 /* ── Quick Qualifier modal (pops on hot/warm tag) ───────────── */
 #qualMod{
   position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:90;
@@ -1851,44 +1841,19 @@ function renderPage(){
         </div>
         <div class="pre-call-section">
           <button class="pre-call-toggle" onclick="this.nextElementSibling.classList.toggle('hide');this.classList.toggle('open')">
-            📄 Send Contract <span class="toggle-arrow">▼</span>
+            📄 Send Documents <span class="toggle-arrow">▼</span>
           </button>
-          <div class="pre-call-content hide">
-            <div class="contract-send-form" data-contract-pid="${escapeHtml(p.id)}">
-              <div class="iq-field">
-                <label>To Email</label>
-                <input type="email" data-contract-email placeholder="Seller's email" value="${escapeHtml(p.email||lead.email||'')}">
-              </div>
-              <div class="iq-field">
-                <label>Subject</label>
-                <input type="text" data-contract-subject value="Contract for ${escapeHtml(p.property_address||'your property')}">
-              </div>
-              <div class="iq-field">
-                <label>Message</label>
-                <textarea data-contract-message rows="4">Hi ${escapeHtml(p.owners||'there')},\n\nPlease find your contract via the link below.\n\nLet me know if you have any questions.\n\nBest regards</textarea>
-              </div>
-              <div class="iq-field">
-                <label>Contract PDF</label>
-                <div style="display:flex;gap:8px;align-items:center">
-                  <select data-contract-select style="flex:1;padding:8px 10px;border:1.5px solid #d1d5db;border-radius:7px;font-size:14px">
-                    <option value="">— pick an uploaded contract —</option>
-                  </select>
-                  <label style="background:#f3f4f6;border:1.5px solid #d1d5db;border-radius:7px;padding:8px 10px;font-size:13px;cursor:pointer;white-space:nowrap">
-                    + Upload new
-                    <input type="file" accept=".pdf,.doc,.docx" data-contract-file style="display:none">
-                  </label>
-                </div>
-                <div data-contract-filename style="font-size:11px;color:#6b7280;margin-top:4px"></div>
-              </div>
-              <button class="iq-save-btn" data-sendcontract="${escapeHtml(p.id)}" style="background:#7c3aed">📤 Send Contract</button>
+          <div class="pre-call-content hide doc-send" data-doc-pid="${escapeHtml(p.id)}">
+            <div class="iq-field">
+              <label>Which document?</label>
+              <select data-doc-type style="width:100%;padding:9px 10px;border:1.5px solid #d1d5db;border-radius:7px;font-size:14px;background:#fff">
+                <option value="ps">✍️ Purchase &amp; Sale Agreement (e-sign)</option>
+                <option value="assignment">✍️ Assignment Agreement (e-sign)</option>
+                <option value="pdf">📎 Other document (email a PDF)</option>
+              </select>
             </div>
-          </div>
-        </div>
-        <div class="pre-call-section">
-          <button class="pre-call-toggle" onclick="this.nextElementSibling.classList.toggle('hide');this.classList.toggle('open')">
-            ✍️ Send Purchase &amp; Sale Agreement (e-sign) <span class="toggle-arrow">▼</span>
-          </button>
-          <div class="pre-call-content hide">
+
+            <div data-doc-pane="ps">
             <div class="esign-form" data-esign-pid="${escapeHtml(p.id)}">
               <div class="iq-field">
                 <label>Seller Name</label>
@@ -1917,13 +1882,82 @@ function renderPage(){
               <div class="iq-field">
                 <label>Send Via</label>
                 <select data-esign-deliver>
-                  <option value="both">📧 Email + 📱 Text</option>
-                  <option value="sms">📱 Text only</option>
                   <option value="email">📧 Email only</option>
+                  <option value="sms">📱 Text only</option>
+                  <option value="both">📧 Email + 📱 Text</option>
                 </select>
               </div>
               <button class="iq-save-btn" data-sendesign="${escapeHtml(p.id)}" style="background:#0891b2">✍️ Send for Signature</button>
-              <button class="iq-save-btn" data-esign-status="${escapeHtml(p.id)}" style="background:#374151;margin-top:6px">🔄 Check Signature Status</button>
+            </div>
+            </div>
+
+            <div data-doc-pane="assignment" class="hide">
+            <div class="assign-form" data-assign-pid="${escapeHtml(p.id)}">
+              <div class="iq-field">
+                <label>Buyer Name</label>
+                <input type="text" data-assign-name placeholder="Buyer / assignee name">
+              </div>
+              <div class="iq-field">
+                <label>Buyer Email</label>
+                <input type="email" data-assign-email placeholder="Buyer's email">
+              </div>
+              <div class="iq-field">
+                <label>Buyer Cell (for text delivery)</label>
+                <input type="tel" data-assign-phone placeholder="+1...">
+              </div>
+              <div class="iq-field">
+                <label>Assignment Fee</label>
+                <input type="text" data-assign-fee placeholder="$0" inputmode="decimal">
+              </div>
+              <div class="iq-field">
+                <label>Non-refundable Deposit (blank = full fee)</label>
+                <input type="text" data-assign-deposit placeholder="" inputmode="decimal">
+              </div>
+              <div class="iq-field">
+                <label>Send Via</label>
+                <select data-assign-deliver>
+                  <option value="email">📧 Email only</option>
+                  <option value="sms">📱 Text only</option>
+                  <option value="both">📧 Email + 📱 Text</option>
+                </select>
+              </div>
+              <button class="iq-save-btn" data-sendassign-card="${escapeHtml(p.id)}" style="background:#7c3aed">✍️ Send for Signature</button>
+            </div>
+            </div>
+
+            <div data-doc-pane="pdf" class="hide">
+            <div class="contract-send-form" data-contract-pid="${escapeHtml(p.id)}">
+              <div class="iq-field">
+                <label>To Email</label>
+                <input type="email" data-contract-email placeholder="Seller's email" value="${escapeHtml(p.email||lead.email||'')}">
+              </div>
+              <div class="iq-field">
+                <label>Subject</label>
+                <input type="text" data-contract-subject value="Contract for ${escapeHtml(p.property_address||'your property')}">
+              </div>
+              <div class="iq-field">
+                <label>Message</label>
+                <textarea data-contract-message rows="4">Hi ${escapeHtml(p.owners||'there')},\n\nPlease find your contract via the link below.\n\nLet me know if you have any questions.\n\nBest regards</textarea>
+              </div>
+              <div class="iq-field">
+                <label>Document PDF</label>
+                <div style="display:flex;gap:8px;align-items:center">
+                  <select data-contract-select style="flex:1;padding:8px 10px;border:1.5px solid #d1d5db;border-radius:7px;font-size:14px">
+                    <option value="">— pick an uploaded document —</option>
+                  </select>
+                  <label style="background:#f3f4f6;border:1.5px solid #d1d5db;border-radius:7px;padding:8px 10px;font-size:13px;cursor:pointer;white-space:nowrap">
+                    + Upload new
+                    <input type="file" accept=".pdf,.doc,.docx" data-contract-file style="display:none">
+                  </label>
+                </div>
+                <div data-contract-filename style="font-size:11px;color:#6b7280;margin-top:4px"></div>
+              </div>
+              <button class="iq-save-btn" data-sendcontract="${escapeHtml(p.id)}" style="background:#7c3aed">📤 Send Document</button>
+            </div>
+            </div>
+
+            <div class="esign-status-wrap" data-esign-pid="${escapeHtml(p.id)}" style="margin-top:10px;border-top:1px solid #f3f4f6;padding-top:8px">
+              <button class="iq-save-btn" data-esign-status="${escapeHtml(p.id)}" style="background:#374151">🔄 Check Signature Status</button>
               <div data-esign-statusbox style="font-size:12px;margin-top:8px"></div>
             </div>
           </div>
@@ -4782,7 +4816,8 @@ document.addEventListener('click', async e => {
     }});
     toast('Sent for signature ✓','ok');
     btn.textContent = 'Sent ✓';
-    loadEsignStatus(form);
+    const wrap = form.closest('.doc-send')?.querySelector('.esign-status-wrap');
+    if(wrap) loadEsignStatus(wrap);
     setTimeout(()=>{ btn.disabled=false; btn.textContent='✍️ Send for Signature'; }, 3000);
   } catch(err) {
     toast('Send failed: '+err.message,'err');
@@ -4819,7 +4854,57 @@ async function loadEsignStatus(form){
 document.addEventListener('click', e => {
   const btn = e.target.closest('[data-esign-status]');
   if(!btn) return;
-  loadEsignStatus(btn.closest('.esign-form'));
+  loadEsignStatus(btn.closest('.esign-status-wrap'));
+});
+// ── Send Documents: dropdown pane switcher ───────────────────────
+document.addEventListener('change', e => {
+  const sel = e.target.closest('[data-doc-type]');
+  if(!sel) return;
+  const wrap = sel.closest('.doc-send');
+  wrap.querySelectorAll('[data-doc-pane]').forEach(p =>
+    p.classList.toggle('hide', p.dataset.docPane !== sel.value));
+});
+// ── Send Assignment Agreement from the lead card ─────────────────
+document.addEventListener('click', async e => {
+  const btn = e.target.closest('[data-sendassign-card]');
+  if(!btn) return;
+  const form = btn.closest('.assign-form');
+  const pid = form.dataset.assignPid;
+  const prop = properties.find(x => x.id === pid);
+  const name    = form.querySelector('[data-assign-name]').value.trim();
+  const email   = form.querySelector('[data-assign-email]').value.trim();
+  const phone   = form.querySelector('[data-assign-phone]').value.trim();
+  const fee     = form.querySelector('[data-assign-fee]').value.trim();
+  const deposit = form.querySelector('[data-assign-deposit]').value.trim();
+  const deliver = form.querySelector('[data-assign-deliver]').value;
+  if(!name){ toast("Please enter the buyer's name",'err'); return; }
+  if((deliver==='email'||deliver==='both') && !email){ toast("Please enter the buyer's email (or switch to Text only)",'err'); return; }
+  if((deliver==='sms'||deliver==='both') && !phone){ toast("Please enter the buyer's cell (or switch to Email only)",'err'); return; }
+  if(!fee){ toast('Please enter the assignment fee','err'); return; }
+  btn.disabled = true; btn.textContent = 'Sending…';
+  try {
+    await api('esign-send', {method:'POST', body:{
+      docType: 'assignment',
+      propertyId: pid,
+      signerName: name,
+      signerEmail: email,
+      signerPhone: phone,
+      deliver,
+      fields: {
+        property_address: prop?.property_address || '',
+        assignment_fee: fee,
+        deposit,
+      },
+    }});
+    toast('Assignment agreement sent ✓','ok');
+    btn.textContent = 'Sent ✓';
+    const wrap = form.closest('.doc-send')?.querySelector('.esign-status-wrap');
+    if(wrap) loadEsignStatus(wrap);
+    setTimeout(()=>{ btn.disabled=false; btn.textContent='✍️ Send for Signature'; }, 3000);
+  } catch(err) {
+    toast('Send failed: '+err.message,'err');
+    btn.disabled=false; btn.textContent='✍️ Send for Signature';
+  }
 });
 document.addEventListener('click', async e => {
   const a = e.target.closest('[data-copy-signlink]');
@@ -4836,8 +4921,8 @@ document.addEventListener('click', async e => {
   try {
     await api('esign-void', {method:'POST', body:{ envelopeId: a.dataset.esignVoid }});
     toast('Document voided','ok');
-    const form = a.closest('.esign-form');
-    if(form) loadEsignStatus(form);
+    const wrap = a.closest('.esign-status-wrap');
+    if(wrap) loadEsignStatus(wrap);
   } catch(err){ toast('Void failed: '+err.message,'err'); }
 });
 
@@ -5549,46 +5634,8 @@ function renderRecordings(recordings, propertyId, container){
     });
     container.appendChild(list);
   }
-  // Upload button (always shown)
-  const lbl = el(`<label class="rec-upload-btn">
-    🎙 Upload recording (max 25 MB · auto-deletes in 30 days)
-    <input type="file" accept="audio/*" data-rec-upload="${escapeHtml(propertyId)}">
-  </label>`);
-  lbl.querySelector('input').addEventListener('change', e => handleRecordingUpload(e, propertyId, container.id));
-  container.appendChild(lbl);
-}
-
-async function handleRecordingUpload(e, propertyId, containerId){
-  const file = e.target.files[0];
-  if(!file) return;
-  if(file.size > 25 * 1024 * 1024){ toast('File too large — 25 MB max','err'); return; }
-  const container = document.getElementById(containerId);
-  const status = el('<div class="rec-uploading">Uploading…</div>');
-  container.appendChild(status);
-  try {
-    const reader = new FileReader();
-    const dataB64 = await new Promise((resolve, reject) => {
-      reader.onload = () => {
-        const result = reader.result;
-        const idx = result.indexOf(',');
-        resolve(result.slice(idx+1));
-      };
-      reader.onerror = reject;
-      reader.readAsDataURL(file);
-    });
-    await api('upload-recording', {method:'POST', body:{
-      propertyId,
-      dataBase64: dataB64,
-      filename: file.name,
-      mimeType: file.type,
-      sizeBytes: file.size,
-      uploadedByProfileId: activeProfileId,
-    }});
-    toast('Uploaded','ok');
-    loadRecordings(propertyId, containerId);
-  } catch(err){
-    toast('Upload failed: '+err.message,'err');
-    status.remove();
+  if(!recordings.length){
+    container.appendChild(el('<div style="font-size:11px;color:#9ca3af">No recordings.</div>'));
   }
 }
 
