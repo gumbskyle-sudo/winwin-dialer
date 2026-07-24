@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Review &amp; Sign</title>
+<meta name="robots" content="noindex,nofollow">
+<style>
+  :root { --gold:#d4af37; --black:#0d0d0f; --ink:#16181d; --muted:#6b7280; --line:#e5e7eb; }
+  * { box-sizing:border-box; margin:0; padding:0; -webkit-tap-highlight-color:transparent; }
+  body { font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; background:#f4f4f5; color:var(--ink); }
+  .topbar { background:var(--black); color:#fff; padding:14px 18px; display:flex; align-items:center; gap:10px; position:sticky; top:0; z-index:5; }
+  .topbar .logo { width:30px; height:30px; border-radius:7px; background:var(--gold); color:var(--black); display:flex; align-items:center; justify-content:center; font-weight:800; font-size:15px; }
+  .topbar .co { font-weight:700; font-size:15px; letter-spacing:.2px; }
+  .topbar .sub { font-size:11px; color:#c9cbd1; }
+  .wrap { max-width:760px; margin:0 auto; padding:16px 14px 60px; }
+  .card { background:#fff; border:1px solid var(--line); border-radius:14px; padding:20px 18px; margin-bottom:14px; box-shadow:0 1px 3px rgba(0,0,0,.05); }
+  h1 { font-size:17px; text-align:center; margin-bottom:4px; letter-spacing:.3px; }
+  .docmeta { text-align:center; font-size:12px; color:var(--muted); margin-bottom:16px; }
+  .contract p { font-size:14px; line-height:1.65; margin-bottom:13px; }
+  .contract b.h { font-weight:700; }
+  .pdflink { display:inline-block; font-size:13px; color:#0f6bd7; text-decoration:none; margin-top:6px; }
+  .consent { display:flex; gap:10px; align-items:flex-start; font-size:13px; line-height:1.5; color:#374151; }
+  .consent input { width:20px; height:20px; margin-top:1px; flex:none; accent-color:var(--black); }
+  .siglabel { font-size:13px; font-weight:600; margin-bottom:8px; display:flex; justify-content:space-between; align-items:center; }
+  .siglabel button { background:none; border:none; color:#0f6bd7; font-size:13px; font-weight:600; padding:4px 6px; }
+  .sigbox { border:2px dashed #c9cbd1; border-radius:10px; background:#fafafa; position:relative; touch-action:none; }
+  .sigbox canvas { width:100%; height:170px; display:block; border-radius:10px; }
+  .sigbox .hint { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:#b6bac2; font-size:14px; pointer-events:none; }
+  .sigline { position:absolute; left:8%; right:8%; bottom:38px; border-bottom:1.5px solid #d7dae0; pointer-events:none; }
+  .btn { width:100%; padding:16px; border:none; border-radius:12px; background:var(--black); color:var(--gold); font-size:16px; font-weight:800; letter-spacing:.3px; margin-top:14px; }
+  .btn:disabled { opacity:.45; }
+  .status { text-align:center; padding:44px 18px; }
+  .status .big { font-size:44px; margin-bottom:10px; }
+  .status h2 { font-size:18px; margin-bottom:8px; }
+  .status p { font-size:14px; color:var(--muted); line-height:1.6; }
+  .dl { display:inline-block; margin-top:18px; background:var(--black); color:var(--gold); padding:13px 26px; border-radius:10px; text-decoration:none; font-weight:700; font-size:14px; }
+  .err { background:#fef2f2; border:1px solid #fecaca; color:#b91c1c; padding:12px 14px; border-radius:10px; font-size:13px; margin-top:12px; display:none; }
+  .legal { font-size:11px; color:#9ca3af; text-align:center; margin-top:16px; line-height:1.5; }
+</style>
+</head>
+<body>
+  <div class="topbar">
+    <div class="logo">W</div>
+    <div>
+      <div class="co" id="coName">Win Win Property Solutions NY</div>
+      <div class="sub">Secure electronic signature</div>
+    </div>
+  </div>
+
+  <div class="wrap">
+    <div id="loading" class="status"><div class="big">⏳</div><p>Loading your document…</p></div>
+
+    <div id="docArea" style="display:none">
+      <div class="card">
+        <h1 id="docTitle"></h1>
+        <div class="docmeta" id="docMeta"></div>
+        <div class="contract" id="contractBody"></div>
+        <a class="pdflink" id="pdfLink" href="#" target="_blank" rel="noopener">📄 View / download the exact PDF you are signing</a>
+      </div>
+
+      <div class="card">
+        <label class="consent">
+          <input type="checkbox" id="consentChk">
+          <span>I agree to use electronic records and signatures, and I intend this electronic signature to be the legal equivalent of my handwritten signature on this document. I have reviewed the document above.</span>
+        </label>
+      </div>
+
+      <div class="card">
+        <div class="siglabel"><span id="sigWho">Sign here</span><button type="button" id="clearBtn">Clear</button></div>
+        <div class="sigbox">
+          <canvas id="pad"></canvas>
+          <div class="sigline"></div>
+          <div class="hint" id="padHint">✍️ Draw your signature with your finger</div>
+        </div>
+        <button class="btn" id="signBtn" disabled>Agree &amp; Sign</button>
+        <div class="err" id="errBox"></div>
+      </div>
+
+      <div class="legal">Your signature, the date and time, your IP address, and your device information are recorded to create a tamper-evident audit trail under the U.S. ESIGN Act and UETA.</div>
+    </div>
+
+    <div id="doneArea" class="status card" style="display:none">
+      <div class="big">✅</div>
+      <h2>Document signed!</h2>
+      <p>You're all set. A copy of the fully executed document has been sent to you — you can also download it right now.</p>
+      <a class="dl" id="doneLink" href="#" target="_blank" rel="noopener">📄 Download Signed PDF</a>
+    </div>
+
+    <div id="deadArea" class="status card" style="display:none">
+      <div class="big">🚫</div>
+      <h2 id="deadTitle">Link not available</h2>
+      <p id="deadMsg"></p>
+    </div>
+  </div>
+
+<script>
+const API = '/api';
+const token = new URLSearchParams(location.search).get('t') || '';
+const $ = id => document.getElementById(id);
+
+let hasInk = false;
+
+function showDead(title, msg){ $('loading').style.display='none'; $('docArea').style.display='none'; $('deadArea').style.display='block'; $('deadTitle').textContent=title; $('deadMsg').textContent=msg; }
+function showErr(msg){ const b=$('errBox'); b.textContent=msg; b.style.display='block'; }
+
+async function load(){
+  if(!/^[a-f0-9]{64}$/.test(token)) return showDead('Invalid link','This signing link is not valid. Please use the exact link that was sent to you.');
+  let r, j;
+  try { r = await fetch(API + '?action=esign-view&token=' + token); j = await r.json(); }
+  catch(e){ return showDead('Connection problem','Could not load the document. Please check your connection and refresh.'); }
+  if(!r.ok) return showDead('Link not available', j.error || 'This link is no longer available.');
+
+  $('coName').textContent = j.companyName || 'Win Win Property Solutions NY';
+  $('docTitle').textContent = j.title;
+  $('docMeta').textContent = 'Prepared for ' + j.signerName;
+  $('sigWho').textContent = 'Sign here — ' + j.signerName;
+  const body = $('contractBody');
+  body.innerHTML = '';
+  (j.paragraphs||[]).forEach(p => {
+    const el = document.createElement('p');
+    if(p.h){ const b=document.createElement('b'); b.className='h'; b.textContent=p.h+' '; el.appendChild(b); }
+    el.appendChild(document.createTextNode(p.t));
+    body.appendChild(el);
+  });
+  if(j.pdfUrl) $('pdfLink').href = j.pdfUrl; else $('pdfLink').style.display='none';
+
+  $('loading').style.display='none';
+  if(j.status === 'signed'){
+    $('doneArea').style.display='block';
+    $('doneLink').href = j.pdfUrl || '#';
+    return;
+  }
+  $('docArea').style.display='block';
+  initPad();
+}
+
+// ── Signature pad (no libraries — pointer events on canvas) ─────
+let ctx, canvas, drawing=false, last=null;
+function initPad(){
+  canvas = $('pad');
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * dpr; canvas.height = 170 * dpr;
+  ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  ctx.lineWidth = 2.4; ctx.lineCap='round'; ctx.lineJoin='round'; ctx.strokeStyle='#111318';
+
+  const pos = e => { const r = canvas.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
+  canvas.addEventListener('pointerdown', e => { e.preventDefault(); canvas.setPointerCapture(e.pointerId); drawing=true; last=pos(e); });
+  canvas.addEventListener('pointermove', e => {
+    if(!drawing) return; e.preventDefault();
+    const p = pos(e);
+    ctx.beginPath(); ctx.moveTo(last.x,last.y); ctx.lineTo(p.x,p.y); ctx.stroke();
+    last = p;
+    if(!hasInk){ hasInk=true; $('padHint').style.display='none'; updateBtn(); }
+  });
+  const stop = () => { drawing=false; last=null; };
+  canvas.addEventListener('pointerup', stop);
+  canvas.addEventListener('pointercancel', stop);
+
+  $('clearBtn').addEventListener('click', () => {
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    hasInk=false; $('padHint').style.display='flex'; updateBtn();
+  });
+  $('consentChk').addEventListener('change', updateBtn);
+  $('signBtn').addEventListener('click', submit);
+}
+function updateBtn(){ $('signBtn').disabled = !(hasInk && $('consentChk').checked); }
+
+async function submit(){
+  const btn = $('signBtn');
+  btn.disabled = true; btn.textContent = 'Signing…'; $('errBox').style.display='none';
+  try {
+    const r = await fetch(API + '?action=esign-submit', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ token, consent:true, signaturePng: canvas.toDataURL('image/png') }),
+    });
+    const j = await r.json();
+    if(!r.ok) throw new Error(j.error || 'Signing failed');
+    $('docArea').style.display='none';
+    $('doneArea').style.display='block';
+    $('doneLink').href = j.pdfUrl || '#';
+    window.scrollTo({top:0, behavior:'smooth'});
+  } catch(e){
+    showErr(e.message || 'Something went wrong — please try again.');
+    btn.disabled=false; btn.textContent='Agree & Sign';
+  }
+}
+
+load();
+</script>
+</body>
+</html>
