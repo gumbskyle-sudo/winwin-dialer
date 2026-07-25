@@ -574,6 +574,35 @@ body.view-buyers header .callerid{display:none}
 #realtorsView{display:none}
 body.view-realtors #cards,body.view-realtors #pageNav,body.view-realtors #pipelineView,body.view-realtors #inboxView,body.view-realtors #buyersView,body.view-realtors .search-bar-wrap,body.view-realtors .filter-row{display:none}
 body.view-realtors #realtorsView{display:block}
+/* ── Driving for Dollars ─────────────────────────────────────── */
+#d4dView{display:none}
+body.view-d4d #cards,body.view-d4d #pageNav,body.view-d4d #pipelineView,body.view-d4d #inboxView,body.view-d4d #buyersView,body.view-d4d #realtorsView,body.view-d4d #mailView,body.view-d4d .search-bar-wrap,body.view-d4d .filter-row{display:none}
+body.view-d4d #d4dView{display:block}
+body.view-d4d header .callerid{display:none}
+body:not(.view-d4d) .d4d-sheet{display:none !important}
+#d4dMap{height:calc(100vh - 250px);min-height:320px;border-radius:12px;border:1px solid #e5e0d5;z-index:0;background:#eee}
+.d4d-bar{display:flex;gap:8px;align-items:center;padding:8px 0;flex-wrap:wrap}
+.d4d-bar button{font-size:13px;padding:7px 12px}
+.d4d-count{font-size:12px;color:#6b7280;margin-left:auto}
+.d4d-hint{font-size:12px;color:#6b7280;padding:6px 2px}
+.d4d-follow.on,.d4d-sat.on,.d4d-mode.on{background:#96751A;color:#fff;border-color:#96751A}
+.d4d-sheet{position:fixed;left:0;right:0;bottom:0;background:#fff;border-top:2px solid #96751A;border-radius:16px 16px 0 0;box-shadow:0 -8px 30px rgba(0,0,0,.25);padding:14px 16px calc(14px + env(safe-area-inset-bottom));z-index:1200;max-height:78vh;overflow-y:auto}
+.d4d-sheet h3{margin:0 0 8px;font-size:15px}
+.d4d-sheet input[type=text]{width:100%;border:1px solid #d6d0c4;border-radius:8px;padding:9px}
+.d4d-sheet textarea{width:100%;min-height:52px;border:1px solid #d6d0c4;border-radius:8px;padding:8px;margin-top:8px}
+.d4d-tagrow{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
+.d4d-tag{border:1px solid #d6d0c4;background:#faf8f2;border-radius:999px;padding:6px 12px;font-size:12px;cursor:pointer;user-select:none}
+.d4d-tag.on{background:#96751A;border-color:#96751A;color:#fff}
+.d4d-sheet .row{display:flex;gap:8px;margin-top:10px}
+.d4d-sheet .row button{flex:1}
+.d4d-card{background:#fff;border:1px solid #e5e0d5;border-radius:12px;padding:12px;margin-bottom:10px;display:flex;gap:10px}
+.d4d-card img{width:64px;height:64px;object-fit:cover;border-radius:8px;flex-shrink:0}
+.d4d-card .meta{flex:1;min-width:0}
+.d4d-card .addr{font-weight:600;font-size:14px}
+.d4d-card .tags{font-size:12px;color:#96751A;margin:2px 0}
+.d4d-card .st{font-size:11px;color:#6b7280}
+.d4d-card .acts{display:flex;flex-direction:column;gap:6px;flex-shrink:0}
+.d4d-card .acts button{font-size:12px;padding:5px 9px}
 
 .buyers-toolbar{display:flex;align-items:center;justify-content:space-between;margin:0 0 12px;flex-wrap:wrap;gap:8px}
 .buyers-actions{display:flex;gap:6px;align-items:center}
@@ -874,6 +903,7 @@ body.view-mail header .callerid{display:none}
     <button class="view-tab" data-view="mail">📧 Mail <span id="mailBadge" style="font-size:10px;opacity:.6"></span></button>
     <button class="view-tab" data-view="buyers">💰 Buyers <span id="buyersBadge" style="font-size:10px;opacity:.6"></span></button>
     <button class="view-tab" data-view="realtors">🏡 Realtors</button>
+    <button class="view-tab" data-view="d4d">🚗 D4D <span id="d4dBadge" style="font-size:10px;opacity:.6"></span></button>
   </div>
   <div class="header-controls">
     <label><input type="checkbox" id="hideCalled">&nbsp;Hide called</label>
@@ -1105,6 +1135,44 @@ body.view-mail header .callerid{display:none}
         <tbody></tbody>
       </table></div>
       <div class="csv-export"><button class="btn-ghost" id="exportCsv">⬇ Export CSV</button></div>
+    </div>
+  </div>
+</div>
+
+<div id="d4dView">
+  <div class="d4d-bar">
+    <button class="btn-primary d4d-mode on" id="d4dModeMap">🗺 Map</button>
+    <button class="btn-ghost d4d-mode" id="d4dModeList">📋 List</button>
+    <button class="btn-ghost d4d-follow" id="d4dFollowBtn">📍 Follow</button>
+    <button class="btn-ghost d4d-sat" id="d4dSatBtn">🛰 Satellite</button>
+    <button class="btn-ghost" id="d4dPinHereBtn">➕ Pin here</button>
+    <span class="d4d-count" id="d4dCount"></span>
+  </div>
+  <div id="d4dMapWrap">
+    <div id="d4dMap"></div>
+    <div class="d4d-hint">Tap any house on the map to add it to your Driving-for-Dollars list.</div>
+  </div>
+  <div id="d4dListWrap" class="hide"></div>
+
+  <div class="d4d-sheet hide" id="d4dSheet">
+    <h3 id="d4dSheetTitle">Add to D4D list</h3>
+    <input type="text" id="d4dAddr" placeholder="Address" autocomplete="off">
+    <div class="d4d-tagrow" id="d4dTagRow"></div>
+    <textarea id="d4dNotes" placeholder="Notes — condition, why it caught your eye…"></textarea>
+    <div class="row">
+      <button class="btn-ghost" id="d4dPhotoBtn">📷 Add photo</button>
+    </div>
+    <input type="file" id="d4dPhotoInput" accept="image/*" capture="environment" class="hide">
+    <div id="d4dPhotoPreviewWrap" class="hide" style="margin-top:8px">
+      <img id="d4dPhotoPreview" style="max-width:100%;max-height:140px;border-radius:8px" alt="Photo preview">
+    </div>
+    <div class="row" id="d4dEditActs">
+      <button class="btn-ghost hide" id="d4dSheetDelete" style="color:#b91c1c">🗑 Delete</button>
+      <button class="btn-ghost hide" id="d4dSheetToDialer">➡ Send to Dialer</button>
+    </div>
+    <div class="row">
+      <button class="btn-ghost" id="d4dSheetCancel">Cancel</button>
+      <button class="btn-primary" id="d4dSheetSave">💾 Save</button>
     </div>
   </div>
 </div>
@@ -3423,11 +3491,14 @@ function switchView(v){
   document.body.classList.toggle('view-mail', v === 'mail');
   document.body.classList.toggle('view-buyers', v === 'buyers');
   document.body.classList.toggle('view-realtors', v === 'realtors');
+  document.body.classList.toggle('view-d4d', v === 'd4d');
   document.querySelectorAll('.view-tab').forEach(t => t.classList.toggle('active', t.dataset.view === v));
   if(v === 'pipeline') loadPipeline();
   if(v === 'inbox') loadInbox();
   if(v === 'mail') loadMail();
   if(v === 'buyers') loadBuyers();
+  if(v === 'd4d') openD4D();
+  if(v !== 'd4d') stopD4DFollow();
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -5684,6 +5755,340 @@ async function boot(){
     $('buyersBadge').textContent = ct ? '· '+ct : '';
   }).catch(()=>{});
 }
+
+// ═══════════════════════════════════════════════════════════════
+// DRIVING FOR DOLLARS
+// ═══════════════════════════════════════════════════════════════
+const D4D_TAGS = ['Vacant','Boarded up','Tall grass','Roof damage','Mail piling','Broken windows','Trash / debris','Fire damage','Code violation','For sale by owner'];
+let d4dMap = null, d4dLeads = [], d4dMarkers = {}, d4dLoaded = false;
+let d4dBaseStreet = null, d4dBaseSat = null, d4dSatOn = false;
+let d4dWatchId = null, d4dFollowOn = false, d4dMeMarker = null;
+let d4dDraft = null, d4dTempMarker = null;
+
+function loadLeaflet(){
+  return new Promise((res, rej) => {
+    if(window.L) return res();
+    const css = document.createElement('link');
+    css.rel = 'stylesheet';
+    css.href = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css';
+    document.head.appendChild(css);
+    const s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js';
+    s.onload = () => res();
+    s.onerror = () => rej(new Error('Map failed to load — check your connection'));
+    document.head.appendChild(s);
+  });
+}
+
+async function openD4D(){
+  try { await loadLeaflet(); }
+  catch(e){ toast(e.message, 'err'); return; }
+  if(!d4dMap) initD4DMap();
+  setTimeout(() => { if(d4dMap) d4dMap.invalidateSize(); }, 80);
+  refreshD4D();
+}
+
+function initD4DMap(){
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem('d4d_center') || 'null'); } catch {}
+  d4dMap = L.map('d4dMap', { zoomControl: true }).setView(saved || [40.6576, -73.5832], saved ? 17 : 13);
+  d4dBaseStreet = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19, attribution: '© OpenStreetMap contributors'
+  });
+  d4dBaseSat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+    maxZoom: 19, attribution: 'Imagery © Esri'
+  });
+  d4dBaseStreet.addTo(d4dMap);
+  d4dMap.on('click', e => onD4DMapTap(e.latlng.lat, e.latlng.lng));
+  d4dMap.on('moveend', () => {
+    const c = d4dMap.getCenter();
+    localStorage.setItem('d4d_center', JSON.stringify([c.lat, c.lng]));
+  });
+  d4dMap.on('dragstart', () => { if(d4dFollowOn) setD4DFollow(false); });
+  if(!saved && navigator.geolocation){
+    navigator.geolocation.getCurrentPosition(
+      p => d4dMap.setView([p.coords.latitude, p.coords.longitude], 17),
+      () => {}, { enableHighAccuracy: true, timeout: 8000 });
+  }
+}
+
+async function refreshD4D(){
+  try {
+    const j = await api('d4d-list');
+    d4dLeads = j.leads || [];
+    d4dLoaded = true;
+    renderD4DMarkers();
+    renderD4DList();
+    const fresh = d4dLeads.filter(l => l.status === 'new').length;
+    $('d4dCount').textContent = d4dLeads.length ? (d4dLeads.length + ' pins · ' + fresh + ' new') : '';
+    $('d4dBadge').textContent = fresh ? '· ' + fresh : '';
+  } catch(e){ toast('D4D load failed: ' + e.message, 'err'); }
+}
+
+function d4dStatusColor(st){
+  if(st === 'in_dialer') return '#15803d';
+  if(st === 'skip_traced') return '#1d4ed8';
+  return '#96751A';
+}
+function d4dStatusLabel(st){
+  if(st === 'in_dialer') return 'In Dialer';
+  if(st === 'skip_traced') return 'Skip traced';
+  return 'New';
+}
+
+function renderD4DMarkers(){
+  if(!d4dMap) return;
+  Object.values(d4dMarkers).forEach(m => d4dMap.removeLayer(m));
+  d4dMarkers = {};
+  d4dLeads.forEach(l => {
+    if(l.lat == null || l.lng == null) return;
+    const m = L.circleMarker([l.lat, l.lng], {
+      radius: 9, weight: 2, color: '#fff',
+      fillColor: d4dStatusColor(l.status), fillOpacity: 0.95,
+    }).addTo(d4dMap);
+    m.on('click', ev => { L.DomEvent.stopPropagation(ev); openD4DSheet(l); });
+    d4dMarkers[l.id] = m;
+  });
+}
+
+function renderD4DList(){
+  const w = $('d4dListWrap');
+  if(!d4dLeads.length){
+    w.innerHTML = '<div class="empty">No D4D leads yet. Switch to the map and tap a house to add your first one.</div>';
+    return;
+  }
+  w.innerHTML = d4dLeads.map(l => `
+    <div class="d4d-card" data-d4d="${escapeHtml(l.id)}">
+      ${l.photo_url ? '<img src="' + escapeHtml(l.photo_url) + '" alt="">' : ''}
+      <div class="meta">
+        <div class="addr">${escapeHtml(l.address || '(no address)')}</div>
+        ${l.tags ? '<div class="tags">' + escapeHtml(l.tags) + '</div>' : ''}
+        ${l.notes ? '<div class="st">' + escapeHtml(l.notes) + '</div>' : ''}
+        <div class="st" style="color:${d4dStatusColor(l.status)}">● ${d4dStatusLabel(l.status)} · ${new Date(l.created_at).toLocaleDateString()}</div>
+      </div>
+      <div class="acts">
+        <button class="btn-ghost" data-d4dact="open">✏️ Open</button>
+        ${l.lat != null ? '<button class="btn-ghost" data-d4dact="map">🗺 Map</button>' : ''}
+        ${l.status !== 'in_dialer' ? '<button class="btn-ghost" data-d4dact="dialer">➡ Dialer</button>' : ''}
+      </div>
+    </div>`).join('');
+}
+
+$('d4dListWrap').addEventListener('click', e => {
+  const btn = e.target.closest('[data-d4dact]');
+  if(!btn) return;
+  const card = e.target.closest('[data-d4d]');
+  const lead = d4dLeads.find(l => String(l.id) === card.dataset.d4d);
+  if(!lead) return;
+  const act = btn.dataset.d4dact;
+  if(act === 'open') openD4DSheet(lead);
+  if(act === 'map'){ d4dShowMode('map'); d4dMap.setView([lead.lat, lead.lng], 18); }
+  if(act === 'dialer') d4dSendToDialer(lead.id, btn);
+});
+
+// ── Map / List mode ────────────────────────────────────────────
+function d4dShowMode(mode){
+  const mapOn = mode === 'map';
+  $('d4dMapWrap').classList.toggle('hide', !mapOn);
+  $('d4dListWrap').classList.toggle('hide', mapOn);
+  $('d4dModeMap').classList.toggle('on', mapOn);
+  $('d4dModeMap').classList.toggle('btn-primary', mapOn);
+  $('d4dModeMap').classList.toggle('btn-ghost', !mapOn);
+  $('d4dModeList').classList.toggle('on', !mapOn);
+  $('d4dModeList').classList.toggle('btn-primary', !mapOn);
+  $('d4dModeList').classList.toggle('btn-ghost', mapOn);
+  if(mapOn) setTimeout(() => { if(d4dMap) d4dMap.invalidateSize(); }, 80);
+}
+$('d4dModeMap').addEventListener('click', () => d4dShowMode('map'));
+$('d4dModeList').addEventListener('click', () => d4dShowMode('list'));
+
+// ── Satellite toggle ───────────────────────────────────────────
+$('d4dSatBtn').addEventListener('click', () => {
+  if(!d4dMap) return;
+  d4dSatOn = !d4dSatOn;
+  $('d4dSatBtn').classList.toggle('on', d4dSatOn);
+  if(d4dSatOn){ d4dMap.removeLayer(d4dBaseStreet); d4dBaseSat.addTo(d4dMap); }
+  else { d4dMap.removeLayer(d4dBaseSat); d4dBaseStreet.addTo(d4dMap); }
+});
+
+// ── GPS follow ─────────────────────────────────────────────────
+function setD4DFollow(on){
+  d4dFollowOn = on;
+  $('d4dFollowBtn').classList.toggle('on', on);
+  if(on){
+    if(!navigator.geolocation){ toast('Location not available on this device', 'err'); d4dFollowOn = false; $('d4dFollowBtn').classList.remove('on'); return; }
+    d4dWatchId = navigator.geolocation.watchPosition(p => {
+      const ll = [p.coords.latitude, p.coords.longitude];
+      if(!d4dMeMarker){
+        d4dMeMarker = L.circleMarker(ll, { radius: 7, weight: 2, color: '#fff', fillColor: '#2563eb', fillOpacity: 1 }).addTo(d4dMap);
+      } else d4dMeMarker.setLatLng(ll);
+      if(d4dFollowOn) d4dMap.panTo(ll);
+    }, err => {
+      toast('Location error: ' + err.message, 'err');
+      setD4DFollow(false);
+    }, { enableHighAccuracy: true, maximumAge: 3000, timeout: 15000 });
+  } else stopD4DFollow(true);
+}
+function stopD4DFollow(keepMarker){
+  d4dFollowOn = false;
+  const b = $('d4dFollowBtn'); if(b) b.classList.remove('on');
+  if(d4dWatchId != null){ navigator.geolocation.clearWatch(d4dWatchId); d4dWatchId = null; }
+  if(!keepMarker && d4dMeMarker && d4dMap){ d4dMap.removeLayer(d4dMeMarker); d4dMeMarker = null; }
+}
+$('d4dFollowBtn').addEventListener('click', () => setD4DFollow(!d4dFollowOn));
+
+$('d4dPinHereBtn').addEventListener('click', () => {
+  if(!navigator.geolocation){ toast('Location not available', 'err'); return; }
+  navigator.geolocation.getCurrentPosition(
+    p => { d4dMap.setView([p.coords.latitude, p.coords.longitude], 18); onD4DMapTap(p.coords.latitude, p.coords.longitude); },
+    err => toast('Location error: ' + err.message, 'err'),
+    { enableHighAccuracy: true, timeout: 10000 });
+});
+
+// ── Reverse geocoding (OpenStreetMap Nominatim, free) ──────────
+async function d4dReverseGeocode(lat, lng){
+  const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`);
+  if(!r.ok) throw new Error('Address lookup failed');
+  const j = await r.json();
+  const a = j.address || {};
+  const line1 = [a.house_number, a.road].filter(Boolean).join(' ');
+  const cityish = a.city || a.town || a.village || a.hamlet || a.suburb || '';
+  const tail = [a.state, a.postcode].filter(Boolean).join(' ');
+  return [line1, cityish, tail].filter(Boolean).join(', ') || (j.display_name || '');
+}
+
+// ── Add / edit sheet ───────────────────────────────────────────
+function d4dRenderTagRow(selected){
+  const sel = new Set(selected);
+  $('d4dTagRow').innerHTML = D4D_TAGS.map(t =>
+    `<span class="d4d-tag${sel.has(t) ? ' on' : ''}" data-tag="${escapeHtml(t)}">${escapeHtml(t)}</span>`).join('');
+}
+$('d4dTagRow').addEventListener('click', e => {
+  const chip = e.target.closest('.d4d-tag');
+  if(chip) chip.classList.toggle('on');
+});
+
+async function onD4DMapTap(lat, lng){
+  d4dDraft = { id: null, lat, lng, photoBase64: '' };
+  if(d4dTempMarker) d4dMap.removeLayer(d4dTempMarker);
+  d4dTempMarker = L.circleMarker([lat, lng], { radius: 9, weight: 2, color: '#fff', fillColor: '#dc2626', fillOpacity: .95 }).addTo(d4dMap);
+  $('d4dSheetTitle').textContent = 'Add to D4D list';
+  $('d4dAddr').value = 'Looking up address…';
+  $('d4dNotes').value = '';
+  d4dRenderTagRow([]);
+  d4dClearPhoto();
+  $('d4dSheetDelete').classList.add('hide');
+  $('d4dSheetToDialer').classList.add('hide');
+  $('d4dSheet').classList.remove('hide');
+  try {
+    const addr = await d4dReverseGeocode(lat, lng);
+    if(d4dDraft && d4dDraft.lat === lat) $('d4dAddr').value = addr;
+  } catch { $('d4dAddr').value = ''; toast('Could not find the address — type it in', 'err'); }
+}
+
+function openD4DSheet(lead){
+  d4dDraft = { id: lead.id, lat: lead.lat, lng: lead.lng, photoBase64: '' };
+  $('d4dSheetTitle').textContent = 'Edit D4D lead';
+  $('d4dAddr').value = lead.address || '';
+  $('d4dNotes').value = lead.notes || '';
+  d4dRenderTagRow((lead.tags || '').split(',').map(s => s.trim()).filter(Boolean));
+  d4dClearPhoto();
+  if(lead.photo_url){
+    $('d4dPhotoPreview').src = lead.photo_url;
+    $('d4dPhotoPreviewWrap').classList.remove('hide');
+  }
+  $('d4dSheetDelete').classList.remove('hide');
+  $('d4dSheetToDialer').classList.toggle('hide', lead.status === 'in_dialer');
+  $('d4dSheet').classList.remove('hide');
+}
+
+function closeD4DSheet(){
+  $('d4dSheet').classList.add('hide');
+  d4dDraft = null;
+  if(d4dTempMarker && d4dMap){ d4dMap.removeLayer(d4dTempMarker); d4dTempMarker = null; }
+}
+$('d4dSheetCancel').addEventListener('click', closeD4DSheet);
+
+// Photo: capture, downscale to ~1280px JPEG, keep as base64
+function d4dClearPhoto(){
+  $('d4dPhotoInput').value = '';
+  $('d4dPhotoPreviewWrap').classList.add('hide');
+  $('d4dPhotoPreview').src = '';
+}
+$('d4dPhotoBtn').addEventListener('click', () => $('d4dPhotoInput').click());
+$('d4dPhotoInput').addEventListener('change', () => {
+  const f = $('d4dPhotoInput').files[0];
+  if(!f || !d4dDraft) return;
+  const img = new Image();
+  img.onload = () => {
+    const MAX = 1280;
+    const scale = Math.min(1, MAX / Math.max(img.width, img.height));
+    const cv = document.createElement('canvas');
+    cv.width = Math.round(img.width * scale);
+    cv.height = Math.round(img.height * scale);
+    cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+    const dataUrl = cv.toDataURL('image/jpeg', 0.8);
+    d4dDraft.photoBase64 = dataUrl.split(',')[1] || '';
+    $('d4dPhotoPreview').src = dataUrl;
+    $('d4dPhotoPreviewWrap').classList.remove('hide');
+    URL.revokeObjectURL(img.src);
+  };
+  img.src = URL.createObjectURL(f);
+});
+
+$('d4dSheetSave').addEventListener('click', async () => {
+  if(!d4dDraft) return;
+  const address = $('d4dAddr').value.trim();
+  if(address === 'Looking up address…'){ toast('Still looking up the address — one sec', 'err'); return; }
+  const tags = Array.from($('d4dTagRow').querySelectorAll('.d4d-tag.on')).map(c => c.dataset.tag).join(', ');
+  const notes = $('d4dNotes').value.trim();
+  const btn = $('d4dSheetSave');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  try {
+    if(d4dDraft.id){
+      await api('d4d-update', { method: 'POST', body: { id: d4dDraft.id, address, tags, notes, ...(d4dDraft.photoBase64 ? { photoBase64: d4dDraft.photoBase64 } : {}) } });
+    } else {
+      await api('d4d-add', { method: 'POST', body: { address, lat: d4dDraft.lat, lng: d4dDraft.lng, tags, notes, createdBy: activeProfileId, ...(d4dDraft.photoBase64 ? { photoBase64: d4dDraft.photoBase64 } : {}) } });
+    }
+    toast('Saved to D4D list ✅');
+    closeD4DSheet();
+    refreshD4D();
+  } catch(e){ toast('Save failed: ' + e.message, 'err'); }
+  btn.disabled = false; btn.textContent = '💾 Save';
+});
+
+$('d4dSheetDelete').addEventListener('click', async () => {
+  if(!d4dDraft || !d4dDraft.id) return;
+  if(!confirm('Delete this D4D lead?')) return;
+  try {
+    await api('d4d-delete', { method: 'POST', body: { id: d4dDraft.id } });
+    toast('Deleted');
+    closeD4DSheet();
+    refreshD4D();
+  } catch(e){ toast('Delete failed: ' + e.message, 'err'); }
+});
+
+$('d4dSheetToDialer').addEventListener('click', () => {
+  if(d4dDraft && d4dDraft.id) d4dSendToDialer(d4dDraft.id, $('d4dSheetToDialer'));
+});
+
+async function d4dSendToDialer(id, btn){
+  if(btn){ btn.disabled = true; btn.textContent = 'Sending…'; }
+  try {
+    const j = await api('d4d-to-dialer', { method: 'POST', body: { id } });
+    toast(j.already ? 'Already in the Dialer' : 'Added to the Dialer ✅');
+    closeD4DSheet();
+    refreshD4D();
+    loadProperties().catch(() => {});
+  } catch(e){ toast('Failed: ' + e.message, 'err'); }
+  if(btn){ btn.disabled = false; btn.textContent = '➡ Send to Dialer'; }
+}
+
+// Show new-lead count on the tab at boot
+api('d4d-list').then(j => {
+  const fresh = (j.leads || []).filter(l => l.status === 'new').length;
+  $('d4dBadge').textContent = fresh ? '· ' + fresh : '';
+}).catch(() => {});
 
 // Start
 if(password){ showApp(); boot(); }
