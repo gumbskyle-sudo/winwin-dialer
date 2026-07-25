@@ -1065,6 +1065,117 @@ exports.handler = async (event) => {
       }
 
       // ════════════════════════════════════════════════════════
+      // DRIVING FOR DOLLARS
+      // ════════════════════════════════════════════════════════
+
+      // List all D4D leads (optionally ?status=new|skip_traced|in_dialer)
+      case 'd4d-list': {
+        let path = `/d4d_leads?select=*&order=created_at.desc&limit=50000`;
+        if (qs.status) path += `&status=eq.${encodeURIComponent(qs.status)}`;
+        const { json } = await supa(path);
+        const base = supaUrl() + '/storage/v1/object/public/d4d-photos/';
+        const out = (json || []).map(r => ({
+          ...r,
+          photo_url: r.photo_path ? base + encodeURIComponent(r.photo_path) : '',
+        }));
+        return ok({ leads: out });
+      }
+
+      // Add a D4D lead. Body: {address, lat, lng, tags, notes, createdBy, photoBase64?}
+      case 'd4d-add': {
+        if (!body.address && !(body.lat != null && body.lng != null)) {
+          return err('address or lat/lng required');
+        }
+        const cbRaw = (body.createdBy != null && body.createdBy !== '') ? parseInt(body.createdBy, 10) : null;
+        const row = {
+          address: String(body.address || '').trim(),
+          lat: body.lat != null ? Number(body.lat) : null,
+          lng: body.lng != null ? Number(body.lng) : null,
+          tags: String(body.tags || '').trim(),
+          notes: String(body.notes || '').trim(),
+          status: 'new',
+          created_by: Number.isFinite(cbRaw) ? cbRaw : null,
+        };
+        const { json } = await supa('/d4d_leads', 'POST', [row]);
+        const saved = Array.isArray(json) ? json[0] : json;
+        if (body.photoBase64 && saved && saved.id) {
+          const photoPath = saved.id + '.jpg';
+          const up = await uploadToStorage('d4d-photos', photoPath, body.photoBase64, 'image/jpeg');
+          if (up.ok) {
+            await supa(`/d4d_leads?id=eq.${encodeURIComponent(saved.id)}`, 'PATCH', { photo_path: photoPath });
+            saved.photo_path = photoPath;
+          }
+        }
+        return ok({ lead: saved });
+      }
+
+      // Edit a D4D lead. Body: {id, address?, tags?, notes?, status?, photoBase64?}
+      case 'd4d-update': {
+        if (!body.id) return err('id required');
+        const patch = {};
+        if ('address' in body) patch.address = String(body.address || '').trim();
+        if ('tags'    in body) patch.tags    = String(body.tags || '').trim();
+        if ('notes'   in body) patch.notes   = String(body.notes || '').trim();
+        if ('status'  in body) patch.status  = String(body.status || 'new');
+        if (Object.keys(patch).length) {
+          await supa(`/d4d_leads?id=eq.${encodeURIComponent(body.id)}`, 'PATCH', patch);
+        }
+        if (body.photoBase64) {
+          const photoPath = body.id + '.jpg';
+          const up = await uploadToStorage('d4d-photos', photoPath, body.photoBase64, 'image/jpeg');
+          if (up.ok) await supa(`/d4d_leads?id=eq.${encodeURIComponent(body.id)}`, 'PATCH', { photo_path: photoPath });
+        }
+        return ok({ ok: true });
+      }
+
+      // Delete a D4D lead (and its photo). Body: {id}
+      case 'd4d-delete': {
+        if (!body.id) return err('id required');
+        const { json: rows } = await supa(`/d4d_leads?id=eq.${encodeURIComponent(body.id)}&select=photo_path`);
+        const pp = rows && rows[0] && rows[0].photo_path;
+        if (pp) { try { await deleteFromStorage('d4d-photos', [pp]); } catch {} }
+        await supa(`/d4d_leads?id=eq.${encodeURIComponent(body.id)}`, 'DELETE');
+        return ok({ ok: true });
+      }
+
+      // Push a D4D lead into the dialer as a property. Body: {id}
+      case 'd4d-to-dialer': {
+        if (!body.id) return err('id required');
+        const { json: rows } = await supa(`/d4d_leads?id=eq.${encodeURIComponent(body.id)}&select=*`);
+        const d = rows && rows[0];
+        if (!d) return err('D4D lead not found', 404);
+        if (d.property_id) return ok({ propertyId: d.property_id, already: true });
+        if (!d.address) return err('This lead has no address yet — add one first');
+
+        const propId = 'd4d-' + d.id;
+        const prop = {
+          id: propId,
+          owners: '',
+          owner_last_name: '',
+          property_address: d.address,
+          // Mail to the property itself until skip tracing fills the real
+          // mailing address — lets the postcard feature work right away.
+          mailing_address: d.address,
+          email: '',
+        };
+        await supa('/properties?on_conflict=id', 'POST', [prop], { Prefer: 'resolution=merge-duplicates,return=minimal' });
+
+        const noteBits = [];
+        if (d.tags)  noteBits.push('D4D: ' + d.tags);
+        if (d.notes) noteBits.push(d.notes);
+        if (noteBits.length) {
+          await supa('/leads?on_conflict=property_id', 'POST', [{
+            property_id: propId,
+            notes: noteBits.join(' — '),
+            updated_at: new Date().toISOString(),
+          }], { Prefer: 'resolution=merge-duplicates,return=minimal' });
+        }
+
+        await supa(`/d4d_leads?id=eq.${encodeURIComponent(d.id)}`, 'PATCH', { status: 'in_dialer', property_id: propId });
+        return ok({ propertyId: propId });
+      }
+
+      // ════════════════════════════════════════════════════════
       // TWILIO — NUMBERS
       // ════════════════════════════════════════════════════════
 
@@ -2059,16 +2170,12 @@ exports.handler = async (event) => {
       // E-SIGNATURE — SignWell (Purchase & Sale + Assignment)
       // ════════════════════════════════════════════════════════
 
-      // NOTE: 'esign-send' is an alias the frontend uses for this same
-      // handler. Both names route here so either spelling works.
-      case 'esign-send':
       case 'send-for-signature': {
         if (!body.templateId)   return err('templateId required');
         if (!body.signerEmail)  return err('signerEmail required');
         if (!body.signerName)   return err('signerName required');
 
-        const SIGNWELL_KEY = process.env.SIGNWELL_API_KEY;
-        if (!SIGNWELL_KEY) return err('SIGNWELL_API_KEY not set in Netlify env vars', 500);
+        const SIGNWELL_KEY = process.env.SIGNWELL_API_KEY || 'YWNjZXNzOjhjOTYxY2I3NDlhMmIzNjAxOTI0ZTVlM2QwY2IzNTA4';
 
         const payload = {
           template_id: body.templateId,
@@ -2106,12 +2213,9 @@ exports.handler = async (event) => {
         return ok({ document: json });
       }
 
-      // 'esign-status' alias kept for the same reason as above.
-      case 'esign-status':
       case 'check-signature-status': {
         if (!body.documentId) return err('documentId required');
-        const SIGNWELL_KEY = process.env.SIGNWELL_API_KEY;
-        if (!SIGNWELL_KEY) return err('SIGNWELL_API_KEY not set in Netlify env vars', 500);
+        const SIGNWELL_KEY = process.env.SIGNWELL_API_KEY || 'YWNjZXNzOjhjOTYxY2I3NDlhMmIzNjAxOTI0ZTVlM2QwY2IzNTA4';
         const resp = await fetch('https://www.signwell.com/api/v1/documents/' + encodeURIComponent(body.documentId), {
           headers: { 'X-Api-Key': SIGNWELL_KEY },
         });
@@ -2127,8 +2231,7 @@ exports.handler = async (event) => {
       case 'get-comparables': {
         if (!body.address) return err('address required');
 
-        const PROPERTYREACH_KEY = process.env.PROPERTYREACH_API_KEY;
-        if (!PROPERTYREACH_KEY) return err('PROPERTYREACH_API_KEY not set in Netlify env vars', 500);
+        const PROPERTYREACH_KEY = process.env.PROPERTYREACH_API_KEY || 'test_Od67q03Md5PMJ1xykK9UBhKZbEQe3YlfTk6';
 
         // Parse "123 Main St, Springfield, NY 11735" into street/city/state/zip.
         // PropertyReach's target object accepts these as separate fields.
@@ -2194,8 +2297,7 @@ exports.handler = async (event) => {
 
       case 'search-realtors': {
         if (!body.zipCode) return err('zipCode required');
-        const APIFY_TOKEN = process.env.APIFY_API_TOKEN;
-        if (!APIFY_TOKEN) return err('APIFY_API_TOKEN not set in Netlify env vars', 500);
+        const APIFY_TOKEN = process.env.APIFY_API_TOKEN || 'apify_api_BzvtdXSFSTGcWCqj6yK784P6cDJkEJ1zJKzm';
         const page = parseInt(body.page || 0); // shuffle page offset
 
         const runResp = await fetch(
