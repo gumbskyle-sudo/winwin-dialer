@@ -1,3 +1,4 @@
+
 /* Real Estate Dialer — single backend
  * ─────────────────────────────────────
  * Required env vars (Netlify → Site → Environment variables):
@@ -1065,117 +1066,6 @@ exports.handler = async (event) => {
       }
 
       // ════════════════════════════════════════════════════════
-      // DRIVING FOR DOLLARS
-      // ════════════════════════════════════════════════════════
-
-      // List all D4D leads (optionally ?status=new|skip_traced|in_dialer)
-      case 'd4d-list': {
-        let path = `/d4d_leads?select=*&order=created_at.desc&limit=50000`;
-        if (qs.status) path += `&status=eq.${encodeURIComponent(qs.status)}`;
-        const { json } = await supa(path);
-        const base = supaUrl() + '/storage/v1/object/public/d4d-photos/';
-        const out = (json || []).map(r => ({
-          ...r,
-          photo_url: r.photo_path ? base + encodeURIComponent(r.photo_path) : '',
-        }));
-        return ok({ leads: out });
-      }
-
-      // Add a D4D lead. Body: {address, lat, lng, tags, notes, createdBy, photoBase64?}
-      case 'd4d-add': {
-        if (!body.address && !(body.lat != null && body.lng != null)) {
-          return err('address or lat/lng required');
-        }
-        const cbRaw = (body.createdBy != null && body.createdBy !== '') ? parseInt(body.createdBy, 10) : null;
-        const row = {
-          address: String(body.address || '').trim(),
-          lat: body.lat != null ? Number(body.lat) : null,
-          lng: body.lng != null ? Number(body.lng) : null,
-          tags: String(body.tags || '').trim(),
-          notes: String(body.notes || '').trim(),
-          status: 'new',
-          created_by: Number.isFinite(cbRaw) ? cbRaw : null,
-        };
-        const { json } = await supa('/d4d_leads', 'POST', [row]);
-        const saved = Array.isArray(json) ? json[0] : json;
-        if (body.photoBase64 && saved && saved.id) {
-          const photoPath = saved.id + '.jpg';
-          const up = await uploadToStorage('d4d-photos', photoPath, body.photoBase64, 'image/jpeg');
-          if (up.ok) {
-            await supa(`/d4d_leads?id=eq.${encodeURIComponent(saved.id)}`, 'PATCH', { photo_path: photoPath });
-            saved.photo_path = photoPath;
-          }
-        }
-        return ok({ lead: saved });
-      }
-
-      // Edit a D4D lead. Body: {id, address?, tags?, notes?, status?, photoBase64?}
-      case 'd4d-update': {
-        if (!body.id) return err('id required');
-        const patch = {};
-        if ('address' in body) patch.address = String(body.address || '').trim();
-        if ('tags'    in body) patch.tags    = String(body.tags || '').trim();
-        if ('notes'   in body) patch.notes   = String(body.notes || '').trim();
-        if ('status'  in body) patch.status  = String(body.status || 'new');
-        if (Object.keys(patch).length) {
-          await supa(`/d4d_leads?id=eq.${encodeURIComponent(body.id)}`, 'PATCH', patch);
-        }
-        if (body.photoBase64) {
-          const photoPath = body.id + '.jpg';
-          const up = await uploadToStorage('d4d-photos', photoPath, body.photoBase64, 'image/jpeg');
-          if (up.ok) await supa(`/d4d_leads?id=eq.${encodeURIComponent(body.id)}`, 'PATCH', { photo_path: photoPath });
-        }
-        return ok({ ok: true });
-      }
-
-      // Delete a D4D lead (and its photo). Body: {id}
-      case 'd4d-delete': {
-        if (!body.id) return err('id required');
-        const { json: rows } = await supa(`/d4d_leads?id=eq.${encodeURIComponent(body.id)}&select=photo_path`);
-        const pp = rows && rows[0] && rows[0].photo_path;
-        if (pp) { try { await deleteFromStorage('d4d-photos', [pp]); } catch {} }
-        await supa(`/d4d_leads?id=eq.${encodeURIComponent(body.id)}`, 'DELETE');
-        return ok({ ok: true });
-      }
-
-      // Push a D4D lead into the dialer as a property. Body: {id}
-      case 'd4d-to-dialer': {
-        if (!body.id) return err('id required');
-        const { json: rows } = await supa(`/d4d_leads?id=eq.${encodeURIComponent(body.id)}&select=*`);
-        const d = rows && rows[0];
-        if (!d) return err('D4D lead not found', 404);
-        if (d.property_id) return ok({ propertyId: d.property_id, already: true });
-        if (!d.address) return err('This lead has no address yet — add one first');
-
-        const propId = 'd4d-' + d.id;
-        const prop = {
-          id: propId,
-          owners: '',
-          owner_last_name: '',
-          property_address: d.address,
-          // Mail to the property itself until skip tracing fills the real
-          // mailing address — lets the postcard feature work right away.
-          mailing_address: d.address,
-          email: '',
-        };
-        await supa('/properties?on_conflict=id', 'POST', [prop], { Prefer: 'resolution=merge-duplicates,return=minimal' });
-
-        const noteBits = [];
-        if (d.tags)  noteBits.push('D4D: ' + d.tags);
-        if (d.notes) noteBits.push(d.notes);
-        if (noteBits.length) {
-          await supa('/leads?on_conflict=property_id', 'POST', [{
-            property_id: propId,
-            notes: noteBits.join(' — '),
-            updated_at: new Date().toISOString(),
-          }], { Prefer: 'resolution=merge-duplicates,return=minimal' });
-        }
-
-        await supa(`/d4d_leads?id=eq.${encodeURIComponent(d.id)}`, 'PATCH', { status: 'in_dialer', property_id: propId });
-        return ok({ propertyId: propId });
-      }
-
-      // ════════════════════════════════════════════════════════
       // TWILIO — NUMBERS
       // ════════════════════════════════════════════════════════
 
@@ -1344,8 +1234,15 @@ exports.handler = async (event) => {
       // message if no recording has been saved yet.
       case 'drop-voicemail': {
         if (!body.sid) return err('sid required (the parent call sid)');
+        // AI mode (forceTts) skips the recorded audio and speaks a
+        // per-property personalized message in a natural Polly voice.
+        const VOICE_ALLOWLIST = [
+          'Polly.Ruth-Generative', 'Polly.Matthew-Generative', 'Polly.Danielle-Generative',
+          'Polly.Joanna-Neural', 'Polly.Matthew-Neural', 'Polly.Stephen-Neural', 'alice',
+        ];
+        const voice = VOICE_ALLOWLIST.includes(body.voice) ? body.voice : 'Polly.Ruth-Generative';
         let playUrl = null;
-        if (body.profileId) {
+        if (!body.forceTts && body.profileId) {
           try {
             const { json: profiles } = await supa(`/profiles?id=eq.${encodeURIComponent(body.profileId)}&select=vm_recording_sid`);
             const profile = Array.isArray(profiles) && profiles[0];
@@ -1360,7 +1257,7 @@ exports.handler = async (event) => {
 
         const inner = playUrl
           ? `<Play>${escapeXml(playUrl)}</Play>`
-          : `<Say voice="alice">${escapeXml(body.message)}</Say>`;
+          : `<Say voice="${escapeXml(voice)}">${escapeXml(body.message)}</Say>`;
         const dropTwiml = `<?xml version="1.0" encoding="UTF-8"?><Response>${inner}<Hangup/></Response>`;
         await tw(`/Accounts/${twilioSid()}/Calls/${encodeURIComponent(childCall.sid)}.json`, 'POST', { Twiml: dropTwiml });
         return ok({ dropped: true, usedRecording: !!playUrl });
