@@ -498,6 +498,8 @@ body.view-pipeline header .callerid{display:none}
 .research-link.zillow:hover{background:#bbf7d0}
 .research-link.redfin{background:#fee2e2;color:#991b1b;border:1px solid #fecaca}
 .research-link.redfin:hover{background:#fecaca}
+.research-link.assessor{background:#e0e7ff;color:#3730a3;border:1px solid #c7d2fe}
+.research-link.assessor:hover{background:#c7d2fe}
 .research-link.maps{background:#f5e6c0;color:#96751A;border:1px solid #e8d29a}
 .research-link.maps:hover{background:#e8d29a}
 .research-link.comps{
@@ -1367,8 +1369,28 @@ body.view-mail header .callerid{display:none}
         <div style="font-size:11px;color:#6b7280;margin-top:4px">Taps call your phone — answer it, talk after the beep, then press # when done. Used automatically when you tap 📨 VM Drop during a call.</div>
       </div>
       <div class="field">
+        <label>Voicemail drop mode</label>
+        <select id="settingsVmMode">
+          <option value="ai">🤖 AI voice — personalized per property (uses message below)</option>
+          <option value="recording">🎙️ My recorded audio (message below is only the fallback)</option>
+        </select>
+        <div style="font-size:11px;color:#6b7280;margin-top:4px">AI mode speaks the message below in a natural human-sounding voice and fills in the seller's name and property address automatically. Recorded mode plays your own recording (same message for every lead).</div>
+      </div>
+      <div class="field">
+        <label>AI voice</label>
+        <select id="settingsVmVoice">
+          <option value="Polly.Ruth-Generative">Ruth — female, most natural (Generative)</option>
+          <option value="Polly.Matthew-Generative">Matthew — male, most natural (Generative)</option>
+          <option value="Polly.Danielle-Generative">Danielle — female (Generative)</option>
+          <option value="Polly.Joanna-Neural">Joanna — female (Neural)</option>
+          <option value="Polly.Matthew-Neural">Matthew — male (Neural)</option>
+          <option value="Polly.Stephen-Neural">Stephen — male (Neural)</option>
+        </select>
+      </div>
+      <div class="field">
         <label>Voicemail drop message (text-to-speech fallback)</label>
         <textarea id="settingsVmMessage" rows="3" placeholder="Message played when you tap VM Drop"></textarea>
+        <div style="font-size:11px;color:#6b7280;margin-top:4px">Placeholders: <code>{FirstName}</code>, <code>{Address}</code>, <code>{CallbackNumber}</code> — filled in per lead automatically when the voicemail is dropped.</div>
         <div style="font-size:11px;color:#6b7280;margin-top:4px">Only used if you haven't recorded a message above. Saved on this device only.</div>
       </div>
 
@@ -1446,22 +1468,6 @@ body.view-mail header .callerid{display:none}
   </div>
 </div>
 
-<!-- Quick Qualifier modal (pops on hot/warm tag) -->
-<div id="qualMod">
-  <div class="card">
-    <div class="head">
-      <h2>📋 Quick Qualifier</h2>
-      <div class="sub">Capture the essentials while it's fresh. Required fields marked with *.</div>
-      <div class="lead" id="qualLeadInfo">—</div>
-    </div>
-    <div class="body" id="qualBody"></div>
-    <div class="actions">
-      <button class="skip" id="qualSkip">Skip for now</button>
-      <button class="save" id="qualSave">Save qualifier</button>
-    </div>
-  </div>
-</div>
-
 <div class="toast-stack" id="toastStack"></div>
 
 <script>
@@ -1477,9 +1483,9 @@ const LS = {
   forward:'cb_forward', active:'cb_active',
   profileId:'cb_profile_id', profileName:'cb_profile_name',
   hideOthers:'cb_hide_others', hiddenColors:'cb_hidden_colors',
-  vmMessage:'cb_vm_message', stateFilter:'cb_state_filter',
+  vmMessage:'cb_vm_message', vmMode:'cb_vm_mode', vmVoice:'cb_vm_voice', stateFilter:'cb_state_filter',
 };
-const DEFAULT_VM_MESSAGE = "Hi, this is Win-Win Property Solutions. We're interested in your property and would love to chat. Please give us a call back at your convenience. Thanks, and have a great day.";
+const DEFAULT_VM_MESSAGE = "Hi {FirstName}, this is Win-Win Property Solutions reaching out about your property at {Address}. We buy houses in your area and would love to make you a fair cash offer. Give us a call back at {CallbackNumber} whenever it's convenient. Thanks, and have a great day.";
 let backend  = localStorage.getItem(LS.backend) || '/api';
 let password = localStorage.getItem(LS.pwd) || '';
 let forwardPhone   = localStorage.getItem(LS.forward) || '';
@@ -1647,6 +1653,19 @@ function extractState(address){
   const code = m ? m[1].toUpperCase() : '';
   return US_STATE_CODES.has(code) ? code : '';
 }
+
+// ── County assessor record links per market ─────────────────────
+const ASSESSOR_LINKS = {
+  OK: 'https://assessor.tulsacounty.org/Property/Search',                                              // Tulsa County
+  GA: 'https://qpublic.schneidercorp.com/Application.aspx?App=DekalbCountyGA&Layer=Parcels&PageType=Search', // DeKalb County
+  VA: 'https://www.webgis.net/va/fluvanna/',                                                           // Fluvanna County
+  DE: 'https://www3.newcastlede.gov/parcel/search/',                                                   // New Castle County
+};
+function assessorUrl(addr){
+  const st = extractState(addr || '');
+  if(st && ASSESSOR_LINKS[st]) return ASSESSOR_LINKS[st];
+  return 'https://www.google.com/search?q=' + encodeURIComponent((addr || '') + ' county assessor property records');
+}
 let stateFilter = localStorage.getItem(LS.stateFilter) || '';
 
 function getFilteredProperties(){
@@ -1702,6 +1721,8 @@ function openModal(id){
     $('settingsForwardPhone').value = forwardPhone;
     $('settingsBackendUrl').value   = backend;
     $('settingsVmMessage').value    = localStorage.getItem(LS.vmMessage) || DEFAULT_VM_MESSAGE;
+    $('settingsVmMode').value       = localStorage.getItem(LS.vmMode) || 'ai';
+    $('settingsVmVoice').value      = localStorage.getItem(LS.vmVoice) || 'Polly.Ruth-Generative';
     refreshVmRecordStatus();
   }
   if(id==='uploadModal'){
@@ -1857,6 +1878,7 @@ function renderPage(){
             ${p.property_address ? `<div class="research-links">
               <a href="https://www.zillow.com/homes/${encodeURIComponent(p.property_address)}_rb/" target="_blank" rel="noopener" class="research-link zillow">🏠 Zillow</a>
               <a href="https://www.google.com/maps/place/?q=${encodeURIComponent(p.property_address)}" target="_blank" rel="noopener" class="research-link maps">🗺 Street View</a>
+              <a href="${assessorUrl(p.property_address)}" target="_blank" rel="noopener" class="research-link assessor">🏛 Assessor</a>
               <button class="research-link comps" data-show-comps="${escapeHtml(p.id)}" data-comps-addr="${escapeHtml(p.property_address)}">📊 Comps</button>
             </div>
             <div class="card-comps-panel hide" id="card-comps-${escapeHtml(p.id)}"></div>` : ''}
@@ -1893,27 +1915,13 @@ function renderPage(){
             <button class="iq-save-btn" data-saverecurl="${escapeHtml(p.id)}" style="background:#96751A">Save Recording URL</button>
           </div>
         </div>
-        <div class="pre-call-section qualifier-inline">
+        <div class="pre-call-section">
           <button class="pre-call-toggle" onclick="this.nextElementSibling.classList.toggle('hide');this.classList.toggle('open')">
-            ✅ Qualifier Sheet <span class="toggle-arrow">▼</span>
+            📝 Live Notepad <span class="toggle-arrow">▼</span>
           </button>
-          <div class="pre-call-content hide">
-            <div class="inline-qual-form" data-qual-pid="${escapeHtml(p.id)}">
-              ${QUICK_QUAL_FIELDS.map(f => {
-                const id = `iq_${escapeHtml(p.id)}_${f.key}`;
-                const val = (lead[f.key]||'');
-                let input = '';
-                if(f.type==='select'){
-                  input=`<select id="${id}" data-iqkey="${f.key}" data-pid="${escapeHtml(p.id)}">${f.options.map(o=>`<option value="${escapeHtml(o)}"${o===val?' selected':''}>${o||'— pick one —'}</option>`).join('')}</select>`;
-                } else if(f.type==='textarea'){
-                  input=`<textarea id="${id}" data-iqkey="${f.key}" data-pid="${escapeHtml(p.id)}" placeholder="${escapeHtml(f.placeholder||'')}">${escapeHtml(val)}</textarea>`;
-                } else {
-                  input=`<input type="${f.type}" id="${id}" data-iqkey="${f.key}" data-pid="${escapeHtml(p.id)}" placeholder="${escapeHtml(f.placeholder||'')}" value="${escapeHtml(val)}">`;
-                }
-                return `<div class="iq-field"><label>${escapeHtml(f.label)}${f.required?'<span style="color:#dc2626;margin-left:2px">*</span>':''}</label>${input}</div>`;
-              }).join('')}
-              <button class="iq-save-btn" data-iqsave="${escapeHtml(p.id)}">Save Qualifier</button>
-            </div>
+          <div class="pre-call-content hide" style="padding:8px">
+            <textarea class="notes-ta" data-notes data-id="${escapeHtml(p.id)}" rows="6" style="margin-top:0" placeholder="Type notes during the call — auto-saves to this lead's notes…">${escapeHtml(lead.notes||'')}</textarea>
+            <div style="font-size:10px;color:#6b7280;margin-top:4px">Auto-saves to the dialer notes for this lead.</div>
           </div>
         </div>
         <div class="pre-call-section">
@@ -2506,15 +2514,13 @@ document.addEventListener('change', e => {
   if(newStatus) p.lead.called = true;
   api('update-lead', {method:'POST', body:{propertyId:id, leadStatus:newStatus, called:p.lead.called}}).catch(err=>toast(err.message,'err'));
   renderPage(); refreshCounter();
-  // If newly tagged Hot or Warm AND this is the first time (no deal exists yet), pop the qualifier
-  if((newStatus === 'hot' || newStatus === 'warm') && newStatus !== prevStatus && !propertiesWithDeals.has(p.id)){
-    openQualifierModalForLead(p);
-  }
 });
 document.addEventListener('input', e => {
   const ta = e.target.closest('[data-notes]');
   if(!ta) return;
   const id = ta.dataset.id;
+  // Keep the Live Notepad and the bottom notes box in sync (same lead, two textareas)
+  document.querySelectorAll('[data-notes]').forEach(o => { if(o !== ta && o.dataset.id === id) o.value = ta.value; });
   clearTimeout(noteSaveTimers[id]);
   noteSaveTimers[id] = setTimeout(() => {
     const p = properties.find(x => x.id === id);
@@ -2705,9 +2711,21 @@ $('cdVoicemail').addEventListener('click', async ()=>{
   const btn = $('cdVoicemail');
   btn.disabled = true; btn.textContent = 'Dropping…';
   try {
-    const message = localStorage.getItem(LS.vmMessage) || DEFAULT_VM_MESSAGE;
-    const r = await api('drop-voicemail', {method:'POST', body:{sid:activeCall.sid, profileId:activeProfileId, message}});
-    toast(r.usedRecording ? 'Your voicemail message was dropped' : 'Voicemail dropped (text-to-speech)', 'ok');
+    const vmMode  = localStorage.getItem(LS.vmMode)  || 'ai';
+    const vmVoice = localStorage.getItem(LS.vmVoice) || 'Polly.Ruth-Generative';
+    // Personalize the message for THIS lead
+    const p = properties.find(x => x.id === activeCall.propertyId);
+    const first = (p && p.owners ? String(p.owners).trim().split(/[\s,&]+/)[0] : '') || 'there';
+    const streetAddr = (p && p.property_address ? String(p.property_address).split(',')[0].trim() : 'your property');
+    const message = (localStorage.getItem(LS.vmMessage) || DEFAULT_VM_MESSAGE)
+      .replace(/\{FirstName\}/gi, first)
+      .replace(/\{Address\}/gi, streetAddr)
+      .replace(/\{CallbackNumber\}/gi, fmtPhone(activeCallerId) || 'this number');
+    const r = await api('drop-voicemail', {method:'POST', body:{
+      sid: activeCall.sid, profileId: activeProfileId, message,
+      voice: vmVoice, forceTts: vmMode === 'ai'
+    }});
+    toast(r.usedRecording ? 'Your recorded voicemail was dropped' : 'AI voicemail dropped — personalized for ' + streetAddr, 'ok');
     finishCall('VM dropped', false);
   } catch(e){
     toast('Voicemail drop failed: '+e.message,'err');
@@ -2979,6 +2997,8 @@ $('settingsSave').addEventListener('click', async () => {
   localStorage.setItem(LS.forward, forwardPhone);
   localStorage.setItem(LS.backend, backend);
   localStorage.setItem(LS.vmMessage, $('settingsVmMessage').value.trim() || DEFAULT_VM_MESSAGE);
+  localStorage.setItem(LS.vmMode, $('settingsVmMode').value);
+  localStorage.setItem(LS.vmVoice, $('settingsVmVoice').value);
   refreshCallerStrip();
   $('settingsModal').classList.remove('open');
   toast('Saved','ok');
@@ -4337,9 +4357,6 @@ renderDealDetail = function(){
   </div>`);
   body.appendChild(buyersCard);
 
-  // ── Deal Qualifier Form ────────────────────────────────────
-  body.appendChild(renderQualifierCard());
-
   // ── SMS + drips section ────────────────────────────────────
   const card = el(`<div class="dd-card">
     <div class="dd-section-title">Text Messages</div>
@@ -4562,136 +4579,6 @@ async function saveQualifier(){
     toast('Save failed: '+e.message, 'err');
   }
 }
-
-// ═══════════════════════════════════════════════════════════════
-// QUICK QUALIFIER MODAL (pops up when caller tags lead Hot/Warm)
-// ═══════════════════════════════════════════════════════════════
-
-// The 7 mandatory + 1 optional questions you settled on
-const QUICK_QUAL_FIELDS = [
-  { key:'qMotivation', label:'Why are they selling?', required:true, type:'select',
-    options:['','Inherited','Tired landlord','Divorce / family','Financial pressure','Relocation','Health / aging','Vacant / unused','Other'] },
-  { key:'qTimeline', label:'How soon do they want to close?', required:true, type:'select',
-    options:['','ASAP (under 30 days)','30-60 days','60-90 days','3-6 months','No rush'] },
-  { key:'qAskingPrice', label:'Asking price ($)', required:true, type:'number', placeholder:'0' },
-  { key:'qCondition', label:'Overall condition', required:true, type:'select',
-    options:['','Turnkey','Light cosmetic','Medium rehab','Heavy rehab','Teardown'] },
-  { key:'qOccupancy', label:'Who lives there?', required:true, type:'select',
-    options:['','Owner-occupied','Tenant','Vacant'] },
-  { key:'qDecisionMakers', label:'Who else has to sign off?', required:true, type:'text',
-    placeholder:'Spouse, siblings, attorney, just them…' },
-  { key:'qCallbackTime', label:'Best callback time', required:true, type:'text',
-    placeholder:'e.g. Tomorrow 2pm, Tuesday morning, anytime…' },
-  { key:'qExtraNotes', label:'Anything else worth knowing?', required:false, type:'textarea',
-    placeholder:'Liens, repairs, mortgage balance, gotchas, opportunities…' },
-];
-
-let currentQualLead = null;  // the property being qualified
-
-function openQualifierModalForLead(p){
-  if(!p) return;
-  currentQualLead = p;
-  const mod = document.getElementById('qualMod');
-  const lead = p.lead || {};
-  const status = (lead.lead_status || '').toUpperCase();
-  document.getElementById('qualLeadInfo').innerHTML =
-    `<b>${escapeHtml(p.owners || '(no name)')}</b> · ${escapeHtml(p.property_address || '')} · ` +
-    `<span style="background:${status==='HOT'?'#fee2e2':'#fef3c7'};color:${status==='HOT'?'#991b1b':'#92400e'};padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700">${escapeHtml(status)}</span>`;
-
-  // Render fields
-  const bodyEl = document.getElementById('qualBody');
-  bodyEl.innerHTML = QUICK_QUAL_FIELDS.map(f => {
-    const id = 'qf_' + f.key;
-    let input = '';
-    if(f.type === 'select'){
-      input = `<select id="${id}" data-q="${f.key}" data-required="${f.required}">${
-        f.options.map(o => `<option value="${escapeHtml(o)}">${o ? escapeHtml(o) : '— pick one —'}</option>`).join('')
-      }</select>`;
-    } else if(f.type === 'textarea'){
-      input = `<textarea id="${id}" data-q="${f.key}" data-required="${f.required}" placeholder="${escapeHtml(f.placeholder||'')}"></textarea>`;
-    } else {
-      input = `<input type="${f.type}" id="${id}" data-q="${f.key}" data-required="${f.required}" placeholder="${escapeHtml(f.placeholder||'')}">`;
-    }
-    return `<div class="field" data-field-wrap="${f.key}">
-      <label>${escapeHtml(f.label)}${f.required?'<span class="req">*</span>':''}</label>
-      ${input}
-      <div class="err">Required</div>
-    </div>`;
-  }).join('');
-
-  mod.classList.add('open');
-}
-
-function closeQualifierModal(){
-  document.getElementById('qualMod').classList.remove('open');
-  currentQualLead = null;
-}
-
-document.getElementById('qualSkip').addEventListener('click', closeQualifierModal);
-
-document.getElementById('qualSave').addEventListener('click', async () => {
-  if(!currentQualLead) return;
-  // Validate required fields
-  const inputs = document.querySelectorAll('#qualBody [data-q]');
-  let firstInvalid = null;
-  inputs.forEach(inp => {
-    const wrap = inp.closest('[data-field-wrap]');
-    const required = inp.dataset.required === 'true';
-    const empty = !inp.value || !inp.value.trim();
-    if(required && empty){
-      wrap.classList.add('invalid');
-      if(!firstInvalid) firstInvalid = wrap;
-    } else {
-      wrap.classList.remove('invalid');
-    }
-  });
-  if(firstInvalid){
-    firstInvalid.scrollIntoView({behavior:'smooth', block:'center'});
-    return;
-  }
-
-  const saveBtn = document.getElementById('qualSave');
-  saveBtn.disabled = true;
-  saveBtn.textContent = 'Saving…';
-
-  try {
-    const p = currentQualLead;
-    // Step 1: ensure a deal exists for this property
-    let dealId = null;
-    if(propertiesWithDeals.has(p.id)){
-      // Find existing deal id by listing deals filtered to this property
-      const idx = await api('deals-index');
-      const found = (idx.deals || []).find(d => d.property_id === p.id);
-      dealId = found ? found.id : null;
-    }
-    if(!dealId){
-      const r = await api('create-deal', {method:'POST', body:{
-        propertyId: p.id,
-        owners: p.owners,
-        ownerLastName: p.owner_last_name || '',
-        propertyAddress: p.property_address,
-        mailingAddress: p.mailing_address,
-        createdByProfileId: activeProfileId,
-        assignedToProfileId: activeProfileId,
-        stage: p.lead.lead_status === 'hot' ? 'hot' : 'hot',  // both go to Hot column
-      }});
-      dealId = r.deal.id;
-      propertiesWithDeals.add(p.id);
-    }
-    // Step 2: save the qualifier fields to that deal
-    const body = { id: dealId, completedByProfileId: activeProfileId };
-    inputs.forEach(inp => { body[inp.dataset.q] = inp.value; });
-    await api('save-qualifier', {method:'POST', body});
-    toast('Saved — sent to Pipeline','ok');
-    closeQualifierModal();
-    refreshDealsIndex();
-    renderPage();
-  } catch(e){
-    toast('Save failed: '+e.message, 'err');
-    saveBtn.disabled = false;
-    saveBtn.textContent = 'Save qualifier';
-  }
-});
 
 // ── Contract: populate dropdowns when section opens ─────────────
 document.addEventListener('click', e => {
@@ -5093,33 +4980,6 @@ document.addEventListener('click', async e => {
   } catch(err){
     toast('Save failed: '+err.message,'err');
     btn.disabled=false; btn.textContent='Save Recording URL';
-  }
-});
-
-// ── Inline qualifier save (on card before mark as called) ───────
-document.addEventListener('click', async e => {
-  const btn = e.target.closest('[data-iqsave]');
-  if(!btn) return;
-  const pid = btn.dataset.iqsave;
-  const p = properties.find(x => x.id === pid);
-  if(!p) return;
-  const form = btn.closest('.inline-qual-form');
-  const inputs = form.querySelectorAll('[data-iqkey]');
-  const qualData = {};
-  inputs.forEach(inp => { qualData[inp.dataset.iqkey] = inp.value; });
-  btn.disabled = true; btn.textContent = 'Saving…';
-  try {
-    // Merge into lead data and save
-    await api('update-lead', {method:'POST', body:{ propertyId: pid, ...qualData }});
-    // Update local
-    if(!p.lead) p.lead = {};
-    Object.assign(p.lead, qualData);
-    toast('Qualifier saved ✓','ok');
-    btn.textContent = 'Saved ✓';
-    setTimeout(()=>{ btn.disabled=false; btn.textContent='Save Qualifier'; },2000);
-  } catch(err) {
-    toast('Save failed: '+err.message,'err');
-    btn.disabled=false; btn.textContent='Save Qualifier';
   }
 });
 
