@@ -266,12 +266,14 @@ body.hide-called .card.called{display:none}
 .calldrawer .state.live{background:#047857}
 .calldrawer .state.ringing{background:#b45309}
 .calldrawer .state.failed{background:#b91c1c}
-.calldrawer .row2{display:flex;gap:8px;margin-top:12px;align-items:center;font-size:12px;opacity:.85}
-.calldrawer .timer{font-family:ui-monospace,monospace;font-size:14px;font-weight:600;opacity:1}
-.calldrawer .row2 .from{flex:1;text-align:right}
-.calldrawer .vm-drop{background:#96751A;color:#fff;border:none;border-radius:8px;padding:9px 12px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap}
-.calldrawer .hangup{background:#b91c1c;color:#fff;border:none;border-radius:8px;padding:9px 14px;font-size:13px;font-weight:700;cursor:pointer}
-.calldrawer .skip-btn{background:rgba(255,255,255,.12);color:#fff;border:1px solid rgba(255,255,255,.25);border-radius:8px;padding:9px 10px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap}
+.calldrawer .row2{display:flex;gap:8px;margin-top:12px;align-items:center;font-size:12px;opacity:.85;min-width:0}
+.calldrawer .timer{font-family:ui-monospace,monospace;font-size:14px;font-weight:600;opacity:1;flex:0 0 auto}
+.calldrawer .row2 .from{flex:1;text-align:right;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.calldrawer .btns{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.calldrawer .btns button{flex:1 1 calc(50% - 4px);text-align:center}
+.calldrawer .vm-drop{background:#96751A;color:#fff;border:none;border-radius:8px;padding:11px 12px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap}
+.calldrawer .hangup{background:#b91c1c;color:#fff;border:none;border-radius:8px;padding:11px 14px;font-size:13px;font-weight:700;cursor:pointer}
+.calldrawer .skip-btn{background:rgba(255,255,255,.12);color:#fff;border:1px solid rgba(255,255,255,.25);border-radius:8px;padding:11px 10px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap}
 .calldrawer .skip-btn:disabled{opacity:.35;cursor:not-allowed}
 
 /* Toast */
@@ -324,6 +326,11 @@ body.view-pipeline header .callerid{display:none}
 .pipe-summary{font-size:12px;color:#6b7280}
 .pipe-board{display:flex;gap:8px;overflow-x:auto;padding-bottom:8px;-webkit-overflow-scrolling:touch}
 .pipe-col{flex:0 0 220px;min-width:220px;background:#f9fafb;border-radius:10px;padding:10px;border:1px solid #e5e7eb}
+@media (max-width:700px){
+  .pipe-board{display:block;overflow-x:visible}
+  .pipe-col{min-width:0;width:100%;margin-bottom:10px;flex:none}
+  .pipe-empty{padding:6px}
+}
 .pipe-col-head{display:flex;align-items:center;gap:6px;margin-bottom:10px;padding:0 2px}
 .pipe-col-head .dot{width:8px;height:8px;border-radius:50%}
 .pipe-col-head .lbl{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#0f0d0a}
@@ -1403,10 +1410,12 @@ body.view-mail header .callerid{display:none}
   <div class="row2">
     <span class="timer" id="cdTimer">00:00</span>
     <span class="from" id="cdFrom"></span>
+  </div>
+  <div class="btns">
     <button class="skip-btn" id="cdNextNum" title="Try this lead's next phone number">⏭ Next #</button>
     <button class="skip-btn" id="cdNextLead" title="Skip to the next lead">⏭⏭ Next lead</button>
     <button class="vm-drop" id="cdVoicemail" title="Drop voicemail">📨 VM Drop</button>
-    <button class="hangup" id="cdHangup">End</button>
+    <button class="hangup" id="cdHangup">🔴 End Call</button>
   </div>
 </div>
 
