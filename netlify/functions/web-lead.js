@@ -14,7 +14,7 @@
 function corsHeaders() {
   return {
     'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Allow-Headers': 'Content-Type, X-Access-Password',
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
     'Content-Type': 'application/json',
   };
@@ -87,10 +87,30 @@ function qualifierNotes(b) {
   return lines.join('\n');
 }
 
-exports.handler = async (event) => {
-  if (event.httpMethod === 'OPTIONS') return { statusCode: 204, headers: corsHeaders(), body: '' };
-  if (event.httpMethod !== 'POST') return err('Method not allowed', 405);
+// ── Actions ───────────────────────────────────────────────────
+// (no action)  → public intake from winwinproperties.net
+// ?action=list → dialer asks for its website leads   (password required)
+// ?action=seen → dialer marks them read              (password required)
 
+function authed(event) {
+  const expected = process.env.ACCESS_PASSWORD;
+  const given = event.headers['x-access-password'] || event.headers['X-Access-Password'];
+  return !!expected && given === expected;
+}
+
+async function handleList() {
+  const { json } = await supa(
+    '/leads?source=neq.&select=property_id,source,web_lead_at,lead_seen,highlight&order=web_lead_at.desc&limit=500'
+  );
+  return ok({ leads: json || [] });
+}
+
+async function handleSeen() {
+  await supa('/leads?lead_seen=eq.false', 'PATCH', { lead_seen: true }, { Prefer: 'return=minimal' });
+  return ok({ ok: true });
+}
+
+async function handleIntake(event) {
   let b = {};
   try { b = JSON.parse(event.body || '{}'); } catch { return err('Invalid JSON'); }
 
@@ -105,79 +125,77 @@ exports.handler = async (event) => {
   const source = String(b.source || 'Website').trim();
   const name = String(b.name || '').trim();
 
+  // ── Find an existing property with this address (avoid duplicates) ──
+  let propertyId = null;
+  const key = normAddr(address);
+  if (key) {
+    const { json: existing } = await supa('/properties?select=id,property_address&limit=20000');
+    for (const p of existing || []) {
+      if (normAddr(p.property_address) === key) { propertyId = p.id; break; }
+    }
+  }
+
+  const isNew = !propertyId;
+  if (isNew) propertyId = 'web-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7);
+
+  await supa('/properties?on_conflict=id', 'POST', [{
+    id: propertyId,
+    owners: name || 'Website Lead',
+    owner_last_name: name ? (name.trim().split(/\s+/).pop() || '') : '',
+    property_address: address,
+    mailing_address: '',
+    email: String(b.email || '').trim(),
+  }], { Prefer: 'resolution=merge-duplicates,return=minimal' });
+
+  if (e164) {
+    const { json: havePhones } = await supa(
+      `/phones?property_id=eq.${encodeURIComponent(propertyId)}&select=e164`
+    );
+    if (!(havePhones || []).some(p => p.e164 === e164)) {
+      await supa('/phones', 'POST', [{
+        property_id: propertyId, e164, display: phoneRaw || e164, type: 'Cell',
+      }], { Prefer: 'return=minimal' });
+    }
+  }
+
+  const leadRow = {
+    property_id: propertyId,
+    highlight: 'red',
+    source,
+    va_notes: qualifierNotes({ ...b, source }),
+    updated_at: new Date().toISOString(),
+    web_lead_at: new Date().toISOString(),
+    lead_seen: false,
+  };
+  if (e164) leadRow.sms_cell = e164;
+
   try {
-    // ── Find an existing property with this address (avoid duplicates) ──
-    let propertyId = null;
-    const key = normAddr(address);
-    if (key) {
-      const { json: existing } = await supa('/properties?select=id,property_address&limit=20000');
-      for (const p of existing || []) {
-        if (normAddr(p.property_address) === key) { propertyId = p.id; break; }
-      }
-    }
-
-    const isNew = !propertyId;
-    if (isNew) {
-      propertyId = 'web-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7);
-    }
-
-    // ── Property row ──
-    const propRow = {
-      id: propertyId,
-      owners: name || 'Website Lead',
-      owner_last_name: name ? (name.trim().split(/\s+/).pop() || '') : '',
-      property_address: address,
-      mailing_address: '',
-      email: String(b.email || '').trim(),
-    };
-    await supa('/properties?on_conflict=id', 'POST', [propRow], {
+    await supa('/leads?on_conflict=property_id', 'POST', [leadRow], {
       Prefer: 'resolution=merge-duplicates,return=minimal',
     });
+  } catch (e) {
+    // Migration not run yet — never lose a lead to a missing column.
+    delete leadRow.source; delete leadRow.web_lead_at; delete leadRow.lead_seen;
+    await supa('/leads?on_conflict=property_id', 'POST', [leadRow], {
+      Prefer: 'resolution=merge-duplicates,return=minimal',
+    });
+  }
 
-    // ── Phone row (skip if this number is already on the property) ──
-    if (e164) {
-      const { json: havePhones } = await supa(
-        `/phones?property_id=eq.${encodeURIComponent(propertyId)}&select=e164`
-      );
-      const already = (havePhones || []).some(p => p.e164 === e164);
-      if (!already) {
-        await supa('/phones', 'POST', [{
-          property_id: propertyId,
-          e164,
-          display: phoneRaw || e164,
-          type: 'Cell',
-        }], { Prefer: 'return=minimal' });
-      }
+  return ok({ ok: true, propertyId, isNew });
+}
+
+exports.handler = async (event) => {
+  if (event.httpMethod === 'OPTIONS') return { statusCode: 204, headers: corsHeaders(), body: '' };
+  if (event.httpMethod !== 'POST') return err('Method not allowed', 405);
+
+  const action = (event.queryStringParameters || {}).action || '';
+
+  try {
+    if (action === 'list' || action === 'seen') {
+      if (!authed(event)) return err('Unauthorized', 401);
+      return action === 'list' ? await handleList() : await handleSeen();
     }
-
-    // ── Lead row: red flag + source + qualifiers ──
-    const leadRow = {
-      property_id: propertyId,
-      highlight: 'red',
-      source,
-      va_notes: qualifierNotes({ ...b, source }),
-      updated_at: new Date().toISOString(),
-      web_lead_at: new Date().toISOString(),
-      lead_seen: false,
-    };
-    if (e164) leadRow.sms_cell = e164;
-
-    try {
-      await supa('/leads?on_conflict=property_id', 'POST', [leadRow], {
-        Prefer: 'resolution=merge-duplicates,return=minimal',
-      });
-    } catch (e) {
-      // If the migration hasn't been run yet, retry without the new columns
-      // so a lead is never lost to a missing column.
-      delete leadRow.source;
-      delete leadRow.web_lead_at;
-      delete leadRow.lead_seen;
-      await supa('/leads?on_conflict=property_id', 'POST', [leadRow], {
-        Prefer: 'resolution=merge-duplicates,return=minimal',
-      });
-    }
-
-    return ok({ ok: true, propertyId, isNew });
+    return await handleIntake(event);
   } catch (e) {
     console.error('web-lead failed:', e.message);
     return err(e.message || 'Server error', 500);
