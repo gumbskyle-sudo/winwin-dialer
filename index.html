@@ -937,6 +937,7 @@ body.view-mail header .callerid{display:none}
   </div>
   <div class="filter-row" id="filterRow">
     <button class="filter-chip" id="filterMyLeads">👤 My leads</button>
+    <button class="filter-chip" id="filterWebLeads">🌐 Website <span id="webLeadCount"></span></button>
     <button class="filter-chip filter-clear hide" id="filterClear">✕ Clear filter</button>
   </div>
   <div class="hide-color-row" id="hideColorRow">
@@ -1618,6 +1619,10 @@ const PAGE_SIZE = 20;
 let page = 1;
 let searchQuery = '';
 let assignFilter = ''; // profile id to filter by, '' = show all
+let webOnlyFilter = false;              // show only website leads
+let webLeadIndex = {};                  // property_id -> {source, web_lead_at, lead_seen}
+let announcedWebLeads = new Set();      // ids we've already toasted about
+const WEB_LEAD_FN = '/.netlify/functions/web-lead';
 let hideOthersAssigned = localStorage.getItem(LS.hideOthers) === '1'; // hide leads assigned to OTHER teammates
 let selectedListColor = 'none'; // color tag applied to uploaded list
 let currentUploadTemplate = 'va'; // active upload column template
@@ -1682,6 +1687,9 @@ function getFilteredProperties(){
   }
   if(assignFilter){
     list = list.filter(p => String((p.lead||{}).assigned_to) === String(assignFilter));
+  }
+  if(webOnlyFilter){
+    list = list.filter(p => !!webLeadIndex[p.id]);
   }
   if(hideOthersAssigned){
     list = list.filter(p => {
@@ -2394,10 +2402,79 @@ $('filterMyLeads').addEventListener('click', () => {
 });
 $('filterClear').addEventListener('click', () => {
   assignFilter = '';
+  webOnlyFilter = false;
+  $('filterWebLeads').classList.remove('active');
   page = 1;
   updateFilterUI();
   renderPage();
 });
+
+// ── Website leads ───────────────────────────────────────────────
+$('filterWebLeads').addEventListener('click', () => {
+  webOnlyFilter = !webOnlyFilter;
+  $('filterWebLeads').classList.toggle('active', webOnlyFilter);
+  $('filterClear').classList.toggle('hide', !webOnlyFilter && !assignFilter);
+  page = 1;
+  renderPage();
+  if(webOnlyFilter) markWebLeadsSeen();
+});
+
+async function webLeadFn(action){
+  const r = await fetch(WEB_LEAD_FN + '?action=' + action, {
+    method: 'POST',
+    headers: { 'Content-Type':'application/json', 'X-Access-Password': password },
+    body: '{}',
+  });
+  if(!r.ok) throw new Error('HTTP ' + r.status);
+  return r.json();
+}
+
+async function loadWebLeads(announce){
+  if(!password) return;
+  try {
+    const j = await webLeadFn('list');
+    webLeadIndex = {};
+    (j.leads || []).forEach(l => { webLeadIndex[l.property_id] = l; });
+    const unseen = (j.leads || []).filter(l => !l.lead_seen);
+    const chip = $('webLeadCount');
+    if(chip) chip.textContent = unseen.length ? '· ' + unseen.length : '';
+    const fresh = unseen.filter(l => !announcedWebLeads.has(l.property_id));
+    fresh.forEach(l => announcedWebLeads.add(l.property_id));
+    if(announce && fresh.length){
+      toast('🌐 ' + fresh.length + ' new website lead' + (fresh.length===1?'':'s') + '!', 'ok');
+      try { if(navigator.vibrate) navigator.vibrate([140,70,140]); } catch {}
+      pushWebLeadNotice(fresh.length);
+      loadProperties().catch(()=>{});
+    }
+    renderPage();
+  } catch(e){ /* silent — never block the dialer */ }
+}
+
+async function markWebLeadsSeen(){
+  try {
+    await webLeadFn('seen');
+    Object.values(webLeadIndex).forEach(l => { l.lead_seen = true; });
+    const chip = $('webLeadCount');
+    if(chip) chip.textContent = '';
+  } catch {}
+}
+
+function pushWebLeadNotice(n){
+  try {
+    if(!('Notification' in window)) return;
+    if(Notification.permission === 'granted'){
+      new Notification('New website lead', {
+        body: n + ' new lead' + (n===1?'':'s') + ' from winwinproperties.net',
+        tag: 'winwin-web-lead',
+      });
+    } else if(Notification.permission === 'default'){
+      Notification.requestPermission();
+    }
+  } catch {}
+}
+
+// Check for new website leads every 60 seconds
+setInterval(() => loadWebLeads(true), 60000);
 
 // ── Realtor Search ───────────────────────────────────────────────
 $('realtorSearchBtn').addEventListener('click', () => searchRealtors(false));
@@ -5579,6 +5656,23 @@ function renderRecordings(recordings, propertyId, container){
   }
 }
 
+// Tag website leads on the dialer cards
+const _renderPageBeforeWeb = renderPage;
+renderPage = function(){
+  _renderPageBeforeWeb();
+  document.querySelectorAll('.card').forEach(card => {
+    const id = card.dataset.id;
+    if(!id || !webLeadIndex[id]) return;
+    if(card.querySelector('.web-lead-tag')) return;
+    const owners = card.querySelector('.owners');
+    if(!owners) return;
+    const src = webLeadIndex[id].source || 'Website';
+    owners.insertAdjacentHTML('beforeend',
+      ' <span class="web-lead-tag" style="display:inline-block;background:#ef4444;color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;margin-left:6px;vertical-align:middle;letter-spacing:.4px">🌐 ' +
+      escapeHtml(src.toUpperCase()) + '</span>');
+  });
+};
+
 // ── Boot ────────────────────────────────────────────────────────
 async function boot(){
   // Verify password is still valid
@@ -5603,6 +5697,7 @@ async function boot(){
     loadOwnedNumbers().catch(()=>{}),
     refreshDealsIndex(),
   ]);
+  loadWebLeads(true);
   // Kick the drip processor on load + load inbox badge count
   tickDrips();
   // Run recording cleanup at most once per 24 hours per device
