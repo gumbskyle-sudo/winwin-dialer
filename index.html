@@ -1298,10 +1298,11 @@ body.view-mail header .callerid{display:none}
         <div style="font-size:13px;margin:14px 0 6px;font-weight:600">Detected: <span id="uploadFileName"></span></div>
         <div style="margin-bottom:10px">
           <div style="font-size:11px;font-weight:600;color:#6b7280;margin-bottom:6px">COLUMN TEMPLATE</div>
-          <div style="display:flex;gap:8px">
-            <button class="upload-template-btn active" data-template="va" style="flex:1;padding:8px;border:2px solid #96751A;background:#faf3e0;color:#96751A;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer">📋 VA Leads</button>
-            <button class="upload-template-btn" data-template="propertyreach" style="flex:1;padding:8px;border:2px solid #d1d5db;background:#fff;color:#374151;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer">🏠 PropertyReach</button>
-            <button class="upload-template-btn" data-template="custom" style="flex:1;padding:8px;border:2px solid #d1d5db;background:#fff;color:#374151;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer">🗂️ Custom</button>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+            <button class="upload-template-btn active" data-template="va" style="padding:8px;border:2px solid #96751A;background:#faf3e0;color:#96751A;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer">📋 VA Leads</button>
+            <button class="upload-template-btn" data-template="propertyreach" style="padding:8px;border:2px solid #d1d5db;background:#fff;color:#374151;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer">🏠 PropertyReach</button>
+            <button class="upload-template-btn" data-template="skiptrace" style="padding:8px;border:2px solid #d1d5db;background:#fff;color:#374151;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer">💎 Skip Trace</button>
+            <button class="upload-template-btn" data-template="custom" style="padding:8px;border:2px solid #d1d5db;background:#fff;color:#374151;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer">🗂️ Custom</button>
           </div>
         </div>
         <div style="font-size:12px;color:#6b7280;margin-bottom:8px">Map your CSV columns to the dialer fields. Phone columns can be repeated — they're combined automatically.</div>
@@ -1317,6 +1318,17 @@ body.view-mail header .callerid{display:none}
             <input type="checkbox" id="skipDuplicates" checked>
             <span><b>Skip duplicates</b> — don't upload addresses or phone numbers already in your list.</span>
           </label>
+        </div>
+        <div style="background:#f0fdf4;border:1px solid #86efac;border-radius:7px;padding:10px;font-size:12px;color:#166534;margin-bottom:10px">
+          <label style="display:flex;gap:6px;align-items:center;cursor:pointer">
+            <input type="checkbox" id="scrubDnc" checked>
+            <span><b>Scrub DNC numbers</b> — drop any phone flagged Do Not Call in the file. Unchecked, they still import but are tagged <b>DNC</b> on the lead.</span>
+          </label>
+        </div>
+        <div style="margin-bottom:10px">
+          <div style="font-size:12px;font-weight:600;color:#374151;margin-bottom:6px">🏷️ List name (optional)</div>
+          <input type="text" id="uploadListNameManual" placeholder="e.g. WPB Lux — Aug 2026" style="width:100%;padding:9px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;background:#fff">
+          <div style="font-size:11px;color:#6b7280;margin-top:4px">Used when the file has no list-name column. Lets you filter these leads later.</div>
         </div>
         <div id="uploadStats" style="font-size:12px;color:#6b7280;margin-bottom:10px"></div>
         <div style="margin-bottom:12px">
@@ -1546,11 +1558,14 @@ async function api(action, opts){
 // ── Phone formatting ────────────────────────────────────────────
 function toE164(s){
   if(!s) return '';
-  const d = String(s).replace(/\D/g,'');
+  let raw = String(s).trim();
+  // Excel/skip-trace exports often hand back floats: "3057614716.0" — drop the decimal tail
+  raw = raw.replace(/\.\d+$/, '');
+  const d = raw.replace(/\D/g,'');
   if(d.length===10) return '+1'+d;
   if(d.length===11 && d[0]==='1') return '+'+d;
-  if(String(s).startsWith('+')) return '+'+d;
-  return d ? '+1'+d : '';
+  if(raw.startsWith('+') && d.length>=11 && d.length<=15) return '+'+d;
+  return ''; // anything else is not a dialable US number — don't fabricate one
 }
 function fmtPhone(s){
   if(!s) return '';
@@ -1736,6 +1751,8 @@ function openModal(id){
   if(id==='uploadModal'){
     $('uploadPreview').classList.add('hide');
     $('csvFile').value = '';
+    if($('scrubDnc')) $('scrubDnc').checked = true;
+    if($('uploadListNameManual')) $('uploadListNameManual').value = '';
     currentUploadTemplate = 'va';
     document.querySelectorAll('.upload-template-btn').forEach(b => {
       const active = b.dataset.template === 'va';
@@ -3188,13 +3205,25 @@ function autoMap(headers){
     if(isStandardPhone || isOwnerPhone){
       const typeI = lower.findIndex((x, idx) => idx !== i && (x === lc+' type' || x === lc.replace('number','type') || x === lc.replace('phone','phone type')));
       const typeIByPattern = lower.findIndex((x, idx) => idx !== i && x.startsWith(lc) && x.includes('type'));
-      phoneCols.push({ num: h, type: typeI >= 0 ? headers[typeI] : (typeIByPattern >= 0 ? headers[typeIByPattern] : '') });
+      // Companion Do-Not-Call column: "Phone 1 DNC", "Phone 1 Do Not Call", "DNC 1"
+      const dncI = lower.findIndex((x, idx) => idx !== i && (
+        x === lc+' dnc' || x === lc+' do not call' || x === lc.replace('number','dnc')
+        || (x.startsWith(lc) && (x.includes('dnc') || x.includes('do not call')))
+      ));
+      phoneCols.push({
+        num:  h,
+        type: typeI >= 0 ? headers[typeI] : (typeIByPattern >= 0 ? headers[typeIByPattern] : ''),
+        dnc:  dncI >= 0 ? headers[dncI] : '',
+      });
     }
   });
   return {
     id:                find(/^id$/, /property\s*id/, /record\s*id/, /^uid$/, /^apn$/),
-    owners:            find(/^seller\s*name$/, /^sellers?\s*name$/, /^owners?$/, /full\s*name/, /owner\s*name/, /^name$/, /^owner\s*1\s*full\s*name$/, /^owner\s*1\s*first\s*name$/),
+    owners:            find(/^seller\s*name$/, /^sellers?\s*name$/, /^owners?$/, /full\s*name/, /owner\s*name/, /^name$/, /^owner\s*1\s*full\s*name$/, /^owner\s*1\s*first\s*name$/, /^first\s*name$/),
     propertyAddress:   find(/^property\s*address$/, /property\s*address/, /site\s*address/, /^address$/, /^street$/),
+    propertyCity:      find(/^property\s*city$/, /^site\s*city$/, /^city$/),
+    propertyState:     find(/^property\s*state$/, /^site\s*state$/, /^state$/),
+    propertyZip:       find(/^property\s*zip$/, /^property\s*zip\s*code$/, /^site\s*zip$/, /^zip$/, /^zip\s*code$/, /^postal\s*code$/),
     mailingAddress:    find(/mailing\s*address/, /mail\s*address/, /owner\s*address/),
     email:             find(/^sellers?\s*email$/, /^email$/, /^email\s*\d*$/, /e-?mail\s*\d*/, /^owner\s*1\s*email\s*1$/),
     vaNotes:           find(/^additional\s*notes?$/, /^va\s*notes?$/, /^notes?$/, /pre.?call\s*notes?/),
@@ -3233,7 +3262,8 @@ function autoMapGeneric(headers){
     owner2:      find(/^owner\s*2\s*full\s*name$/, /^owner\s*2\s*first\s*name$/, /^owner\s*2$/),
     bedrooms:    find(/^bedrooms?$/, /^beds?$/),
     bathrooms:   find(/^total\s*bathrooms?$/, /^bathrooms?$/, /^baths?$/),
-    sqft:        find(/^building\s*sqft$/, /^square\s*footage$/, /^sqft$/, /^living\s*area$/),
+    sqft:        find(/^building\s*sqft$/, /^square\s*footage$/, /^sqft$/, /^living\s*area$/, /^total\s*building\s*area\s*square\s*feet$/, /building\s*area/, /^building\s*square\s*feet$/),
+    lotSize:     find(/^lot\s*size\s*square\s*feet$/, /^lot\s*size\s*sqft$/, /^lot\s*sqft$/, /^lot\s*size$/, /^lot\s*size\s*acres$/, /^acres?$/),
     yearBuilt:   find(/^effective\s*year\s*built$/, /^year\s*built$/),
   };
 }
@@ -3269,6 +3299,24 @@ const UPLOAD_TEMPLATES = {
       'Owner 2 Phone 1','Owner 2 Phone 2','Owner 2 Phone 3',
     ],
   },
+  // Skip-trace exports with a Phone N / Phone N TYPE / Phone N DNC family and
+  // the address split across City / State / Zip columns. Built for the luxury
+  // wholesale lists (teardown / lot / rebuild lists). Phones are re-ordered
+  // best-callable-first and DNC numbers are scrubbed unless you say otherwise.
+  skiptrace: {
+    fields: [
+      { id:'owners',    label:'Owner first name',   hint:'First Name' },
+      { id:'property',  label:'Property Address',   hint:'Property Address' },
+      { id:'city',      label:'City',               hint:'Property City' },
+      { id:'state',     label:'State',              hint:'Property State' },
+      { id:'zip',       label:'Zip',                hint:'Property Zip' },
+      { id:'sqft',      label:'Building Sq Ft',     hint:'Total Building Area Square Feet' },
+      { id:'lotsize',   label:'Lot Sq Ft',          hint:'Lot Size Square Feet' },
+      { id:'listname',  label:'List name',          hint:'List name' },
+      { id:'vanotes',   label:'Notes',              hint:'Notes' },
+    ],
+    phones: [], // populated dynamically from autoMapGeneric()'s phone detection
+  },
   custom: {
     // Fields are auto-detected per-file via autoMapGeneric() rather than
     // fixed hint strings, since "Custom" exists for exports that don't
@@ -3279,6 +3327,9 @@ const UPLOAD_TEMPLATES = {
       { id:'owners',    label:'Owner name' },
       { id:'owner2',    label:'Owner 2 name' },
       { id:'property',  label:'Property Address' },
+      { id:'city',      label:'City' },
+      { id:'state',     label:'State' },
+      { id:'zip',       label:'Zip' },
       { id:'mailing',   label:'Mailing Address' },
       { id:'email',     label:'Email' },
       { id:'vanotes',   label:'Notes' },
@@ -3287,6 +3338,7 @@ const UPLOAD_TEMPLATES = {
       { id:'bedrooms',  label:'Bedrooms' },
       { id:'bathrooms', label:'Bathrooms' },
       { id:'sqft',      label:'Square Footage' },
+      { id:'lotsize',   label:'Lot Size' },
       { id:'yearbuilt', label:'Year Built' },
     ],
     phones: [], // populated dynamically from autoMapGeneric()'s phone detection
@@ -3320,22 +3372,32 @@ function applyTemplate(templateKey){
   };
 
   let tmplPhones, fieldValueLookup;
-  if(templateKey === 'custom'){
+  // "__extended__" is a clone made by "+ Add phone column" — keep the parent's behaviour
+  const autoKey = templateKey === '__extended__' ? (tmpl.__base || 'custom') : templateKey;
+  if(autoKey === 'custom' || autoKey === 'skiptrace'){
     // Use the smarter generic auto-detector instead of fixed hint strings.
     const detected = autoMapGeneric(headers);
     fieldValueLookup = {
       id: detected.id, owners: detected.owners, owner2: detected.owner2,
       property: detected.propertyAddress, mailing: detected.mailingAddress,
+      city: detected.propertyCity, state: detected.propertyState, zip: detected.propertyZip,
       email: detected.email, vanotes: detected.vaNotes, recording: detected.recording,
       listname: detected.listName, bedrooms: detected.bedrooms, bathrooms: detected.bathrooms,
-      sqft: detected.sqft, yearbuilt: detected.yearBuilt,
+      sqft: detected.sqft, lotsize: detected.lotSize, yearbuilt: detected.yearBuilt,
     };
-    tmplPhones = (detected.phones || []).map(p => ({ num: p.num, type: p.type || '' }));
+    tmplPhones = (detected.phones || []).map(p => ({ num: p.num, type: p.type || '', dnc: p.dnc || '' }));
+    if(templateKey === '__extended__' && Array.isArray(tmpl.phones)){
+      // Honour the rows the user added, re-pairing each with its detected type/DNC column
+      tmplPhones = tmpl.phones.map(num => {
+        const hit = (detected.phones || []).find(p => p.num === num);
+        return { num: num || '', type: hit ? (hit.type||'') : '', dnc: hit ? (hit.dnc||'') : '' };
+      });
+    }
   } else {
     fieldValueLookup = null; // fall back to hint-based bestMatch below
-    tmplPhones = (tmpl.phones||[]).map(hint => ({ num: bestMatch(headers, hint), type:'' })).filter(p => p.num);
+    tmplPhones = (tmpl.phones||[]).map(hint => ({ num: bestMatch(headers, hint), type:'', dnc:'' })).filter(p => p.num);
   }
-  const phonesForMap = tmplPhones.length ? tmplPhones : [{num:'',type:''}];
+  const phonesForMap = tmplPhones.length ? tmplPhones : [{num:'',type:'',dnc:''}];
 
   const selForCustom = (id) => {
     const val = fieldValueLookup[id] || '';
@@ -3343,14 +3405,15 @@ function applyTemplate(templateKey){
   };
 
   const phoneRows = phonesForMap.map((p,i) => `
-    <div style="font-weight:600">Phone ${i+1}</div>
+    <div style="font-weight:600">Phone ${i+1}<div style="font-weight:400;font-size:10px;color:#9ca3af">number · type · DNC</div></div>
     <div style="display:flex;gap:6px;flex-wrap:wrap">
       <select class="map-phone-num" data-i="${i}">${opts.replace(`value="${escapeHtml(p.num)}"`, `value="${escapeHtml(p.num)}" selected`)}</select>
       <select class="map-phone-type" data-i="${i}">${opts.replace(`value="${escapeHtml(p.type)}"`, `value="${escapeHtml(p.type)}" selected`)}</select>
+      <select class="map-phone-dnc" data-i="${i}">${opts.replace(`value="${escapeHtml(p.dnc||'')}"`, `value="${escapeHtml(p.dnc||'')}" selected`)}</select>
     </div>`).join('');
 
   $('colMap').innerHTML = tmpl.fields.map(f =>
-    `<div style="font-weight:600">${escapeHtml(f.label)}</div>${templateKey==='custom' ? selForCustom(f.id) : sel(f.id, f.hint)}`
+    `<div style="font-weight:600">${escapeHtml(f.label)}</div>${(templateKey==='custom'||templateKey==='skiptrace') ? selForCustom(f.id) : sel(f.id, f.hint)}`
   ).join('') + phoneRows + `
     <div></div><div><button class="btn-ghost" id="addPhoneCol" style="font-size:12px;padding:5px 10px">+ Add phone column</button></div>`;
 
@@ -3359,7 +3422,10 @@ function applyTemplate(templateKey){
     addBtn.addEventListener('click', () => {
       phonesForMap.push({num:'', type:''});
       // Re-render with the current phones list preserved
-      const extendedTmpl = Object.assign({}, tmpl, { phones: phonesForMap.map(p => p.num || '') });
+      const extendedTmpl = Object.assign({}, tmpl, {
+        phones: phonesForMap.map(p => p.num || ''),
+        __base: (templateKey === '__extended__' ? (tmpl.__base || 'custom') : templateKey),
+      });
       UPLOAD_TEMPLATES['__extended__'] = extendedTmpl;
       applyTemplate('__extended__');
     });
@@ -3375,16 +3441,40 @@ function showCsvPreview(){
 function updateUploadStats(){
   // Count rows that would have at least one phone
   if(!csvParsed) return;
-  const phoneSels = Array.from(document.querySelectorAll('.map-phone-num')).map(s => s.value).filter(Boolean);
+  const numSels = Array.from(document.querySelectorAll('.map-phone-num')).map(s => s.value);
+  const dncSels = Array.from(document.querySelectorAll('.map-phone-dnc')).map(s => s.value);
+  const phoneSels = numSels.filter(Boolean);
   if(!phoneSels.length){ $('uploadStats').textContent = '⚠ No phone column selected — at least one is required.'; return; }
-  let withPhone = 0;
+  const scrub = $('scrubDnc') ? $('scrubDnc').checked : false;
+  let withPhone = 0, callable = 0, dncPhones = 0;
   for(const r of csvParsed.rows){
-    if(phoneSels.some(c => toE164(r[c]).length >= 12)){ withPhone++; }
+    let any = false, ok = false;
+    numSels.forEach((c, j) => {
+      if(!c) return;
+      if(toE164(r[c]).length < 12) return;
+      any = true;
+      if(isDncFlag(dncSels[j] ? r[dncSels[j]] : '')) dncPhones++; else ok = true;
+    });
+    if(any) withPhone++;
+    if(ok) callable++;
   }
-  $('uploadStats').textContent = `${withPhone} of ${csvParsed.rows.length} rows have at least one valid phone number.`;
+  const lost = withPhone - callable;
+  let msg = `${withPhone} of ${csvParsed.rows.length} rows have at least one valid phone number.`;
+  if(dncPhones){
+    msg += ` ${dncPhones} number${dncPhones===1?' is':'s are'} flagged DNC`;
+    msg += lost ? ` — ${lost} lead${lost===1?'':'s'} would have no callable number` : '';
+    msg += scrub ? ' (being scrubbed).' : ' (importing, tagged DNC).';
+  }
+  $('uploadStats').textContent = msg;
+}
+// A DNC cell is truthy for Yes/Y/True/1/X — blank, No, or missing means callable.
+function isDncFlag(v){
+  const s = String(v ?? '').trim().toLowerCase();
+  return s === 'yes' || s === 'y' || s === 'true' || s === '1' || s === 'x' || s === 'dnc';
 }
 $('colMap')?.addEventListener('change', updateUploadStats);
-document.addEventListener('change', e => { if(e.target.closest('.map-phone-num')) updateUploadStats(); });
+$('scrubDnc')?.addEventListener('change', updateUploadStats);
+document.addEventListener('change', e => { if(e.target.closest('.map-phone-num') || e.target.closest('.map-phone-dnc')) updateUploadStats(); });
 
 $('uploadCancel').addEventListener('click', () => { $('uploadPreview').classList.add('hide'); });
 
@@ -3421,8 +3511,16 @@ $('uploadGo').addEventListener('click', async () => {
   // Custom-template extra fields (separate bedrooms/bathrooms columns)
   const bedroomsCol  = $('map-bedrooms')?.value || '';
   const bathroomsCol = $('map-bathrooms')?.value || '';
+  // Skip-trace / Custom: address split across City / State / Zip, plus lot size
+  const cityCol      = $('map-city')?.value || '';
+  const stateCol     = $('map-state')?.value || '';
+  const zipCol       = $('map-zip')?.value || '';
+  const lotSizeCol   = $('map-lotsize')?.value || '';
   const phoneCols   = Array.from(document.querySelectorAll('.map-phone-num')).map(s => s.value);
   const typeCols    = Array.from(document.querySelectorAll('.map-phone-type')).map(s => s.value);
+  const dncCols     = Array.from(document.querySelectorAll('.map-phone-dnc')).map(s => s.value);
+  const scrubDnc    = $('scrubDnc') ? $('scrubDnc').checked : false;
+  const manualList  = ($('uploadListNameManual')?.value || '').trim();
   if(!phoneCols.some(Boolean)){ toast('Select at least one phone column','err'); return; }
   if(!ownersCol && !propCol){ toast('Map at least Owners or Property address','err'); return; }
   const replace   = $('replaceExisting').checked;
@@ -3436,17 +3534,31 @@ $('uploadGo').addEventListener('click', async () => {
   const owner2LastNameCol = findCompanionLastNameCol(headers, owner2Col);
 
   const out = [];
+  let dncScrubbed = 0, dncOnlyRows = 0;
   csvParsed.rows.forEach((r, i) => {
     const phones = [];
+    const seenNums = new Set();
+    let rowHadPhone = false;
     phoneCols.forEach((pc, j) => {
       if(!pc) return;
       const e164 = toE164(r[pc]);
       if(e164.length < 12) return;
+      if(seenNums.has(e164)) return; // same number listed twice in one row
+      seenNums.add(e164);
+      rowHadPhone = true;
+      const rawType = typeCols[j] ? String(r[typeCols[j]] || '').trim() : '';
+      const dnc = isDncFlag(dncCols[j] ? r[dncCols[j]] : '');
+      if(dnc && scrubDnc){ dncScrubbed++; return; }
       const display = fmtPhone(r[pc]) || r[pc];
-      const type = typeCols[j] ? r[typeCols[j]] : '';
-      phones.push({ e164, display, type });
+      // Keep DNC visible on the lead when the user chose to import them anyway
+      const type = dnc ? (rawType ? rawType + ' · DNC' : 'DNC') : rawType;
+      const mobile = /mob|cell|wireless/i.test(rawType);
+      phones.push({ e164, display, type, _rank: (dnc?2:0) + (mobile?0:1), _i: j });
     });
-    if(!phones.length) return;
+    // Dial the best number first: callable mobiles, callable landlines, then DNC
+    phones.sort((a,b) => a._rank - b._rank || a._i - b._i);
+    phones.forEach(p => { delete p._rank; delete p._i; });
+    if(!phones.length){ if(rowHadPhone) dncOnlyRows++; return; }
 
     // Build full name — combine first+last if needed
     let ownerName = ownersCol ? (r[ownersCol] || '') : '';
@@ -3467,32 +3579,55 @@ $('uploadGo').addEventListener('click', async () => {
       if(bd || ba) prParts.push(`Bed/Bath: ${bd||'?'}/${ba||'?'}`);
     }
     if(sqftCol && r[sqftCol])       prParts.push(`Sqft: ${r[sqftCol]}`);
+    if(lotSizeCol && r[lotSizeCol]){
+      const lot = parseFloat(String(r[lotSizeCol]).replace(/[^0-9.]/g,''));
+      if(lot > 0) prParts.push(lot > 500 ? `Lot: ${Math.round(lot).toLocaleString()} sqft (${(lot/43560).toFixed(2)} ac)` : `Lot: ${lot} ac`);
+    }
     if(yearCol && r[yearCol])       prParts.push(`Year Built: ${r[yearCol]}`);
     const prNotes = prParts.length ? prParts.join(' · ') : '';
     const vaNotes = vaNotesCol ? r[vaNotesCol] : '';
     const combinedNotes = [vaNotes, prNotes].filter(Boolean).join('\n');
 
+    // Stitch the address back together when the file splits it into City/State/Zip
+    let fullAddress = propCol ? String(r[propCol] || '').trim() : '';
+    const cityVal  = cityCol  ? String(r[cityCol]  || '').trim() : '';
+    const stateVal = stateCol ? String(r[stateCol] || '').trim().toUpperCase() : '';
+    const zipVal   = zipCol   ? String(r[zipCol]   || '').replace(/\D/g,'').slice(0,5) : '';
+    if(fullAddress && (cityVal || stateVal || zipVal)){
+      const already = fullAddress.toLowerCase();
+      const tail = [
+        cityVal && !already.includes(cityVal.toLowerCase()) ? cityVal : '',
+        [stateVal, zipVal].filter(Boolean).join(' '),
+      ].filter(Boolean).join(', ');
+      if(tail) fullAddress = fullAddress + ', ' + tail;
+    }
+
     out.push({
       id: idCol && r[idCol] ? String(r[idCol]) : '',
       owners: ownerName,
-      property_address: propCol ? r[propCol] : '',
+      property_address: fullAddress,
       email: emailCol ? r[emailCol] : '',
       va_notes: combinedNotes,
       recording_url: recordingCol ? r[recordingCol] : '',
-      list_name: listNameCol ? r[listNameCol] : '',
+      list_name: (listNameCol && r[listNameCol]) ? r[listNameCol] : manualList,
       va_lead: currentUploadTemplate === 'va',
       highlight: listColor,
       phones,
     });
   });
-  if(!out.length){ toast('No rows with valid phone numbers found','err'); return; }
+  if(!out.length){
+    toast(dncOnlyRows ? `No callable rows — all ${dncOnlyRows} had DNC-only numbers. Uncheck "Scrub DNC numbers" to import anyway.` : 'No rows with valid phone numbers found','err');
+    return;
+  }
   const btn = $('uploadGo');
   btn.disabled = true; btn.textContent = 'Importing…';
   try {
     const r = await api('import-properties', {method:'POST', body:{properties: out, replace, skipDuplicates: skipDupes, assignedTo: assignTo}});
     const totalDupes = (r.dupesCollapsed||0) + (r.dupeAddressesSkipped||0);
     const dupMsg = totalDupes ? ` · ${totalDupes} duplicate${totalDupes===1?'':'s'} merged` : '';
-    toast(`Imported ${r.imported} properties · ${r.phones} phones${dupMsg}`,'ok');
+    const dncMsg = dncScrubbed ? ` · ${dncScrubbed} DNC scrubbed` : '';
+    const skipMsg = dncOnlyRows ? ` · ${dncOnlyRows} DNC-only lead${dncOnlyRows===1?'':'s'} skipped` : '';
+    toast(`Imported ${r.imported} properties · ${r.phones} phones${dupMsg}${dncMsg}${skipMsg}`,'ok');
     $('uploadModal').classList.remove('open');
     csvParsed = null;
     page = 1;
