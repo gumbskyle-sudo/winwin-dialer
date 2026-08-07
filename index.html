@@ -275,6 +275,38 @@ body.hide-called .card.called{display:none}
 .calldrawer .hangup{background:#b91c1c;color:#fff;border:none;border-radius:8px;padding:11px 14px;font-size:13px;font-weight:700;cursor:pointer}
 .calldrawer .skip-btn{background:rgba(255,255,255,.12);color:#fff;border:1px solid rgba(255,255,255,.25);border-radius:8px;padding:11px 10px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap}
 .calldrawer .skip-btn:disabled{opacity:.35;cursor:not-allowed}
+.calldrawer .cd-script{background:rgba(255,255,255,.12);color:#f5e6b8;border:1px solid rgba(245,230,184,.35);border-radius:999px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;flex:0 0 auto}
+.calldrawer .cd-script.on{background:#96751A;color:#fff;border-color:#96751A}
+
+/* Live call script panel */
+.scriptpanel{position:fixed;left:0;right:0;top:0;bottom:0;z-index:59;background:#fffdf7;transform:translateY(100%);transition:transform .22s ease;display:flex;flex-direction:column;visibility:hidden}
+.scriptpanel.open{transform:translateY(0);visibility:visible}
+.scriptpanel .sp-head{flex:0 0 auto;background:#0f0d0a;color:#fff;padding:calc(10px + env(safe-area-inset-top)) 14px 10px;display:flex;align-items:center;gap:10px}
+.scriptpanel .sp-head .sp-title{flex:1;min-width:0;font-size:14px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.scriptpanel .sp-head .sp-title span{display:block;font-weight:400;font-size:11px;opacity:.7}
+.scriptpanel .sp-head select{background:#1c1917;color:#f5e6b8;border:1px solid rgba(245,230,184,.3);border-radius:7px;padding:6px 8px;font-size:12px;max-width:38%}
+.scriptpanel .sp-close{background:rgba(255,255,255,.12);color:#fff;border:none;border-radius:8px;width:32px;height:32px;font-size:16px;cursor:pointer;flex:0 0 auto}
+.scriptpanel .sp-body{flex:1 1 auto;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:10px 12px 24px}
+.scriptpanel .sp-sec{border:1px solid #e8d29a;border-radius:10px;margin-bottom:8px;overflow:hidden;background:#fff}
+.scriptpanel .sp-sec>summary{list-style:none;cursor:pointer;padding:11px 12px;font-size:13px;font-weight:700;color:#0f0d0a;background:#faf3e0;display:flex;align-items:center;gap:8px}
+.scriptpanel .sp-sec>summary::-webkit-details-marker{display:none}
+.scriptpanel .sp-sec>summary .sp-n{background:#96751A;color:#fff;border-radius:999px;min-width:20px;height:20px;display:inline-flex;align-items:center;justify-content:center;font-size:11px;flex:0 0 auto}
+.scriptpanel .sp-sec>summary::after{content:'▼';margin-left:auto;font-size:10px;opacity:.5;transition:transform .15s}
+.scriptpanel .sp-sec[open]>summary::after{transform:rotate(180deg)}
+.scriptpanel .sp-in{padding:10px 12px 12px}
+.scriptpanel .sp-say{border-left:3px solid #96751A;background:#fffdf5;padding:8px 10px;margin:0 0 8px;font-size:15px;line-height:1.5;color:#1c1917}
+.scriptpanel .sp-ask{padding:7px 10px 7px 22px;margin:0 0 6px;font-size:15px;line-height:1.45;color:#1c1917;position:relative;background:#fff}
+.scriptpanel .sp-ask::before{content:'▸';position:absolute;left:8px;color:#96751A;font-weight:700}
+.scriptpanel .sp-note{font-size:12px;color:#6b7280;font-style:italic;margin:0 0 8px;padding-left:2px}
+.scriptpanel .sp-warn{background:#fef2f2;border:1px solid #fca5a5;color:#991b1b;font-size:13px;font-weight:700;padding:8px 10px;border-radius:7px;margin:0 0 8px;text-align:center}
+.scriptpanel .sp-sub{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:#96751A;margin:10px 0 6px}
+.scriptpanel .sp-li{font-size:14px;line-height:1.5;color:#1c1917;padding-left:16px;position:relative;margin-bottom:4px}
+.scriptpanel .sp-li::before{content:'•';position:absolute;left:4px;color:#96751A}
+.scriptpanel .sp-copy{background:#96751A;color:#fff;border:none;border-radius:7px;padding:7px 12px;font-size:12px;font-weight:700;cursor:pointer;margin-top:2px}
+.scriptpanel .sp-fill{background:#faf3e0;border-bottom:1px dashed #96751A;font-weight:700;padding:0 2px}
+.scriptpanel .sp-blank{background:#fee2e2;border-bottom:1px dashed #b91c1c;font-weight:700;padding:0 2px}
+.scriptpanel .sp-foot{flex:0 0 auto;border-top:1px solid #e8d29a;background:#fffdf7;padding:8px 12px;display:flex;align-items:center;gap:10px;font-size:11px;color:#6b7280}
+.scriptpanel .sp-foot label{display:flex;align-items:center;gap:5px;cursor:pointer}
 
 /* Toast */
 .toast-stack{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);z-index:80;display:flex;flex-direction:column;gap:6px;pointer-events:none;align-items:center}
@@ -1444,6 +1476,7 @@ body.view-mail header .callerid{display:none}
   </div>
   <div class="row2">
     <span class="timer" id="cdTimer">00:00</span>
+    <button class="cd-script" id="cdScript" title="Show the call script">📜 Script</button>
     <span class="from" id="cdFrom"></span>
   </div>
   <div class="btns">
@@ -1451,6 +1484,20 @@ body.view-mail header .callerid{display:none}
     <button class="skip-btn" id="cdNextLead" title="Skip to the next lead">⏭⏭ Next lead</button>
     <button class="vm-drop" id="cdVoicemail" title="Drop voicemail">📨 VM Drop</button>
     <button class="hangup" id="cdHangup">🔴 End Call</button>
+  </div>
+</div>
+
+<!-- Live call script panel -->
+<div class="scriptpanel" id="scriptPanel">
+  <div class="sp-head">
+    <div class="sp-title" id="spTitle">Call Script<span id="spSub"></span></div>
+    <select id="spSelect" title="Choose script"></select>
+    <button class="sp-close" id="spClose" title="Hide script">✕</button>
+  </div>
+  <div class="sp-body" id="spBody"></div>
+  <div class="sp-foot">
+    <label><input type="checkbox" id="spAuto" checked> Auto-open on call</label>
+    <span style="margin-left:auto">Tap a section to expand</span>
   </div>
 </div>
 
@@ -2656,7 +2703,7 @@ document.addEventListener('toggle', e => {
 async function placeCall(p, ph, btn, phidx){
   btn.classList.add('dialing');
   btn.querySelector('.badge:last-child').textContent='DIALING';
-  showDrawer({name:p.owners, num:ph.e164, state:'Initializing', from:fmtPhone(activeCallerId)}, true);
+  showDrawer({name:p.owners, num:ph.e164, state:'Initializing', from:fmtPhone(activeCallerId), addr:p.property_address}, true);
   try {
     const r = await api('make-call',{method:'POST', body:{
       to: toE164(ph.e164),
@@ -2746,6 +2793,217 @@ function finishCall(label, isErr){
   activeCall = null;
 }
 let hideDrawerTimer = null;
+// ── Call scripts ────────────────────────────────────────────────
+// Sections render as collapsible blocks in the live-call panel.
+// Line kinds: say = read aloud · ask = question · note = coaching (not spoken)
+//             warn = do-this reminder · sub = subheading · li = bullet · copy = copyable block
+// Placeholders {FirstName} {StreetName} {YourName} {Price} are filled from the
+// live lead; anything that can't be filled renders as a red blank you can see.
+const CALL_SCRIPTS = {
+  lux: {
+    name: '💎 Luxury Seller',
+    sections: [
+      { t:'Opening', lines:[
+        { k:'say', x:'Hello {FirstName}?' },
+        { k:'note', x:'Wait for a response.' },
+        { k:'say', x:"I'm calling about your property on {StreetName}. Did I catch you at a bad time?" },
+      ]},
+      { t:'Positioning — credibility + permission', lines:[
+        { k:'say', x:'I am working with a developer in your area and we are actively looking for our next project. We specialize in discreet purchases of higher-end homes and redevelopment properties — no public listings, no open houses. I am not here to waste your time and will not do so with a lowball offer. Is this an okay time?' },
+        { k:'note', x:'If they hesitate:' },
+        { k:'say', x:"Totally fine — this will take about 60 seconds, and you can tell me if it's not relevant to you." },
+      ]},
+      { t:"Why you're calling", lines:[
+        { k:'say', x:"The reason I'm reaching out is, like I said, we're currently working with a small group of buyers looking for properties on larger or well-located lots in this area, and your property came up as a potential fit." },
+        { k:'say', x:"I'm not calling to pressure you into selling — I just want to see if a private, off-market option is something you'd ever consider." },
+      ]},
+      { t:'Soft interest check — gate question', lines:[
+        { k:'ask', x:'How long have you owned the property?' },
+        { k:'ask', x:'Do you have a plan for where you would go next? The only reason I ask is because we can be very flexible with our timeline and even offer sellers time after closing so that there is no stress on your end.' },
+      ]},
+      { t:'Lot size & shape', lines:[
+        { k:'note', x:'Ask conversationally — not like an inspection.' },
+        { k:'ask', x:'Do you happen to know the approximate lot size?' },
+        { k:'note', x:"Check multiple sources to verify. If they don't know: \u201CNo worries, I can find out the exact number easily.\u201D" },
+        { k:'ask', x:'Is the lot fairly rectangular, or does it have any irregular boundaries?' },
+        { k:'ask', x:'Any slope, wash, or natural features that affect buildable area?' },
+      ]},
+      { t:'Setbacks, easements & restrictions', lines:[
+        { k:'ask', x:'Are you aware of any easements on the property — utilities, drainage, access, or shared driveways?' },
+        { k:'ask', x:'Have you ever run into setback limitations or restrictions when making improvements?' },
+        { k:'ask', x:'Is the property subject to any deed restrictions, architectural guidelines, or neighborhood agreements?' },
+      ]},
+      { t:'Zoning & expansion potential', lines:[
+        { k:'ask', x:'Do you know how the property is zoned?' },
+        { k:'ask', x:'Do you know if it allows for expansion, guest homes, or potential lot splits?' },
+      ]},
+      { t:'Utilities & infrastructure — critical for tear-downs', lines:[
+        { k:'ask', x:'Is the home on sewer or septic?' },
+        { k:'ask', x:'Any known issues with utilities — water, power, or gas?' },
+        { k:'ask', x:'Is gas currently on site or nearby?' },
+      ]},
+      { t:'Motivation & timing', lines:[
+        { k:'ask', x:'If you ever did decide to sell, what would that next chapter look like for you?' },
+        { k:'ask', x:'Is there a particular timing that would matter — soon, later, or just whenever it makes sense?' },
+        { k:'ask', x:'What would need to happen for selling to feel worthwhile?' },
+      ]},
+      { t:'Pricing — low pressure', lines:[
+        { k:'ask', x:"I'm not asking for a firm number — but if you had to ballpark, where do you think the property might trade privately?" },
+        { k:'note', x:'If they hesitate:' },
+        { k:'say', x:'No problem — we usually focus on structure and options first before dialing in numbers.' },
+      ]},
+      { t:'How you operate — value positioning', lines:[
+        { k:'note', x:'Luxury sellers care about this.' },
+        { k:'say', x:'Just so you know how we work — everything is handled discreetly, we typically cover seller costs, and we work around your timeline.' },
+        { k:'say', x:'Some sellers prefer certainty, privacy, and flexibility over listing publicly.' },
+        { k:'say', x:'If it ever made sense, we could outline options like selling as-is, delayed closing, or even a potential lease-back.' },
+      ]},
+      { t:'Soft close — no pressure', lines:[
+        { k:'say', x:'Would it make sense for me to take a deeper look and come back with a few private options — purely informational?' },
+      ]},
+      { t:'Teeing up your offer', lines:[
+        { k:'say', x:'Sounds good, thank you so much for being patient with me and providing the answers to my questions. I will take this information and use it to formulate our offer for your property. Once I have everything ready, would you prefer if I called you back or sent the offer via text or email?' },
+      ]},
+      { t:'Making the offer — on the phone', lines:[
+        { k:'say', x:'Hello {FirstName}, this is {YourName} calling you back with an offer for your property on {StreetName}. Is now a good time?' },
+        { k:'say', x:"Fantastic, I'll keep this short and sweet for you. Please keep in mind these numbers are net to you. No commissions or closing costs on your end [plus any additional terms, like a lease-back if applicable]. Our approved offer for your property is {Price}." },
+        { k:'warn', x:'🤐 SHUT UP UNTIL THEY SPEAK' },
+        { k:'sub', x:'Rebuttal 1' },
+        { k:'say', x:'I do want you to keep in mind that like I said these numbers are net to you. No commissions or closing costs on your end. This alone saves you 7–8%, so our offer is the same as if you had sold on-market for {Price}.' },
+        { k:'sub', x:'Rebuttal 2' },
+        { k:'say', x:'Completely understand where you are coming from. For us, this is a simple math equation. We know based on your lot how big and nice of a property we can build, and what comparable properties of that size will sell for in your neighborhood. We plug those numbers in and our offer is what came out.' },
+        { k:'sub', x:'Re-education' },
+        { k:'note', x:'Explain comps in their area. Run the numbers for them.' },
+      ]},
+      { t:'Offer via text / email', lines:[
+        { k:'copy', x:'{FirstName},\n\nOur offer is as outlined below:\n\nPurchase Price:\nEMD:\nClose of Escrow:\nAdditional Terms:\n\nPlease keep in mind these numbers are net to you. No commissions or closing costs on your end. This alone saves you 7–8%, so our offer is the same as if you had sold on-market for {Price}.\n\n{YourName}' },
+      ]},
+      { t:'Internal notes to capture', lines:[
+        { k:'note', x:'Log these in the Live Notepad on the lead card.' },
+        { k:'li', x:'Lot size (actual vs usable)' },
+        { k:'li', x:'Zoning / overlay' },
+        { k:'li', x:'Easements or setbacks' },
+        { k:'li', x:'Sewer vs septic' },
+        { k:'li', x:'Motivation (estate, downsizing, privacy, cash-out)' },
+        { k:'li', x:'Timing' },
+        { k:'li', x:'Seller sophistication' },
+        { k:'li', x:'Emotional attachment' },
+      ]},
+      { t:'Training note', lines:[
+        { k:'note', x:'Luxury sellers respond best when:' },
+        { k:'li', x:"You don't rush to price, but affirm you are not here to give them a lowball offer" },
+        { k:'li', x:'You lead with intelligent land questions to show you are the real deal' },
+        { k:'li', x:'You listen more than you speak' },
+        { k:'li', x:'You sell flexibility, privacy, and certainty, as well as large savings on commissions' },
+      ]},
+    ],
+  },
+};
+
+let activeScriptKey = localStorage.getItem('cb_script_key') || 'lux';
+let scriptAutoOpen  = localStorage.getItem('cb_script_auto') !== '0';
+let scriptCtx = {};
+
+// "312 NATHAN HALE RD, WEST PALM BEACH, FL 33405" -> "Nathan Hale Rd"
+const STREET_UPPER = new Set(['N','S','E','W','NE','NW','SE','SW','NB','SB','US','SR','FM']);
+function streetNameOnly(addr){
+  if(!addr) return '';
+  let s = String(addr).split(',')[0].trim();
+  s = s.replace(/^[\d\-\/]+\s+/, '');            // drop house number
+  s = s.replace(/\s+(apt|unit|ste|#)\s*\S+$/i, '');
+  return s.replace(/\S+/g, w =>
+    STREET_UPPER.has(w.toUpperCase()) ? w.toUpperCase()
+      : w.charAt(0).toUpperCase() + w.slice(1).toLowerCase());
+}
+function firstNameOnly(owners){
+  if(!owners) return '';
+  let s = String(owners).trim();
+  // "ZAFIRIS, CHRISTINA" style lists put the given name after the comma
+  if(s.includes(',')) s = s.split(',').slice(1).join(' ').trim() || s.split(',')[0];
+  const w = s.split(/\s+/)[0] || '';
+  return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
+}
+// Fill placeholders; unknowns render as a visible red blank rather than silently vanishing
+function fillScript(text, ctx, forCopy){
+  const vals = {
+    FirstName: ctx.firstName || '',
+    StreetName: ctx.streetName || '',
+    YourName: ctx.yourName || '',
+    Price: '',
+  };
+  return String(text).replace(/\{(\w+)\}/g, (m, key) => {
+    const v = vals[key];
+    if(forCopy) return v || `[${key.replace(/([A-Z])/g,' $1').trim().toUpperCase()}]`;
+    if(v) return `<span class="sp-fill">${escapeHtml(v)}</span>`;
+    return `<span class="sp-blank">[${escapeHtml(key.replace(/([A-Z])/g,' $1').trim().toUpperCase())}]</span>`;
+  });
+}
+function renderScriptPanel(){
+  const sc = CALL_SCRIPTS[activeScriptKey] || CALL_SCRIPTS.lux;
+  $('spSelect').innerHTML = Object.entries(CALL_SCRIPTS)
+    .map(([k,v]) => `<option value="${escapeHtml(k)}"${k===activeScriptKey?' selected':''}>${escapeHtml(v.name)}</option>`).join('');
+  $('spSub').textContent = [scriptCtx.firstName, scriptCtx.streetName].filter(Boolean).join(' · ') || 'No lead attached';
+  $('spBody').innerHTML = sc.sections.map((sec, i) => {
+    const body = sec.lines.map(l => {
+      const html = fillScript(l.x, scriptCtx, false);
+      if(l.k === 'say')  return `<div class="sp-say">${html}</div>`;
+      if(l.k === 'ask')  return `<div class="sp-ask">${html}</div>`;
+      if(l.k === 'note') return `<div class="sp-note">${html}</div>`;
+      if(l.k === 'warn') return `<div class="sp-warn">${escapeHtml(l.x)}</div>`;
+      if(l.k === 'sub')  return `<div class="sp-sub">${escapeHtml(l.x)}</div>`;
+      if(l.k === 'li')   return `<div class="sp-li">${html}</div>`;
+      if(l.k === 'copy') return `<div class="sp-say" style="white-space:pre-wrap">${html}</div>`
+        + `<button class="sp-copy" data-script-copy="${escapeHtml(encodeURIComponent(fillScript(l.x, scriptCtx, true)))}">⧉ Copy to send</button>`;
+      return '';
+    }).join('');
+    return `<details class="sp-sec"${i===0?' open':''}><summary><span class="sp-n">${i+1}</span>${escapeHtml(sec.t)}</summary><div class="sp-in">${body}</div></details>`;
+  }).join('');
+}
+function setScriptContext(o){
+  scriptCtx = {
+    firstName:  firstNameOnly(o && o.name),
+    streetName: streetNameOnly(o && o.addr),
+    yourName:   localStorage.getItem(LS.profileName) || '',
+  };
+}
+function openScriptPanel(){
+  renderScriptPanel();
+  const panel = $('scriptPanel');
+  panel.style.bottom = ($('callDrawer').offsetHeight || 0) + 'px';
+  panel.classList.add('open');
+  $('cdScript').classList.add('on');
+}
+function closeScriptPanel(){
+  $('scriptPanel').classList.remove('open');
+  $('cdScript').classList.remove('on');
+}
+function toggleScriptPanel(){
+  $('scriptPanel').classList.contains('open') ? closeScriptPanel() : openScriptPanel();
+}
+$('cdScript').addEventListener('click', toggleScriptPanel);
+$('spClose').addEventListener('click', closeScriptPanel);
+$('spSelect').addEventListener('change', e => {
+  activeScriptKey = e.target.value;
+  localStorage.setItem('cb_script_key', activeScriptKey);
+  renderScriptPanel();
+});
+$('spAuto').checked = scriptAutoOpen;
+$('spAuto').addEventListener('change', e => {
+  scriptAutoOpen = e.target.checked;
+  localStorage.setItem('cb_script_auto', scriptAutoOpen ? '1' : '0');
+});
+document.addEventListener('click', async e => {
+  const btn = e.target.closest('[data-script-copy]');
+  if(!btn) return;
+  const text = decodeURIComponent(btn.dataset.scriptCopy);
+  try { await navigator.clipboard.writeText(text); toast('Offer template copied','ok'); }
+  catch { toast('Copy failed — long-press the text to select it','err'); }
+});
+window.addEventListener('resize', () => {
+  const panel = $('scriptPanel');
+  if(panel.classList.contains('open')) panel.style.bottom = ($('callDrawer').offsetHeight || 0) + 'px';
+});
+
 function showDrawer(o, hasLead){
   clearTimeout(hideDrawerTimer);
   $('cdName').textContent = o.name||'—';
@@ -2756,8 +3014,11 @@ function showDrawer(o, hasLead){
   $('cdNextNum').disabled = !hasLead;
   $('cdNextLead').disabled = !hasLead;
   $('callDrawer').classList.add('open');
+  setScriptContext(o);
+  if(scriptAutoOpen) openScriptPanel();
+  else if($('scriptPanel').classList.contains('open')) renderScriptPanel();
 }
-function hideDrawer(){ $('callDrawer').classList.remove('open'); }
+function hideDrawer(){ closeScriptPanel(); $('callDrawer').classList.remove('open'); }
 function setDrawerState(text, cls){ const st=$('cdState'); st.textContent=text; st.className='state '+(cls||''); }
 function updateDrawerTimer(){
   if(!activeCall) return;
