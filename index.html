@@ -121,6 +121,17 @@ body.hide-called .card.called{display:none}
 .badge{font-size:10px;font-weight:700;padding:2px 7px;border-radius:4px;text-transform:uppercase;letter-spacing:.3px;background:rgba(255,255,255,.25);color:#fff}
 .phone.dialing{opacity:.7;pointer-events:none}
 .phone.dialing .badge{background:#f59e0b;color:#000}
+.phone.dnc{background:#fef2f2;color:#7f1d1d;border:1.5px dashed #fca5a5}
+.phone.dnc .badge{background:rgba(185,28,28,.14);color:#7f1d1d}
+.badge.mob{background:#065f46;color:#fff}
+.badge.land{background:rgba(15,13,10,.35);color:#fff}
+.badge.dnc-badge{background:#b91c1c;color:#fff}
+/* Lead spec chips — only render for fields the lead actually has */
+.spec-chips{display:flex;flex-wrap:wrap;gap:5px;margin:5px 0 2px}
+.chip{font-size:11px;font-weight:600;padding:3px 8px;border-radius:999px;background:#f3f4f6;color:#374151;border:1px solid #e5e7eb;white-space:nowrap}
+.chip.gold{background:#faf3e0;border-color:#e8d29a;color:#96751A}
+.chip.list{background:#0f0d0a;border-color:#0f0d0a;color:#f5e6b8}
+.chip.warn{background:#fef2f2;border-color:#fca5a5;color:#991b1b}
 
 /* Mark button */
 /* ── Power Dialer ────────────────────────────────────────────── */
@@ -481,11 +492,41 @@ body.view-pipeline header .callerid{display:none}
   padding:8px 10px;font-size:13px;color:#713f12;margin-bottom:8px;
   line-height:1.5;white-space:pre-wrap;word-break:break-word;
 }
-/* ── Recording player preview ───────────────────────────────── */
-.recording-preview{
-  background:#f0fdf4;border:1px solid #86efac;border-radius:8px;
-  padding:8px 10px;margin-bottom:8px;
+/* ── Per-format card views ─────────────────────────────────── */
+.card.view-lux{border-color:#e8d29a;background:#fffdf7}
+.card.view-lux .property{color:#96751A}
+.card.view-va{border-color:#dbeafe}
+.view-tag{
+  display:inline-block;font-size:10px;font-weight:800;letter-spacing:.05em;
+  padding:2px 7px;border-radius:999px;margin-left:6px;vertical-align:middle;
 }
+.view-tag.lux{background:#96751A;color:#fff}
+.view-tag.va{background:#1d4ed8;color:#fff}
+.land-strip{
+  display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:6px 0 2px;
+  background:#faf3e0;border:1px solid #e8d29a;border-radius:9px;padding:8px 10px;
+}
+.land-strip .ls-item{min-width:0}
+.land-strip .ls-k{font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:#96751A}
+.land-strip .ls-v{font-size:14px;font-weight:700;color:#1c1917;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.land-strip .ls-v.missing{color:#9ca3af;font-weight:500}
+/* ── Recording playback (listen only — no uploads) ──────────── */
+.listen-btn{
+  display:block;width:100%;padding:11px 14px;background:#059669;color:#fff;
+  border-radius:8px;font-size:14px;font-weight:700;text-align:center;
+  text-decoration:none;margin-bottom:8px;
+}
+.rec-list{display:flex;flex-direction:column;gap:5px;margin-top:8px}
+.rec-link{
+  display:flex;align-items:center;gap:8px;padding:8px 11px;
+  background:#faf3e0;border:1px solid #e8d29a;border-radius:7px;
+  text-decoration:none;color:#96751A;font-size:12px;font-weight:500;
+}
+.rec-link .icon{font-size:16px;flex-shrink:0}
+.rec-link .info{flex:1;min-width:0}
+.rec-link .name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rec-link .meta{font-size:10px;color:#6b7280;font-weight:400;margin-top:1px}
+.rec-link .expires{color:#b45309}
 /* ── Pre-call collapsible sections ─────────────────────────── */
 .pre-call-section{margin-bottom:8px}
 .pre-call-toggle{
@@ -494,7 +535,6 @@ body.view-pipeline header .callerid{display:none}
   color:#0f0d0a;cursor:pointer;display:flex;justify-content:space-between;align-items:center;
 }
 .pre-call-toggle.open{border-color:#d97706;background:#fffbeb;color:#92400e}
-.qualifier-inline .pre-call-toggle.open{border-color:#059669;background:#ecfdf5;color:#065f46}
 .toggle-arrow{font-size:10px;transition:transform .2s}
 .pre-call-toggle.open .toggle-arrow{transform:rotate(180deg)}
 .pre-call-content{
@@ -502,7 +542,7 @@ body.view-pipeline header .callerid{display:none}
   border-radius:0 0 8px 8px;padding:10px 12px;font-size:13px;
   color:#374151;white-space:pre-wrap;word-break:break-word;line-height:1.6;
 }
-/* ── Inline qualifier form ───────────────────────────────────── */
+/* ── Inline card forms (documents, e-sign, buyers) ──────────── */
 .iq-field{margin-bottom:10px}
 .iq-field label{display:block;font-size:11px;font-weight:600;color:#78350f;margin-bottom:3px}
 .iq-field input,.iq-field select,.iq-field textarea{
@@ -578,33 +618,6 @@ body.view-pipeline header .callerid{display:none}
   font-size:12px;font-family:inherit;background:#fff;resize:vertical;min-height:60px;
 }
 .va-notes-ta:focus{outline:none;border-color:#96751A}
-
-/* ── Deal Qualifier Form ───────────────────────────────────── */
-.qualifier-card{background:#fffbeb;border:1.5px solid #fde68a}
-.qualifier-card .dd-section-title{color:#92400e}
-.qualifier-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.qualifier-field{display:flex;flex-direction:column}
-.qualifier-field.full{grid-column:1/-1}
-.qualifier-field label{font-size:11px;color:#78350f;font-weight:600;margin-bottom:3px}
-.qualifier-field input,
-.qualifier-field select,
-.qualifier-field textarea{
-  padding:8px 10px;border:1.5px solid #fde68a;border-radius:6px;
-  font-size:13px;background:#fff;font-family:inherit;
-}
-.qualifier-field input:focus,
-.qualifier-field select:focus,
-.qualifier-field textarea:focus{outline:none;border-color:#d97706;background:#fffbeb}
-.qualifier-field textarea{min-height:60px;resize:vertical}
-.qualifier-status{
-  font-size:11px;color:#78350f;background:#fef3c7;
-  padding:6px 10px;border-radius:6px;margin-bottom:10px;
-}
-.qualifier-status.completed{background:#dcfce7;color:#166534;border-color:#bbf7d0}
-.qualifier-save-row{
-  display:flex;justify-content:flex-end;gap:8px;margin-top:12px;
-  padding-top:10px;border-top:1px solid #fde68a;
-}
 
 /* ── Cash Buyers tab ───────────────────────────────────────── */
 #buyersView{display:none}
@@ -705,80 +718,6 @@ body:not(.view-d4d) .d4d-sheet{display:none !important}
 .blast-modal-card .hint{font-size:11px;color:#9ca3af;margin-top:4px}
 .blast-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:14px}
 
-/* ── VA Recordings: download-style links (open in device player) ── */
-.rec-list{display:flex;flex-direction:column;gap:5px;margin-top:8px}
-.rec-link{
-  display:flex;align-items:center;gap:8px;padding:8px 11px;
-  background:#faf3e0;border:1px solid #e8d29a;border-radius:7px;
-  text-decoration:none;color:#96751A;font-size:12px;font-weight:500;
-  transition:background .1s;
-}
-.rec-link:hover{background:#f5e6c0}
-.rec-link .icon{font-size:16px;flex-shrink:0}
-.rec-link .info{flex:1;min-width:0}
-.rec-link .name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.rec-link .meta{font-size:10px;color:#6b7280;font-weight:400;margin-top:1px}
-.rec-link .expires{color:#b45309}
-.rec-link .del-btn{
-  background:transparent;border:none;color:#9ca3af;cursor:pointer;
-  font-size:14px;padding:2px 5px;flex-shrink:0;
-}
-.rec-link .del-btn:hover{color:#b91c1c}
-/* ── Quick Qualifier modal (pops on hot/warm tag) ───────────── */
-#qualMod{
-  position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:90;
-  display:none;align-items:flex-start;justify-content:center;
-  padding:20px 12px;overflow-y:auto;
-}
-#qualMod.open{display:flex}
-#qualMod .card{
-  background:#fff;border-radius:14px;width:100%;max-width:520px;
-  padding:0;overflow:hidden;margin:auto 0;
-}
-#qualMod .head{
-  background:#fffbeb;padding:16px 18px;border-bottom:1.5px solid #fde68a;
-  position:sticky;top:0;z-index:2;
-}
-#qualMod .head h2{margin:0;font-size:16px;color:#78350f;line-height:1.2}
-#qualMod .head .sub{font-size:11px;color:#92400e;margin-top:3px}
-#qualMod .head .lead{font-size:12px;color:#0f0d0a;margin-top:6px;background:#fef3c7;padding:6px 10px;border-radius:6px;font-weight:500}
-#qualMod .body{padding:14px 18px}
-#qualMod .field{margin-bottom:14px}
-#qualMod .field label{
-  display:block;font-size:12px;color:#0f0d0a;font-weight:600;margin-bottom:4px;
-}
-#qualMod .field label .req{color:#dc2626;margin-left:2px}
-#qualMod .field input,
-#qualMod .field select,
-#qualMod .field textarea{
-  width:100%;padding:9px 11px;border:1.5px solid #d1d5db;
-  border-radius:7px;font-size:14px;background:#fff;font-family:inherit;
-}
-#qualMod .field input:focus,
-#qualMod .field select:focus,
-#qualMod .field textarea:focus{outline:none;border-color:#d97706;background:#fffbeb}
-#qualMod .field textarea{min-height:50px;resize:vertical}
-#qualMod .field.invalid input,
-#qualMod .field.invalid select,
-#qualMod .field.invalid textarea{border-color:#dc2626;background:#fef2f2}
-#qualMod .field .err{font-size:11px;color:#dc2626;margin-top:3px;display:none}
-#qualMod .field.invalid .err{display:block}
-#qualMod .actions{
-  display:flex;gap:8px;justify-content:space-between;align-items:center;
-  padding:12px 18px;background:#fffbeb;border-top:1.5px solid #fde68a;
-  position:sticky;bottom:0;
-}
-#qualMod .actions .skip{
-  background:transparent;border:none;color:#6b7280;font-size:13px;
-  cursor:pointer;text-decoration:underline;font-family:inherit;
-}
-#qualMod .actions .skip:hover{color:#0f0d0a}
-#qualMod .actions .save{
-  background:#d97706;color:#fff;border:none;padding:10px 20px;
-  border-radius:7px;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit;
-}
-#qualMod .actions .save:hover{background:#b45309}
-#qualMod .actions .save:disabled{opacity:.5;cursor:wait}
 .sms-consent-block{
   background:#fef3c7;border:1.5px solid #fde68a;border-radius:8px;
   padding:10px 12px;margin-top:8px;
@@ -1333,7 +1272,7 @@ body.view-mail header .callerid{display:none}
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
             <button class="upload-template-btn active" data-template="va" style="padding:8px;border:2px solid #96751A;background:#faf3e0;color:#96751A;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer">📋 VA Leads</button>
             <button class="upload-template-btn" data-template="propertyreach" style="padding:8px;border:2px solid #d1d5db;background:#fff;color:#374151;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer">🏠 PropertyReach</button>
-            <button class="upload-template-btn" data-template="skiptrace" style="padding:8px;border:2px solid #d1d5db;background:#fff;color:#374151;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer">💎 Skip Trace</button>
+            <button class="upload-template-btn" data-template="lux" style="padding:8px;border:2px solid #d1d5db;background:#fff;color:#374151;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer">💎 LUX Leads</button>
             <button class="upload-template-btn" data-template="custom" style="padding:8px;border:2px solid #d1d5db;background:#fff;color:#374151;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer">🗂️ Custom</button>
           </div>
         </div>
@@ -1545,6 +1484,8 @@ const LS = {
   hideOthers:'cb_hide_others', hiddenColors:'cb_hidden_colors',
   vmMessage:'cb_vm_message', vmMode:'cb_vm_mode', vmVoice:'cb_vm_voice', stateFilter:'cb_state_filter',
 };
+// Bump this on every deploy so you can see which build is actually live
+const BUILD_ID = 'build 2026-08-07e';
 const DEFAULT_VM_MESSAGE = "Hi {FirstName}, this is Win-Win Property Solutions reaching out about your property at {Address}. We buy houses in your area and would love to make you a fair cash offer. Give us a call back at {CallbackNumber} whenever it's convenient. Thanks, and have a great day.";
 let backend  = localStorage.getItem(LS.backend) || '/api';
 let password = localStorage.getItem(LS.pwd) || '';
@@ -1858,6 +1799,7 @@ function refreshCounter(){
   if(warm)     parts.push('☀️ '+warm+' warm');
   if(callback) parts.push('📞 '+callback+' callback');
   parts.push('<b>'+(total-called)+'</b> remaining');
+  parts.push('<span style="opacity:.55;font-size:11px">'+BUILD_ID+'</span>');
   $('counter').innerHTML = parts.join(' · ');
 }
 
@@ -1881,6 +1823,84 @@ const STATUS_COLORS = {
   notinterested: {border:'#9ca3af',bg:'#f9fafb',pip:'#9ca3af'},
   wrong:         {border:'#9ca3af',bg:'#f9fafb',pip:'#9ca3af'},
 };
+
+// ── Lead spec chips ─────────────────────────────────────────────
+// Property facts arrive from the CSV import folded into the notes as
+// "Lot: 9,348 sqft (0.21 ac) · Sqft: 1700 · Year Built: 1974". Pull that line
+// back apart so the card shows real fields instead of a wall of text, and so
+// each card only renders the fields that lead actually has.
+const SPEC_ICONS = {
+  'lot':'📐', 'lot size':'📐', 'sqft':'🏠', 'square footage':'🏠', 'building sqft':'🏠',
+  'year built':'🗓', 'bed/bath':'🛏', 'beds/baths':'🛏', 'owner 2':'👤',
+  'zoning':'🗺', 'apn':'🔖', 'county':'📍',
+};
+const SPEC_GOLD = ['lot','lot size','zoning']; // the numbers that decide a teardown
+function parseLeadSpecs(text){
+  const raw = String(text||'');
+  if(!raw.trim()) return { specs:[], rest:raw };
+  const lines = raw.split('\n');
+  const specs = [];
+  const keep = [];
+  lines.forEach(line => {
+    const parts = line.split('·').map(s => s.trim()).filter(Boolean);
+    const parsed = parts.map(pt => {
+      const m = pt.match(/^([A-Za-z0-9 \/]{2,16}):\s*(.+)$/);
+      return m ? { k:m[1].trim(), v:m[2].trim() } : null;
+    });
+    // Only a spec line if every segment is Key: value AND it's either the
+    // importer's multi-part line or a key we recognise — otherwise a genuine
+    // note like "Roof: needs work" would get eaten and shown as a chip.
+    const isSpecLine = parts.length && parsed.every(Boolean) &&
+      (parts.length > 1 || SPEC_ICONS[parsed[0].k.toLowerCase()]);
+    if(isSpecLine) parsed.forEach(s => specs.push(s));
+    else keep.push(line);
+  });
+  return { specs, rest: keep.join('\n').trim() };
+}
+// Which card layout to use for this lead. Set at import from the upload
+// template (stored on list_name), with a data fallback for older leads.
+function detectCardView(p, lead, specs){
+  const list = String(p.list_name || lead.list_name || '').toLowerCase();
+  if(/lux/.test(list)) return 'lux';
+  if(/^va leads/.test(list) || /va lead/.test(list)) return 'va';
+  const has = k => specs.some(sp => sp.k.toLowerCase() === k);
+  // Older leads imported before formats were stamped: infer from the fields present
+  if(has('lot') || has('lot size') || has('zoning') || has('apn')) return 'lux';
+  if((lead.recording_url||'').trim()) return 'va';
+  return 'standard';
+}
+// LUX cards lead with the land numbers — that's what decides a teardown
+const LAND_KEYS = [['Lot','lot size'], ['Sqft','building sqft'], ['Zoning','zone'], ['Year Built','built']];
+function landStripHtml(specs){
+  const get = name => {
+    const hit = specs.find(sp => sp.k.toLowerCase() === name.toLowerCase());
+    return hit ? hit.v : '';
+  };
+  const items = LAND_KEYS.map(([k]) => ({ k, v: get(k) }));
+  if(!items.some(i => i.v)) return ''; // nothing to show — skip the strip entirely
+  return `<div class="land-strip">` + items.map(i =>
+    `<div class="ls-item"><div class="ls-k">${escapeHtml(i.k)}</div>
+     <div class="ls-v${i.v?'':' missing'}">${escapeHtml(i.v || '—')}</div></div>`
+  ).join('') + `</div>`;
+}
+function specChipsHtml(p, lead, specs, view){
+  const chips = [];
+  const listName = (p.list_name || lead.list_name || '').trim();
+  if(listName) chips.push(`<span class="chip list">🏷 ${escapeHtml(listName)}</span>`);
+  const inStrip = view === 'lux' ? LAND_KEYS.map(([k]) => k.toLowerCase()) : [];
+  specs.forEach(s => {
+    if(inStrip.includes(s.k.toLowerCase())) return; // already in the land strip
+    const key = s.k.toLowerCase();
+    const icon = SPEC_ICONS[key] || 'ℹ️';
+    const gold = SPEC_GOLD.includes(key) ? ' gold' : '';
+    chips.push(`<span class="chip${gold}">${icon} ${escapeHtml(s.k)}: ${escapeHtml(s.v)}</span>`);
+  });
+  const phones = p.phones || [];
+  const dnc = phones.filter(ph => /dnc|do not call/i.test(String(ph.type||''))).length;
+  if(phones.length && dnc === phones.length) chips.push(`<span class="chip warn">⛔ All numbers DNC</span>`);
+  else if(dnc) chips.push(`<span class="chip warn">⛔ ${dnc} DNC</span>`);
+  return chips.length ? `<div class="spec-chips">${chips.join('')}</div>` : '';
+}
 
 function renderPage(){
   if(!properties.length){
@@ -1932,21 +1952,37 @@ function renderPage(){
                   called ? 'border-color:#047857;background:#ecfdf5' : '';
     const pipBg = sc ? sc.pip : 'transparent';
     const assignedProfile = lead.assigned_to != null ? allProfiles.find(pr => String(pr.id) === String(lead.assigned_to)) : null;
-    const phoneHtml = (p.phones||[]).map((ph,j) => `
-      <button class="phone" data-call data-pid="${escapeHtml(p.id)}" data-phidx="${j}">
+    const phoneHtml = (p.phones||[]).map((ph,j) => {
+      const parts = String(ph.type||'').split('·').map(s => s.trim()).filter(Boolean);
+      const isDnc  = parts.some(t => /^(dnc|do not call)$/i.test(t));
+      const kind   = parts.find(t => !/^(dnc|do not call)$/i.test(t)) || '';
+      const isMob  = /mob|cell|wireless/i.test(kind);
+      const kindCls = kind ? (isMob ? ' mob' : ' land') : '';
+      return `
+      <button class="phone${isDnc?' dnc':''}" data-call data-pid="${escapeHtml(p.id)}" data-phidx="${j}">
         <span class="num">${escapeHtml(fmtPhone(ph.e164))}</span>
-        ${ph.type ? `<span class="badge">${escapeHtml(ph.type)}</span>` : ''}
+        ${kind ? `<span class="badge${kindCls}">${escapeHtml(kind)}</span>` : ''}
+        ${isDnc ? `<span class="badge dnc-badge">⛔ DNC</span>` : ''}
         <span class="badge">📞 Call</span>
-      </button>`).join('');
+      </button>`;
+    }).join('');
+    const { specs:leadSpecs, rest:leadNotesText } = parseLeadSpecs(lead.va_notes);
+    const cardView  = detectCardView(p, lead, leadSpecs);
+    const chipsHtml = specChipsHtml(p, lead, leadSpecs, cardView);
+    const landHtml  = cardView === 'lux' ? landStripHtml(leadSpecs) : '';
+    const viewTag   = cardView === 'lux' ? '<span class="view-tag lux">LUX</span>'
+                    : cardView === 'va'  ? '<span class="view-tag va">VA</span>' : '';
     const statusOptions = STATUS_OPTIONS.map(([v,l]) => `<option value="${v}"${v===(lead.lead_status||'')?' selected':''}>${l}</option>`).join('');
 
     out.push(`
-      <div class="card${called?' called':''}" data-id="${escapeHtml(p.id)}" data-card-id="${escapeHtml(p.id)}" style="${style}">
+      <div class="card view-${cardView}${called?' called':''}" data-id="${escapeHtml(p.id)}" data-card-id="${escapeHtml(p.id)}" style="${style}">
         <div class="card-top">
           <div class="card-info">
-            <div class="owners">${escapeHtml(p.owners||'(no name)')}${p.va_lead?` <span class="va-lead-tag">VA</span>`:''}</div>
+            <div class="owners">${escapeHtml(p.owners||'(no name)')}${p.va_lead?` <span class="va-lead-tag">VA</span>`:''}${viewTag}</div>
             <div class="property">${escapeHtml(p.property_address||'')}</div>
             ${p.mailing_address ? `<div class="mailing">Mail: ${escapeHtml(p.mailing_address)}</div>` : ''}
+            ${landHtml}
+            ${chipsHtml}
             ${p.property_address ? `<div class="research-links">
               <a href="https://www.zillow.com/homes/${encodeURIComponent(p.property_address)}_rb/" target="_blank" rel="noopener" class="research-link zillow">🏠 Zillow</a>
               <a href="https://www.google.com/maps/place/?q=${encodeURIComponent(p.property_address)}" target="_blank" rel="noopener" class="research-link maps">🗺 Street View</a>
@@ -1960,33 +1996,17 @@ function renderPage(){
             <span class="idx-num">#${idx}</span>
           </div>
         </div>
-        ${(lead.va_notes||'').trim() ? `
+        ${leadNotesText ? `
         <div class="pre-call-section">
           <button class="pre-call-toggle" onclick="this.nextElementSibling.classList.toggle('hide');this.classList.toggle('open')">
             ${notesToggleLabel} <span class="toggle-arrow">▼</span>
           </button>
-          <div class="pre-call-content hide">${escapeHtml(lead.va_notes)}</div>
+          <div class="pre-call-content hide">${escapeHtml(leadNotesText)}</div>
         </div>` : ''}
-        <div class="pre-call-section">
-          <button class="pre-call-toggle" onclick="this.nextElementSibling.classList.toggle('hide');this.classList.toggle('open')">
-            🎙 Call Recording <span class="toggle-arrow">▼</span>
-          </button>
-          <div class="pre-call-content hide">
-            <input type="url" class="recording-url-input" data-recurl data-id="${escapeHtml(p.id)}"
-              placeholder="Paste recording URL here…"
-              value="${escapeHtml(lead.recording_url||'')}"
-              style="width:100%;padding:9px 10px;border:1.5px solid #d1d5db;border-radius:7px;font-size:14px;margin-bottom:8px">
-            ${(lead.recording_url||'').trim() ? `
-            <a href="${escapeHtml(convertDriveUrl(lead.recording_url))}" target="_blank" rel="noopener" id="rec-link-${escapeHtml(p.id)}"
-               style="display:block;width:100%;padding:11px 14px;background:#059669;color:#fff;border-radius:8px;font-size:14px;font-weight:700;text-align:center;text-decoration:none;margin-bottom:6px">
-              ▶ Open &amp; Listen
-            </a>` : `<a href="#" target="_blank" rel="noopener" id="rec-link-${escapeHtml(p.id)}"
-               style="display:none;width:100%;padding:11px 14px;background:#059669;color:#fff;border-radius:8px;font-size:14px;font-weight:700;text-align:center;text-decoration:none;margin-bottom:6px">
-              ▶ Open &amp; Listen
-            </a>`}
-            <button class="iq-save-btn" data-saverecurl="${escapeHtml(p.id)}" style="background:#96751A">Save Recording URL</button>
-          </div>
-        </div>
+        ${(lead.recording_url||'').trim() ? `
+        <a href="${escapeHtml(convertDriveUrl(lead.recording_url))}" target="_blank" rel="noopener" class="listen-btn">
+          ▶ Tap to Listen
+        </a>` : ''}
         <div class="pre-call-section">
           <button class="pre-call-toggle" onclick="this.nextElementSibling.classList.toggle('hide');this.classList.toggle('open')">
             📝 Live Notepad <span class="toggle-arrow">▼</span>
@@ -2147,7 +2167,7 @@ function renderPage(){
           <textarea class="notes-ta" data-notes data-id="${escapeHtml(p.id)}" rows="3" placeholder="Call notes — tap to type…">${escapeHtml(lead.notes||'')}</textarea>
           <details class="va-notes-block"${(lead.va_notes||'').trim()?' open':''}>
             <summary>${notesSummaryLabel}${(lead.va_notes||'').trim()?' ✓':''}</summary>
-            <textarea class="va-notes-ta" data-vanotes data-id="${escapeHtml(p.id)}" rows="4" placeholder="Paste VA notes, prior call summaries, recording links…">${escapeHtml(lead.va_notes||'')}</textarea>
+            <textarea class="va-notes-ta" data-vanotes data-id="${escapeHtml(p.id)}" rows="4" placeholder="Paste VA notes or prior call summaries…">${escapeHtml(lead.va_notes||'')}</textarea>
             <div data-recordings-container="${escapeHtml(p.id)}" id="rec-card-${escapeHtml(p.id)}" style="margin-top:8px"></div>
           </details>
           <div class="lead-tools" style="display:none"><!-- moved above --></div>
@@ -2695,8 +2715,7 @@ document.addEventListener('toggle', e => {
   const container = det.querySelector('[data-recordings-container]');
   if(!container || container.dataset.loaded) return;
   container.dataset.loaded = '1';
-  const propertyId = container.getAttribute('data-recordings-container');
-  loadRecordings(propertyId, container.id);
+  loadRecordings(container.getAttribute('data-recordings-container'), container.id);
 }, true);
 
 // ── Calling ─────────────────────────────────────────────────────
@@ -3457,6 +3476,18 @@ function autoMap(headers){
   // Phone columns: standard format OR PropertyReach "Owner N Phone N" format
   // OR generic skip-trace exports using Wireless/Landline/Voip/Mobile/Cell/Tel column families.
   const phoneCols = [];
+  // Bundled multi-phone column: one cell holding several numbers
+  // ("Phone Numbers" + "Phone Numbers DNC" + "Phone Type"), values comma-separated
+  const bundledI = lower.findIndex(x => /^phone\s*numbers$/.test(x) || /^phones$/.test(x) || /^all\s*phones?$/.test(x));
+  if(bundledI >= 0){
+    const dncI  = lower.findIndex(x => /^phone\s*numbers?\s*dnc$/.test(x) || /^phones?\s*dnc$/.test(x) || /^dnc$/.test(x));
+    const typeI = lower.findIndex(x => /^phone\s*types?$/.test(x) || /^phone\s*numbers?\s*types?$/.test(x));
+    phoneCols.push({
+      num:  headers[bundledI],
+      type: typeI >= 0 ? headers[typeI] : '',
+      dnc:  dncI  >= 0 ? headers[dncI]  : '',
+    });
+  }
   headers.forEach((h,i) => {
     const lc = lower[i];
     const isStandardPhone = /^phone\s*\d*$/.test(lc) || /^phone\s*\d*\s*number$/.test(lc) || /^mobile\s*\d*$/.test(lc) || /^cell\s*\d*$/.test(lc)
@@ -3480,15 +3511,15 @@ function autoMap(headers){
   });
   return {
     id:                find(/^id$/, /property\s*id/, /record\s*id/, /^uid$/, /^apn$/),
-    owners:            find(/^seller\s*name$/, /^sellers?\s*name$/, /^owners?$/, /full\s*name/, /owner\s*name/, /^name$/, /^owner\s*1\s*full\s*name$/, /^owner\s*1\s*first\s*name$/, /^first\s*name$/),
+    owners:            find(/^seller\s*name$/, /^sellers?\s*name$/, /^owners?$/, /full\s*name/, /owner\s*name/, /^name$/, /^owner\s*1\s*full\s*name$/, /^owner\s*1\s*first\s*name$/, /^owner\s*first\s*name$/, /^first\s*name$/),
     propertyAddress:   find(/^property\s*address$/, /property\s*address/, /site\s*address/, /^address$/, /^street$/),
     propertyCity:      find(/^property\s*city$/, /^site\s*city$/, /^city$/),
     propertyState:     find(/^property\s*state$/, /^site\s*state$/, /^state$/),
     propertyZip:       find(/^property\s*zip$/, /^property\s*zip\s*code$/, /^site\s*zip$/, /^zip$/, /^zip\s*code$/, /^postal\s*code$/),
     mailingAddress:    find(/mailing\s*address/, /mail\s*address/, /owner\s*address/),
-    email:             find(/^sellers?\s*email$/, /^email$/, /^email\s*\d*$/, /e-?mail\s*\d*/, /^owner\s*1\s*email\s*1$/),
-    vaNotes:           find(/^additional\s*notes?$/, /^va\s*notes?$/, /^notes?$/, /pre.?call\s*notes?/),
     recording:         find(/^call\s*recording$/, /^recording$/, /recording\s*url/, /recording\s*link/, /audio\s*url/),
+    email:             find(/^sellers?\s*email$/, /^emails?$/, /^email\s*\d*$/, /e-?mail\s*\d*/, /^owner\s*1\s*email\s*1$/),
+    vaNotes:           find(/^additional\s*notes?$/, /^va\s*notes?$/, /^notes?$/, /pre.?call\s*notes?/),
     listName:          find(/^list\s*name$/, /^list$/, /batch/, /campaign/, /source/, /marketing\s*lists?/),
     phones: phoneCols,
   };
@@ -3523,9 +3554,13 @@ function autoMapGeneric(headers){
     owner2:      find(/^owner\s*2\s*full\s*name$/, /^owner\s*2\s*first\s*name$/, /^owner\s*2$/),
     bedrooms:    find(/^bedrooms?$/, /^beds?$/),
     bathrooms:   find(/^total\s*bathrooms?$/, /^bathrooms?$/, /^baths?$/),
-    sqft:        find(/^building\s*sqft$/, /^square\s*footage$/, /^sqft$/, /^living\s*area$/, /^total\s*building\s*area\s*square\s*feet$/, /building\s*area/, /^building\s*square\s*feet$/),
+    sqft:        find(/^property\s*sqft$/, /^building\s*sqft$/, /^square\s*footage$/, /^sqft$/, /^living\s*area$/, /^total\s*building\s*area\s*square\s*feet$/, /building\s*area/, /^building\s*square\s*feet$/),
     lotSize:     find(/^lot\s*size\s*square\s*feet$/, /^lot\s*size\s*sqft$/, /^lot\s*sqft$/, /^lot\s*size$/, /^lot\s*size\s*acres$/, /^acres?$/),
-    yearBuilt:   find(/^effective\s*year\s*built$/, /^year\s*built$/),
+    yearBuilt:   find(/^effective\s*year\s*built$/, /^year\s*buil[dt]$/, /^year\s*built$/),
+    apn:         find(/^apn$/, /^parcel\s*(number|id)$/, /^parcel\s*#$/),
+    propertyType:find(/^property\s*type$/, /^prop\s*type$/, /^land\s*use$/),
+    zoning:      find(/^zoning$/, /^zone$/, /^zoning\s*code$/),
+    county:      find(/^county$/, /^property\s*county$/),
   };
 }
 
@@ -3533,6 +3568,8 @@ function autoMapGeneric(headers){
 
 const UPLOAD_TEMPLATES = {
   va: {
+    label: 'VA Leads',
+    cardView: 'va',
     fields: [
       { id:'owners',   label:'Owner name',          hint:'Seller name' },
       { id:'property', label:'Property address',     hint:'Property address' },
@@ -3544,6 +3581,7 @@ const UPLOAD_TEMPLATES = {
     phones: ['Sellers phone number'],
   },
   propertyreach: {
+    label: 'PropertyReach',
     fields: [
       { id:'id',       label:'Property ID (APN)',    hint:'APN' },
       { id:'owners',   label:'Owner 1 Full Name',    hint:'Owner 1 Full Name' },
@@ -3560,19 +3598,27 @@ const UPLOAD_TEMPLATES = {
       'Owner 2 Phone 1','Owner 2 Phone 2','Owner 2 Phone 3',
     ],
   },
-  // Skip-trace exports with a Phone N / Phone N TYPE / Phone N DNC family and
-  // the address split across City / State / Zip columns. Built for the luxury
-  // wholesale lists (teardown / lot / rebuild lists). Phones are re-ordered
-  // best-callable-first and DNC numbers are scrubbed unless you say otherwise.
-  skiptrace: {
+  // LUX Leads — luxury / teardown / redevelopment lists. Handles either phone
+  // shape: a Phone 1..5 family with TYPE + DNC columns, or a single bundled
+  // "Phone Numbers" cell paired with "Phone Type" and "Phone Numbers DNC".
+  // Address arrives split across City / State / Zip. Phones are re-ordered
+  // best-callable-first and DNC numbers scrubbed unless you say otherwise.
+  lux: {
+    label: 'LUX Leads',
+    cardView: 'lux',
     fields: [
-      { id:'owners',    label:'Owner first name',   hint:'First Name' },
+      { id:'owners',    label:'Owner first name',   hint:'Owner First Name' },
       { id:'property',  label:'Property Address',   hint:'Property Address' },
-      { id:'city',      label:'City',               hint:'Property City' },
-      { id:'state',     label:'State',              hint:'Property State' },
-      { id:'zip',       label:'Zip',                hint:'Property Zip' },
-      { id:'sqft',      label:'Building Sq Ft',     hint:'Total Building Area Square Feet' },
-      { id:'lotsize',   label:'Lot Sq Ft',          hint:'Lot Size Square Feet' },
+      { id:'city',      label:'City',               hint:'City' },
+      { id:'state',     label:'State',              hint:'State' },
+      { id:'zip',       label:'Zip',                hint:'Zip' },
+      { id:'sqft',      label:'Building Sq Ft',     hint:'Property Sqft' },
+      { id:'lotsize',   label:'Lot Size',           hint:'Lot Size' },
+      { id:'proptype',  label:'Property Type',      hint:'Property Type' },
+      { id:'zoning',    label:'Zoning',             hint:'Zoning' },
+      { id:'yearbuilt', label:'Year Built',         hint:'Year Build' },
+      { id:'id',        label:'APN / Parcel',       hint:'APN' },
+      { id:'email',     label:'Email',              hint:'Emails' },
       { id:'listname',  label:'List name',          hint:'List name' },
       { id:'vanotes',   label:'Notes',              hint:'Notes' },
     ],
@@ -3635,7 +3681,7 @@ function applyTemplate(templateKey){
   let tmplPhones, fieldValueLookup;
   // "__extended__" is a clone made by "+ Add phone column" — keep the parent's behaviour
   const autoKey = templateKey === '__extended__' ? (tmpl.__base || 'custom') : templateKey;
-  if(autoKey === 'custom' || autoKey === 'skiptrace'){
+  if(autoKey === 'custom' || autoKey === 'lux'){
     // Use the smarter generic auto-detector instead of fixed hint strings.
     const detected = autoMapGeneric(headers);
     fieldValueLookup = {
@@ -3645,6 +3691,7 @@ function applyTemplate(templateKey){
       email: detected.email, vanotes: detected.vaNotes, recording: detected.recording,
       listname: detected.listName, bedrooms: detected.bedrooms, bathrooms: detected.bathrooms,
       sqft: detected.sqft, lotsize: detected.lotSize, yearbuilt: detected.yearBuilt,
+      proptype: detected.propertyType, zoning: detected.zoning, county: detected.county,
     };
     tmplPhones = (detected.phones || []).map(p => ({ num: p.num, type: p.type || '', dnc: p.dnc || '' }));
     if(templateKey === '__extended__' && Array.isArray(tmpl.phones)){
@@ -3674,7 +3721,7 @@ function applyTemplate(templateKey){
     </div>`).join('');
 
   $('colMap').innerHTML = tmpl.fields.map(f =>
-    `<div style="font-weight:600">${escapeHtml(f.label)}</div>${(templateKey==='custom'||templateKey==='skiptrace') ? selForCustom(f.id) : sel(f.id, f.hint)}`
+    `<div style="font-weight:600">${escapeHtml(f.label)}</div>${(templateKey==='custom'||templateKey==='lux') ? selForCustom(f.id) : sel(f.id, f.hint)}`
   ).join('') + phoneRows + `
     <div></div><div><button class="btn-ghost" id="addPhoneCol" style="font-size:12px;padding:5px 10px">+ Add phone column</button></div>`;
 
@@ -3703,30 +3750,64 @@ function updateUploadStats(){
   // Count rows that would have at least one phone
   if(!csvParsed) return;
   const numSels = Array.from(document.querySelectorAll('.map-phone-num')).map(s => s.value);
+  const typeSels = Array.from(document.querySelectorAll('.map-phone-type')).map(s => s.value);
   const dncSels = Array.from(document.querySelectorAll('.map-phone-dnc')).map(s => s.value);
-  const phoneSels = numSels.filter(Boolean);
-  if(!phoneSels.length){ $('uploadStats').textContent = '⚠ No phone column selected — at least one is required.'; return; }
+  if(!numSels.filter(Boolean).length){ $('uploadStats').textContent = '\u26a0 No phone column selected \u2014 at least one is required.'; return; }
   const scrub = $('scrubDnc') ? $('scrubDnc').checked : false;
-  let withPhone = 0, callable = 0, dncPhones = 0;
+  let withPhone = 0, callable = 0, dncPhones = 0, totalPhones = 0;
   for(const r of csvParsed.rows){
-    let any = false, ok = false;
-    numSels.forEach((c, j) => {
-      if(!c) return;
-      if(toE164(r[c]).length < 12) return;
-      any = true;
-      if(isDncFlag(dncSels[j] ? r[dncSels[j]] : '')) dncPhones++; else ok = true;
-    });
-    if(any) withPhone++;
-    if(ok) callable++;
+    const phones = extractRowPhones(r, numSels, typeSels, dncSels);
+    if(!phones.length) continue;
+    withPhone++; totalPhones += phones.length;
+    const bad = phones.filter(p => p.dnc).length;
+    dncPhones += bad;
+    if(bad < phones.length) callable++;
   }
   const lost = withPhone - callable;
-  let msg = `${withPhone} of ${csvParsed.rows.length} rows have at least one valid phone number.`;
+  let msg = `${withPhone} of ${csvParsed.rows.length} rows have a valid phone (${totalPhones} numbers total).`;
   if(dncPhones){
-    msg += ` ${dncPhones} number${dncPhones===1?' is':'s are'} flagged DNC`;
-    msg += lost ? ` — ${lost} lead${lost===1?'':'s'} would have no callable number` : '';
+    msg += ` ${dncPhones} flagged DNC`;
+    msg += lost ? ` \u2014 ${lost} lead${lost===1?'':'s'} would have no callable number` : '';
     msg += scrub ? ' (being scrubbed).' : ' (importing, tagged DNC).';
   }
   $('uploadStats').textContent = msg;
+}
+// Split a bundled cell ("(305) 672-2025, (718) 545-1053") into parts.
+// Single-value cells simply come back as a one-item list.
+function splitCell(v){
+  if(v === null || v === undefined) return [];
+  return String(v).split(/[,;|\n\r]+/).map(x => x.trim()).filter(Boolean);
+}
+// Pull every phone out of a row, whichever shape the export uses.
+// Returns [{e164, display, type, dnc, rank}] sorted best-callable-first.
+function extractRowPhones(row, numCols, typeCols, dncCols){
+  const out = [];
+  const seen = new Set();
+  numCols.forEach((col, j) => {
+    if(!col) return;
+    const nums  = splitCell(row[col]);
+    if(!nums.length) return;
+    const types = splitCell(typeCols[j] ? row[typeCols[j]] : '');
+    const dncs  = splitCell(dncCols[j]  ? row[dncCols[j]]  : '');
+    // Aligned lists pair up by position; a single value applies to all numbers
+    const pick = (list, k) => list.length === nums.length ? list[k] : (list.length === 1 ? list[0] : '');
+    nums.forEach((raw, k) => {
+      const e164 = toE164(raw);
+      if(e164.length < 12 || seen.has(e164)) return;
+      seen.add(e164);
+      const rawType = String(pick(types, k) || '').trim();
+      const dnc     = isDncFlag(pick(dncs, k));
+      const mobile  = /mob|cell|wireless/i.test(rawType);
+      out.push({
+        e164, display: fmtPhone(raw) || raw,
+        type: dnc ? (rawType ? rawType + ' \u00b7 DNC' : 'DNC') : rawType,
+        dnc, rank: (dnc?2:0) + (mobile?0:1), order: out.length,
+      });
+    });
+  });
+  // Best number first: callable mobiles, callable landlines, then DNC
+  out.sort((a,b) => a.rank - b.rank || a.order - b.order);
+  return out;
 }
 // A DNC cell is truthy for Yes/Y/True/1/X — blank, No, or missing means callable.
 function isDncFlag(v){
@@ -3762,8 +3843,8 @@ $('uploadGo').addEventListener('click', async () => {
   const propCol     = $('map-property')?.value || '';
   const emailCol    = $('map-email')?.value || '';
   const vaNotesCol  = $('map-vanotes')?.value || '';
-  const recordingCol= $('map-recording')?.value || '';
   const listNameCol = $('map-listname')?.value || '';
+  const recordingCol= $('map-recording')?.value || '';
   // PropertyReach extra fields (new combined headers)
   const owner2Col   = $('map-owner2')?.value || '';
   const bedbathCol  = $('map-bedbath')?.value || '';
@@ -3777,11 +3858,17 @@ $('uploadGo').addEventListener('click', async () => {
   const stateCol     = $('map-state')?.value || '';
   const zipCol       = $('map-zip')?.value || '';
   const lotSizeCol   = $('map-lotsize')?.value || '';
+  const propTypeCol  = $('map-proptype')?.value || '';
+  const zoningCol    = $('map-zoning')?.value || '';
   const phoneCols   = Array.from(document.querySelectorAll('.map-phone-num')).map(s => s.value);
   const typeCols    = Array.from(document.querySelectorAll('.map-phone-type')).map(s => s.value);
   const dncCols     = Array.from(document.querySelectorAll('.map-phone-dnc')).map(s => s.value);
   const scrubDnc    = $('scrubDnc') ? $('scrubDnc').checked : false;
   const manualList  = ($('uploadListNameManual')?.value || '').trim();
+  // Stamp the format onto every lead so the dialer card knows which view to render
+  const baseKey = currentUploadTemplate === '__extended__'
+    ? (UPLOAD_TEMPLATES['__extended__']?.__base || 'custom') : currentUploadTemplate;
+  const templateListLabel = UPLOAD_TEMPLATES[baseKey]?.label || '';
   if(!phoneCols.some(Boolean)){ toast('Select at least one phone column','err'); return; }
   if(!ownersCol && !propCol){ toast('Map at least Owners or Property address','err'); return; }
   const replace   = $('replaceExisting').checked;
@@ -3797,28 +3884,11 @@ $('uploadGo').addEventListener('click', async () => {
   const out = [];
   let dncScrubbed = 0, dncOnlyRows = 0;
   csvParsed.rows.forEach((r, i) => {
-    const phones = [];
-    const seenNums = new Set();
-    let rowHadPhone = false;
-    phoneCols.forEach((pc, j) => {
-      if(!pc) return;
-      const e164 = toE164(r[pc]);
-      if(e164.length < 12) return;
-      if(seenNums.has(e164)) return; // same number listed twice in one row
-      seenNums.add(e164);
-      rowHadPhone = true;
-      const rawType = typeCols[j] ? String(r[typeCols[j]] || '').trim() : '';
-      const dnc = isDncFlag(dncCols[j] ? r[dncCols[j]] : '');
-      if(dnc && scrubDnc){ dncScrubbed++; return; }
-      const display = fmtPhone(r[pc]) || r[pc];
-      // Keep DNC visible on the lead when the user chose to import them anyway
-      const type = dnc ? (rawType ? rawType + ' · DNC' : 'DNC') : rawType;
-      const mobile = /mob|cell|wireless/i.test(rawType);
-      phones.push({ e164, display, type, _rank: (dnc?2:0) + (mobile?0:1), _i: j });
-    });
-    // Dial the best number first: callable mobiles, callable landlines, then DNC
-    phones.sort((a,b) => a._rank - b._rank || a._i - b._i);
-    phones.forEach(p => { delete p._rank; delete p._i; });
+    const all = extractRowPhones(r, phoneCols, typeCols, dncCols);
+    const rowHadPhone = all.length > 0;
+    const phones = (scrubDnc ? all.filter(ph => !ph.dnc) : all)
+      .map(ph => ({ e164: ph.e164, display: ph.display, type: ph.type }));
+    if(scrubDnc) dncScrubbed += all.filter(ph => ph.dnc).length;
     if(!phones.length){ if(rowHadPhone) dncOnlyRows++; return; }
 
     // Build full name — combine first+last if needed
@@ -3845,6 +3915,9 @@ $('uploadGo').addEventListener('click', async () => {
       if(lot > 0) prParts.push(lot > 500 ? `Lot: ${Math.round(lot).toLocaleString()} sqft (${(lot/43560).toFixed(2)} ac)` : `Lot: ${lot} ac`);
     }
     if(yearCol && r[yearCol])       prParts.push(`Year Built: ${r[yearCol]}`);
+    if(zoningCol && r[zoningCol])   prParts.push(`Zoning: ${r[zoningCol]}`);
+    if(propTypeCol && r[propTypeCol]) prParts.push(`Property Type: ${r[propTypeCol]}`);
+    if(idCol && r[idCol])           prParts.push(`APN: ${r[idCol]}`);
     const prNotes = prParts.length ? prParts.join(' · ') : '';
     const vaNotes = vaNotesCol ? r[vaNotesCol] : '';
     const combinedNotes = [vaNotes, prNotes].filter(Boolean).join('\n');
@@ -3870,7 +3943,7 @@ $('uploadGo').addEventListener('click', async () => {
       email: emailCol ? r[emailCol] : '',
       va_notes: combinedNotes,
       recording_url: recordingCol ? r[recordingCol] : '',
-      list_name: (listNameCol && r[listNameCol]) ? r[listNameCol] : manualList,
+      list_name: (listNameCol && r[listNameCol]) ? r[listNameCol] : (manualList || templateListLabel),
       va_lead: currentUploadTemplate === 'va',
       highlight: listColor,
       phones,
@@ -4599,7 +4672,7 @@ document.addEventListener('click', async e => {
 const _origRenderPage = renderPage;
 renderPage = function(){
   _origRenderPage();
-  // Add Send-to-pipeline buttons + lazy-load recordings on opened VA notes
+  // Add Send-to-pipeline buttons on hot/warm leads
   document.querySelectorAll('.card').forEach(card => {
     const id = card.dataset.id;
     if(!id) return;
@@ -4614,7 +4687,7 @@ renderPage = function(){
         card.appendChild(btn);
       }
     }
-    // If the VA notes details is already open (because notes exist), load recordings
+    // VA notes already open (notes exist) — pull any recordings for playback
     const det = card.querySelector('.va-notes-block');
     if(det && det.open){
       const container = det.querySelector('[data-recordings-container]');
@@ -4915,142 +4988,6 @@ async function loadDealBuyerSends(){
       container.appendChild(row);
     });
   } catch(e){ /* silent */ }
-}
-
-// ═══════════════════════════════════════════════════════════════
-// DEAL QUALIFIER FORM
-// ═══════════════════════════════════════════════════════════════
-function renderQualifierCard(){
-  const d = openDealData.deal;
-  const completed = !!d.q_completed_at;
-  const completedDate = completed ? new Date(d.q_completed_at).toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'}) : '';
-  const completedBy = d.q_completed_by_profile ? (allProfiles.find(p => p.id === d.q_completed_by_profile)?.name || '') : '';
-
-  const card = el(`<div class="dd-card qualifier-card">
-    <div class="dd-section-title">📋 Deal Qualifier Form</div>
-    <div class="qualifier-status ${completed?'completed':''}">
-      ${completed ? `✓ Completed ${escapeHtml(completedDate)}${completedBy?' by '+escapeHtml(completedBy):''} — saved values shown below, edit and re-save anytime.` : 'Fill this out after you have a real conversation with the seller. Saved on Save Qualifier.'}
-    </div>
-    <div class="qualifier-grid">
-      <div class="qualifier-field full">
-        <label>Why are they selling? (motivation)</label>
-        <textarea data-q="qMotivation" placeholder="e.g. inherited, divorce, tired landlord, job relocation, financial pressure…">${escapeHtml(d.q_motivation||'')}</textarea>
-      </div>
-      <div class="qualifier-field">
-        <label>Timeline to close</label>
-        <select data-q="qTimeline">
-          <option value="">— pick one —</option>
-          <option value="ASAP"${d.q_timeline==='ASAP'?' selected':''}>ASAP (under 30 days)</option>
-          <option value="30-60 days"${d.q_timeline==='30-60 days'?' selected':''}>30-60 days</option>
-          <option value="60-90 days"${d.q_timeline==='60-90 days'?' selected':''}>60-90 days</option>
-          <option value="3-6 months"${d.q_timeline==='3-6 months'?' selected':''}>3-6 months</option>
-          <option value="No rush"${d.q_timeline==='No rush'?' selected':''}>No rush</option>
-        </select>
-      </div>
-      <div class="qualifier-field">
-        <label>Property condition</label>
-        <select data-q="qCondition">
-          <option value="">— pick one —</option>
-          <option value="Turnkey"${d.q_condition==='Turnkey'?' selected':''}>Turnkey / move-in</option>
-          <option value="Light cosmetic"${d.q_condition==='Light cosmetic'?' selected':''}>Light cosmetic</option>
-          <option value="Medium rehab"${d.q_condition==='Medium rehab'?' selected':''}>Medium rehab</option>
-          <option value="Heavy rehab"${d.q_condition==='Heavy rehab'?' selected':''}>Heavy rehab</option>
-          <option value="Teardown"${d.q_condition==='Teardown'?' selected':''}>Teardown</option>
-        </select>
-      </div>
-      <div class="qualifier-field">
-        <label>Asking price ($)</label>
-        <input type="number" data-q="qAskingPrice" value="${d.q_asking_price??''}" placeholder="0">
-      </div>
-      <div class="qualifier-field">
-        <label>Mortgage balance ($)</label>
-        <input type="number" data-q="qMortgageBalance" value="${d.q_mortgage_balance??''}" placeholder="0 if owned free & clear">
-      </div>
-      <div class="qualifier-field">
-        <label>Monthly payment ($)</label>
-        <input type="number" data-q="qMonthlyPayment" value="${d.q_monthly_payment??''}" placeholder="0">
-      </div>
-      <div class="qualifier-field">
-        <label>Occupancy</label>
-        <select data-q="qOccupancy">
-          <option value="">— pick one —</option>
-          <option value="Owner-occupied"${d.q_occupancy==='Owner-occupied'?' selected':''}>Owner-occupied</option>
-          <option value="Tenant"${d.q_occupancy==='Tenant'?' selected':''}>Tenant-occupied</option>
-          <option value="Vacant"${d.q_occupancy==='Vacant'?' selected':''}>Vacant</option>
-        </select>
-      </div>
-      <div class="qualifier-field">
-        <label>Listed with an agent?</label>
-        <select data-q="qListedWithAgent">
-          <option value=""${d.q_listed_with_agent==null?' selected':''}>— unknown —</option>
-          <option value="false"${d.q_listed_with_agent===false?' selected':''}>No</option>
-          <option value="true"${d.q_listed_with_agent===true?' selected':''}>Yes (currently listed)</option>
-        </select>
-      </div>
-      <div class="qualifier-field full">
-        <label>Repairs needed (what's broken / outdated)</label>
-        <textarea data-q="qRepairsNeeded" placeholder="Roof, HVAC, kitchen, baths, foundation, electrical…">${escapeHtml(d.q_repairs_needed||'')}</textarea>
-      </div>
-      <div class="qualifier-field full">
-        <label>Decision makers (who else needs to sign off?)</label>
-        <textarea data-q="qDecisionMakers" placeholder="Spouse, siblings (probate), business partner, attorney…">${escapeHtml(d.q_decision_makers||'')}</textarea>
-      </div>
-      <div class="qualifier-field full">
-        <label>Best callback time</label>
-        <input type="text" data-q="qCallbackTime" value="${escapeHtml(d.q_callback_time||'')}" placeholder="Tomorrow 2pm, Tuesday morning, anytime…">
-      </div>
-      <div class="qualifier-field full">
-        <label>Liens, back taxes, or title issues?</label>
-        <textarea data-q="qLiensOrBackTaxes" placeholder="Tax liens, mechanic liens, HOA liens, divorce decree, probate status…">${escapeHtml(d.q_liens_or_back_taxes||'')}</textarea>
-      </div>
-      <div class="qualifier-field full">
-        <label>Why us instead of retail? (what makes cash attractive)</label>
-        <textarea data-q="qReasonToChooseUs" placeholder="As-is, no repairs, speed, certainty, privacy, avoiding showings…">${escapeHtml(d.q_reason_to_choose_us||'')}</textarea>
-      </div>
-      <div class="qualifier-field full">
-        <label>Competing / other offers</label>
-        <textarea data-q="qOtherOffers" placeholder="Anyone else they're talking to, what they offered, current best offer…">${escapeHtml(d.q_other_offers||'')}</textarea>
-      </div>
-      <div class="qualifier-field full">
-        <label>Anything else worth knowing?</label>
-        <textarea data-q="qExtraNotes" placeholder="Personal context, story, gotchas, red flags, opportunities…">${escapeHtml(d.q_extra_notes||'')}</textarea>
-      </div>
-    </div>
-    <div class="qualifier-save-row">
-      <button class="btn-ghost" id="qualifierClear" style="font-size:12px;padding:8px 14px">Clear form</button>
-      <button class="btn-primary" id="qualifierSave" style="font-size:13px;padding:9px 18px">${completed?'Update qualifier':'Save qualifier'}</button>
-    </div>
-  </div>`);
-
-  // Wire up save
-  setTimeout(() => {
-    document.getElementById('qualifierSave')?.addEventListener('click', saveQualifier);
-    document.getElementById('qualifierClear')?.addEventListener('click', () => {
-      if(!confirm('Clear all qualifier form fields? (Does not delete saved data until you re-save.)')) return;
-      card.querySelectorAll('[data-q]').forEach(inp => {
-        if(inp.tagName === 'SELECT') inp.value = '';
-        else inp.value = '';
-      });
-    });
-  }, 0);
-
-  return card;
-}
-
-async function saveQualifier(){
-  if(!openDealId) return;
-  const body = { id: openDealId, completedByProfileId: activeProfileId };
-  document.querySelectorAll('[data-q]').forEach(inp => {
-    body[inp.dataset.q] = inp.value;
-  });
-  try {
-    await api('save-qualifier', {method:'POST', body});
-    toast('Qualifier saved','ok');
-    // Refresh the deal to show updated completion timestamp
-    openDeal(openDealId);
-  } catch(e){
-    toast('Save failed: '+e.message, 'err');
-  }
 }
 
 // ── Contract: populate dropdowns when section opens ─────────────
@@ -5427,33 +5364,6 @@ document.addEventListener('click', async e => {
     toast(color ? `Highlighted ${color}` : 'Highlight cleared', 'ok');
   } catch(err){ toast('Save failed: '+err.message,'err'); }
   renderPage();
-});
-
-// ── Save recording URL from card input ──────────────────────────
-document.addEventListener('click', async e => {
-  const btn = e.target.closest('[data-saverecurl]');
-  if(!btn) return;
-  const pid = btn.dataset.saverecurl;
-  const input = btn.closest('.pre-call-content').querySelector('[data-recurl]');
-  const url = (input?.value || '').trim();
-  btn.disabled = true; btn.textContent = 'Saving…';
-  try {
-    await api('update-lead', {method:'POST', body:{ propertyId: pid, recordingUrl: url }});
-    const p = properties.find(x => x.id === pid);
-    if(p && p.lead) p.lead.recording_url = url;
-    // Update the open link
-    const link = document.getElementById('rec-link-'+pid);
-    if(link){
-      if(url){ link.href = convertDriveUrl(url); link.style.display='block'; }
-      else { link.style.display='none'; }
-    }
-    toast('Recording URL saved ✓','ok');
-    btn.textContent = 'Saved ✓';
-    setTimeout(()=>{ btn.disabled=false; btn.textContent='Save Recording URL'; }, 2000);
-  } catch(err){
-    toast('Save failed: '+err.message,'err');
-    btn.disabled=false; btn.textContent='Save Recording URL';
-  }
 });
 
 async function renderSmsSection(){
@@ -6002,12 +5912,9 @@ async function loadRecordings(propertyId, containerId){
   if(!container) return;
   try {
     const j = await api('list-recordings&propertyId='+encodeURIComponent(propertyId));
-    renderRecordings(j.recordings || [], propertyId, container);
-  } catch(e){
-    container.innerHTML = '<div style="font-size:11px;color:#b91c1c">'+escapeHtml(e.message)+'</div>';
-  }
+    renderRecordings(j.recordings || [], container);
+  } catch(e){ container.innerHTML = ''; } // silent — playback is a bonus, not core
 }
-
 function fmtFileSize(bytes){
   if(!bytes || bytes < 1024) return (bytes||0) + 'B';
   if(bytes < 1024*1024) return Math.round(bytes/1024) + 'KB';
@@ -6018,38 +5925,24 @@ function fmtRecDate(d){
   const dt = new Date(d);
   return dt.toLocaleDateString(undefined,{month:'short',day:'numeric'}) + ' ' + dt.toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});
 }
-
-function renderRecordings(recordings, propertyId, container){
+// Listen only: tap a row to play. No upload, no delete.
+function renderRecordings(recordings, container){
   container.innerHTML = '';
-  if(recordings.length){
-    const list = el('<div class="rec-list"></div>');
-    recordings.forEach(r => {
-      const daysLeft = Math.max(0, Math.ceil((new Date(r.expires_at) - Date.now())/86400000));
-      const expClass = daysLeft <= 5 ? 'expires' : '';
-      // Anchor with target=_blank + download attr — phones/desktops open in their default player
-      const row = el(`<div class="rec-link" style="cursor:default">
-        <span class="icon">🎙</span>
-        <a href="${escapeHtml(r.playback_url||'#')}" target="_blank" rel="noopener" class="info" style="text-decoration:none;color:inherit;flex:1;min-width:0;cursor:pointer">
-          <div class="name">${escapeHtml(r.filename || 'recording')}</div>
-          <div class="meta">${fmtRecDate(r.uploaded_at)} · ${fmtFileSize(r.size_bytes)} · <span class="${expClass}">${daysLeft}d left</span></div>
-        </a>
-        <button class="del-btn" data-del-rec="${r.id}" title="Delete now">✕</button>
-      </div>`);
-      row.querySelector('[data-del-rec]').addEventListener('click', async (e) => {
-        e.preventDefault(); e.stopPropagation();
-        if(!confirm('Delete this recording? Cannot be undone.')) return;
-        try {
-          await api('delete-recording',{method:'POST', body:{id:r.id}});
-          loadRecordings(propertyId, container.id);
-        } catch(err){ toast('Delete failed: '+err.message,'err'); }
-      });
-      list.appendChild(row);
-    });
-    container.appendChild(list);
-  }
-  if(!recordings.length){
-    container.appendChild(el('<div style="font-size:11px;color:#9ca3af">No recordings.</div>'));
-  }
+  if(!recordings.length) return;
+  const list = el('<div class="rec-list"></div>');
+  recordings.forEach(r => {
+    const daysLeft = Math.max(0, Math.ceil((new Date(r.expires_at) - Date.now())/86400000));
+    const expClass = daysLeft <= 5 ? 'expires' : '';
+    list.appendChild(el(`<a href="${escapeHtml(r.playback_url||'#')}" target="_blank" rel="noopener" class="rec-link">
+      <span class="icon">🎙</span>
+      <span class="info">
+        <span class="name">${escapeHtml(r.filename || 'recording')}</span>
+        <span class="meta">${fmtRecDate(r.uploaded_at)} · ${fmtFileSize(r.size_bytes)} · <span class="${expClass}">${daysLeft}d left</span></span>
+      </span>
+      <span class="icon">▶</span>
+    </a>`));
+  });
+  container.appendChild(list);
 }
 
 // Tag website leads on the dialer cards
@@ -6096,15 +5989,6 @@ async function boot(){
   loadWebLeads(true);
   // Kick the drip processor on load + load inbox badge count
   tickDrips();
-  // Run recording cleanup at most once per 24 hours per device
-  try {
-    const last = parseInt(localStorage.getItem('cleanup_last_ts') || '0', 10);
-    if (Date.now() - last > 24 * 3600 * 1000) {
-      api('cleanup-recordings', {method:'POST', body:{}}).then(() => {
-        localStorage.setItem('cleanup_last_ts', String(Date.now()));
-      }).catch(() => {});
-    }
-  } catch {}
   api('list-inbox').then(j => {
     const ct = (j.threads || []).length;
     $('inboxBadge').textContent = ct ? '· '+ct : '';
