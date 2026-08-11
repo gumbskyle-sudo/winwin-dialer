@@ -1,4 +1,3 @@
-
 /* Real Estate Dialer — single backend
  * ─────────────────────────────────────
  * Required env vars (Netlify → Site → Environment variables):
@@ -11,9 +10,21 @@
  *
  * Fallback if you don't make a Twilio API key:
  *   TWILIO_AUTH_TOKEN
+ *
+ * Also required for the integrations that used to have hardcoded
+ * fallbacks (those have been removed — rotate the old keys):
+ *   SIGNWELL_API_KEY
+ *   PROPERTYREACH_API_KEY
+ *   APIFY_API_TOKEN
+ *
+ * Optional:
+ *   PUBLIC_BASE_URL           defaults to https://winwincalltoclose.netlify.app/api
  */
 
 const TWILIO_BASE = 'https://api.twilio.com/2010-04-01';
+
+// Single source of truth for the callback URLs Twilio needs to reach.
+const BASE_URL = process.env.PUBLIC_BASE_URL || 'https://winwincalltoclose.netlify.app/api';
 
 // ── Auth & response helpers ───────────────────────────────────
 function corsHeaders() {
@@ -142,9 +153,8 @@ function recordingPlaybackUrl(recordingSid) {
 // TwiML played when we call a rep's own phone to record their VM drop message
 function handleRecordVmTwiml(event) {
   const qs = event.queryStringParameters || {};
-  const baseUrl = 'https://winwincalltoclose.netlify.app/api';
   const profileId = qs.profileId || '';
-  const statusCb = `${baseUrl}?action=record-vm-status&profileId=${encodeURIComponent(profileId)}`;
+  const statusCb = `${BASE_URL}?action=record-vm-status&profileId=${encodeURIComponent(profileId)}`;
   const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response>
     <Say voice="alice">Record your voicemail drop message after the tone. Press pound when you're finished.</Say>
     <Record maxLength="120" playBeep="true" finishOnKey="#" trim="trim-silence" recordingStatusCallback="${escapeXml(statusCb)}" recordingStatusCallbackEvent="completed" />
@@ -170,6 +180,165 @@ async function handleRecordVmStatus(event) {
     }
   } catch (e) { console.warn('record-vm-status failed', e.message); }
   return { statusCode: 200, headers: { 'Content-Type': 'text/xml' }, body: '<Response></Response>' };
+}
+
+// ════════════════════════════════════════════════════════════════
+// CALL RECORDING
+// ════════════════════════════════════════════════════════════════
+//
+// Florida requires ALL parties to consent before a call is recorded,
+// and two of the three active markets are Florida. `Property State`
+// tells you where the house is, not where the owner is answering, so
+// the disclosure plays on EVERY call rather than branching by state.
+//
+// Because Twilio rings the agent first in this app, anything before
+// <Dial> is heard only by the agent. The disclosure therefore rides on
+// the url="" attribute of <Number>, which whispers to the seller's leg
+// before the two calls bridge.
+
+const CALL_REC_BUCKET = 'call-recordings';
+const DEFAULT_DISCLOSURE = 'Just so you know, this call may be recorded for quality purposes.';
+
+async function getRecordingConfig() {
+  try {
+    const { json } = await supa('/recording_config?id=eq.1&select=*');
+    return (Array.isArray(json) && json[0]) || { enabled: false };
+  } catch {
+    return { enabled: false };
+  }
+}
+
+// Twilio REST params for recording an outbound call. Dual channel puts
+// the agent on one track and the seller on the other, which is what
+// makes talk ratio and "who talked over whom" reviewable rather than
+// guessed at.
+function recordingParams(cfg) {
+  if (!cfg || !cfg.enabled) return {};
+  return {
+    Record: 'true',
+    RecordingChannels: 'dual',
+    RecordingTrack: 'both',
+    RecordingStatusCallback: `${BASE_URL}?action=recording-status`,
+    RecordingStatusCallbackMethod: 'POST',
+    RecordingStatusCallbackEvent: 'in-progress completed absent',
+    Trim: 'trim-silence',
+  };
+}
+
+// The url="" target on <Number>. Returns '' when recording is off so
+// callers can skip the attribute entirely.
+function whisperUrl(cfg) {
+  if (!cfg || !cfg.enabled) return '';
+  return `${BASE_URL}?action=rec-whisper`;
+}
+
+// TwiML whispered to the seller before the bridge. Mirrors VM Drop:
+// AI voice by default, recorded audio file if one is configured.
+async function handleRecWhisper() {
+  const xml = (inner) => ({
+    statusCode: 200,
+    headers: { 'Content-Type': 'text/xml' },
+    body: `<?xml version="1.0" encoding="UTF-8"?><Response>${inner}</Response>`,
+  });
+  let cfg = {};
+  try { cfg = await getRecordingConfig(); }
+  catch { /* fall through to the default line — never record silently */ }
+
+  if (cfg.enabled === false) return xml('');
+
+  if (cfg.disclosure_mode === 'audio' && cfg.disclosure_audio_url) {
+    return xml(`<Play>${escapeXml(cfg.disclosure_audio_url)}</Play>`);
+  }
+  const voice = cfg.voice || 'Polly.Ruth-Generative';
+  const text  = cfg.disclosure_text || DEFAULT_DISCLOSURE;
+  return xml(`<Say voice="${escapeXml(voice)}">${escapeXml(text)}</Say>`);
+}
+
+// Twilio POSTs here as the recording starts and again when it's ready.
+// On completion we pull the mp3 into Supabase Storage and delete the
+// Twilio original — one copy, one clock for the 30-day purge. If the
+// copy fails the row stays 'pending' and the Twilio original survives,
+// so nothing is ever lost silently.
+async function handleRecordingStatus(event) {
+  try {
+    const params   = parseFormEncoded(event.body || '');
+    const callSid  = params.CallSid || '';
+    const recSid   = params.RecordingSid || '';
+    const recUrl   = params.RecordingUrl || '';
+    const status   = params.RecordingStatus || '';
+    const duration = parseInt(params.RecordingDuration || '0', 10) || 0;
+
+    if (!callSid) return { statusCode: 200, body: 'no call sid' };
+
+    if (status !== 'completed') {
+      await supa(`/calls?twilio_sid=eq.${encodeURIComponent(callSid)}`, 'PATCH', {
+        recording_sid: recSid || null,
+        recording_status: status === 'absent' ? 'absent' : 'pending',
+      }, { Prefer: 'return=minimal' });
+      return { statusCode: 200, body: 'ok' };
+    }
+
+    const media = await fetch(`${recUrl}.mp3`, { headers: { Authorization: twilioAuth() } });
+    if (!media.ok) throw new Error('Twilio media fetch failed: ' + media.status);
+    const buf = Buffer.from(await media.arrayBuffer());
+
+    const day  = new Date().toISOString().slice(0, 10);
+    const path = `${day}/${recSid}.mp3`;
+    const up = await uploadToStorage(CALL_REC_BUCKET, path, buf.toString('base64'), 'audio/mpeg');
+    if (up.error) throw new Error(up.error);
+
+    await supa(`/calls?twilio_sid=eq.${encodeURIComponent(callSid)}`, 'PATCH', {
+      recording_sid: recSid,
+      recording_path: path,
+      recording_duration: duration,
+      recording_status: 'completed',
+      disclosure_played: true,
+    }, { Prefer: 'return=minimal' });
+
+    // Stored safely — drop Twilio's copy so we're not paying two bills
+    // or tracking two retention windows.
+    try {
+      await tw(`/Accounts/${twilioSid()}/Recordings/${encodeURIComponent(recSid)}.json`, 'DELETE');
+    } catch (e) { console.warn('twilio recording delete failed', e.message); }
+
+    return { statusCode: 200, body: 'stored' };
+  } catch (e) {
+    console.warn('recording-status failed', e.message);
+    try {
+      const params = parseFormEncoded(event.body || '');
+      if (params.CallSid) {
+        await supa(`/calls?twilio_sid=eq.${encodeURIComponent(params.CallSid)}`, 'PATCH', {
+          recording_sid: params.RecordingSid || null,
+          recording_status: 'pending',
+        }, { Prefer: 'return=minimal' });
+      }
+    } catch {}
+    return { statusCode: 200, body: 'deferred' };
+  }
+}
+
+// Deletes call recordings past the retention window. Keeps the call
+// row itself, so the log, KPIs, and coaching scores all survive.
+async function cleanupCallRecordings() {
+  const cfg = await getRecordingConfig();
+  const days = parseInt(cfg.retention_days, 10) || 30;
+  const cutoff = new Date(Date.now() - days * 86400000).toISOString();
+
+  const { json: stale } = await supa(
+    `/calls?recording_path=not.is.null&started_at=lt.${encodeURIComponent(cutoff)}&select=id,recording_path&limit=500`
+  );
+  if (!Array.isArray(stale) || !stale.length) return { purged: 0, retentionDays: days };
+
+  const paths = stale.map(r => r.recording_path).filter(Boolean);
+  await deleteFromStorage(CALL_REC_BUCKET, paths);
+
+  const ids = stale.map(r => r.id).join(',');
+  await supa(`/calls?id=in.(${ids})`, 'PATCH', {
+    recording_path: null,
+    recording_status: 'purged',
+  }, { Prefer: 'return=minimal' });
+
+  return { purged: paths.length, retentionDays: days };
 }
 
 // ── Supabase REST helpers (no SDK — keeps function tiny) ──────
@@ -479,7 +648,7 @@ async function _handleTwilioVoiceInboundInner(event) {
   // The seller never hears this. No keypress needed — connects instantly.
   if (qs.whisper === '1') {
     const name = decodeURIComponent(qs.name || 'a seller');
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Say voice="alice">Call from ${name}</Say></Response>`;
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Say voice="alice">Call from ${escapeXml(name)}</Say></Response>`;
     return { statusCode: 200, headers: { 'Content-Type': 'text/xml' }, body: twiml };
   }
 
@@ -521,8 +690,6 @@ async function _handleTwilioVoiceInboundInner(event) {
     return { statusCode: 200, headers: { 'Content-Type': 'text/xml' }, body: twiml };
   }
 
-  // Whisper URL — played only in the team member's ear after they answer
-  const baseUrl    = 'https://winwincalltoclose.netlify.app/api';
   // Simple seamless connect — no whisper URL (was causing XML parse error 12100)
   const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Say voice="alice">Connecting</Say><Dial callerId="${escapeXml(to)}" timeout="30" answerOnBridge="true"><Number>${escapeXml(forwardTo)}</Number></Dial></Response>`;
 
@@ -566,7 +733,7 @@ async function processDueDrips() {
       const template = DRIP_TEMPLATES[drip.kind];
       if (!template) continue;
       // Find the deal + lead info
-      const { json: dealRows } = await supa(`/deals?id=eq.${drip.id ? drip.deal_id : drip.deal_id}&select=*`);
+      const { json: dealRows } = await supa(`/deals?id=eq.${drip.deal_id}&select=*`);
       const deal = dealRows && dealRows[0];
       if (!deal || !deal.property_id) { skipped++; continue; }
       const { json: leadRows } = await supa(`/leads?property_id=eq.${encodeURIComponent(deal.property_id)}&select=sms_consent,sms_cell`);
@@ -783,6 +950,14 @@ exports.handler = async (event) => {
   }
   if (action === 'record-vm-status') {
     return await handleRecordVmStatus(event);
+  }
+  // Call-recording webhooks. Twilio reaches these directly, so they sit
+  // outside the password gate like the other webhooks above.
+  if (action === 'rec-whisper') {
+    return await handleRecWhisper();
+  }
+  if (action === 'recording-status') {
+    return await handleRecordingStatus(event);
   }
   // The drip processor can run via Netlify scheduled function or cron
   // hitting a special key — but to keep it simple, it's behind the
@@ -1118,9 +1293,19 @@ exports.handler = async (event) => {
         if (!body.to)        return err('to required');
         if (!body.from)      return err('from required');
         if (!body.forwardTo) return err('forwardTo required');
-        const twiml = `<Response><Dial callerId="${escapeXml(body.from)}" timeout="30" answerOnBridge="true"><Number>${escapeXml(body.to)}</Number></Dial></Response>`;
+
+        // Recording config decides whether we record and whether the
+        // seller's leg gets the disclosure whisper before bridging.
+        const recCfg = await getRecordingConfig();
+        const whisper = whisperUrl(recCfg);
+        const numberTag = whisper
+          ? `<Number url="${escapeXml(whisper)}">${escapeXml(body.to)}</Number>`
+          : `<Number>${escapeXml(body.to)}</Number>`;
+
+        const twiml = `<Response><Dial callerId="${escapeXml(body.from)}" timeout="30" answerOnBridge="true">${numberTag}</Dial></Response>`;
         const j = await tw(`/Accounts/${twilioSid()}/Calls.json`, 'POST', {
           From: body.from, To: body.forwardTo, Twiml: twiml,
+          ...recordingParams(recCfg),
         });
         // Persist
         try {
@@ -1131,9 +1316,10 @@ exports.handler = async (event) => {
             to_number:   body.to,
             status: j.status || 'queued',
             profile_id: body.profileId || null,
+            recording_status: recCfg.enabled ? 'pending' : 'none',
           }], { Prefer: 'return=minimal' });
         } catch (e) { console.warn('call persist failed', e.message); }
-        return ok({ sid: j.sid, status: j.status });
+        return ok({ sid: j.sid, status: j.status, recording: !!recCfg.enabled });
       }
 
       // ── Power Dialer: place a call in a power dial session ─────
@@ -1145,25 +1331,27 @@ exports.handler = async (event) => {
         if (!body.from)      return err('from required');
         if (!body.agentPhone)return err('agentPhone required');
 
-        const baseUrl = 'https://winwincalltoclose.netlify.app/api';
-        const sessionId = body.sessionId || '';
         const propertyId = body.propertyId || '';
+
+        const recCfg = await getRecordingConfig();
+        const whisper = whisperUrl(recCfg);
+        const numberTag = whisper
+          ? `<Number url="${escapeXml(whisper)}">${escapeXml(body.to)}</Number>`
+          : `<Number>${escapeXml(body.to)}</Number>`;
 
         // TwiML played to the agent when they answer:
         // say the seller name then dial out to the seller
         const sellerName = (body.sellerName || 'your next lead').replace(/[<>&"]/g, '');
-        const connectTwiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Say voice="alice">Connecting to ${sellerName}</Say><Dial callerId="${escapeXml(body.from)}" timeout="30" answerOnBridge="true"><Number>${escapeXml(body.to)}</Number></Dial></Response>`;
-
-        // Status callback so we know when this leg ends
-        const statusCb = `${baseUrl}?action=twilio-status&sid=SID_PLACEHOLDER`;
+        const connectTwiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Say voice="alice">Connecting to ${sellerName}</Say><Dial callerId="${escapeXml(body.from)}" timeout="30" answerOnBridge="true">${numberTag}</Dial></Response>`;
 
         const j = await tw(`/Accounts/${twilioSid()}/Calls.json`, 'POST', {
           From: body.from,
           To:   body.agentPhone,
           Twiml: connectTwiml,
-          StatusCallback: `${baseUrl}?action=twilio-status`,
+          StatusCallback: `${BASE_URL}?action=twilio-status`,
           StatusCallbackMethod: 'POST',
           StatusCallbackEvent: 'completed',
+          ...recordingParams(recCfg),
         });
 
         // Persist call record
@@ -1175,10 +1363,11 @@ exports.handler = async (event) => {
             to_number:   body.to,
             status: j.status || 'queued',
             profile_id: body.profileId || null,
+            recording_status: recCfg.enabled ? 'pending' : 'none',
           }], { Prefer: 'return=minimal' });
         } catch (e) { console.warn('power dial persist failed', e.message); }
 
-        return ok({ sid: j.sid, status: j.status });
+        return ok({ sid: j.sid, status: j.status, recording: !!recCfg.enabled });
       }
 
       case 'call-status': {
@@ -1204,13 +1393,128 @@ exports.handler = async (event) => {
         return ok({ ended: true });
       }
 
+      // ════════════════════════════════════════════════════════
+      // CALL RECORDING — config, playback, review, controls
+      // ════════════════════════════════════════════════════════
+
+      case 'get-recording-config': {
+        const cfg = await getRecordingConfig();
+        return ok({ config: cfg || {} });
+      }
+
+      case 'set-recording-config': {
+        const patch = {
+          enabled:              body.enabled !== false,
+          disclosure_text:      (body.disclosureText || '').trim() || DEFAULT_DISCLOSURE,
+          disclosure_mode:      body.disclosureMode === 'audio' ? 'audio' : 'ai',
+          disclosure_audio_url: (body.disclosureAudioUrl || '').trim() || null,
+          voice:                body.voice || 'Polly.Ruth-Generative',
+          retention_days:       parseInt(body.retentionDays, 10) || 30,
+          updated_at:           new Date().toISOString(),
+        };
+        await supa('/recording_config?on_conflict=id', 'POST', [{ id: 1, ...patch }],
+          { Prefer: 'resolution=merge-duplicates,return=minimal' });
+        return ok({ ok: true });
+      }
+
+      // Review queue. Defaults to calls long enough to be a real
+      // conversation — anything shorter is a hangup or a voicemail.
+      case 'list-call-recordings': {
+        const days   = Math.max(1, Math.min(366, parseInt(qs.days || '30', 10)));
+        const minDur = parseInt(qs.minDuration || '0', 10) || 0;
+        const since  = new Date(Date.now() - days * 86400000).toISOString();
+
+        let path = `/calls?recording_status=eq.completed&started_at=gte.${encodeURIComponent(since)}`
+          + `&select=id,twilio_sid,property_id,profile_id,to_number,from_number,started_at,duration,recording_path,recording_duration`
+          + `&order=started_at.desc&limit=200`;
+        if (qs.propertyId) path += `&property_id=eq.${encodeURIComponent(qs.propertyId)}`;
+        if (minDur) path += `&recording_duration=gte.${minDur}`;
+
+        const { json: rows } = await supa(path);
+        const list = rows || [];
+
+        // Signed URLs so Twilio/Supabase credentials never reach the browser
+        const recordings = [];
+        for (const r of list) {
+          const playbackUrl = r.recording_path
+            ? await signedUrl(CALL_REC_BUCKET, r.recording_path, 3600)
+            : null;
+          recordings.push({ ...r, playbackUrl });
+        }
+
+        // Attach reviews + owner names in two batched lookups
+        const ids = recordings.map(r => r.id).filter(Boolean);
+        if (ids.length) {
+          try {
+            const { json: revs } = await supa(`/call_reviews?call_id=in.(${ids.join(',')})&select=*`);
+            const byCall = {};
+            for (const rv of (revs || [])) byCall[rv.call_id] = rv;
+            for (const r of recordings) r.review = byCall[r.id] || null;
+          } catch { /* reviews are a bonus, not core */ }
+        }
+        const propIds = [...new Set(recordings.map(r => r.property_id).filter(Boolean))];
+        if (propIds.length) {
+          try {
+            const inList = propIds.map(id => `"${String(id).replace(/"/g, '\\"')}"`).join(',');
+            const { json: props } = await supa(`/properties?id=in.(${encodeURIComponent(inList)})&select=id,owners,property_address`);
+            const byProp = {};
+            for (const p of (props || [])) byProp[p.id] = p;
+            for (const r of recordings) {
+              const p = byProp[r.property_id];
+              if (p) { r.owners = p.owners; r.property_address = p.property_address; }
+            }
+          } catch { /* non-fatal */ }
+        }
+        return ok({ recordings });
+      }
+
+      // Coaching score against the five beats of the Luxury Seller script
+      case 'save-call-review': {
+        if (!body.callId) return err('callId required');
+        await supa('/call_reviews?on_conflict=call_id', 'POST', [{
+          call_id:             parseInt(body.callId, 10),
+          reviewer_profile_id: body.profileId || null,
+          got_lot_zoning:      !!body.gotLotZoning,
+          surfaced_motivation: !!body.surfacedMotivation,
+          named_a_number:      !!body.namedANumber,
+          handled_rebuttal:    !!body.handledRebuttal,
+          set_next_step:       !!body.setNextStep,
+          notes:               body.notes || null,
+        }], { Prefer: 'resolution=merge-duplicates,return=minimal' });
+        return ok({ ok: true });
+      }
+
+      // Pause / resume mid-call. Use it the moment a seller starts
+      // reading out an account number — Twilio inserts silence rather
+      // than ending the recording, so the file stays intact.
+      case 'pause-recording':
+      case 'resume-recording': {
+        if (!body.callSid) return err('callSid required');
+        const paused = action === 'pause-recording';
+        const listing = await tw(`/Accounts/${twilioSid()}/Calls/${encodeURIComponent(body.callSid)}/Recordings.json?PageSize=1`);
+        const rec = listing && listing.recordings && listing.recordings[0];
+        if (!rec) return err('No active recording on this call', 404);
+        await tw(`/Accounts/${twilioSid()}/Calls/${encodeURIComponent(body.callSid)}/Recordings/${encodeURIComponent(rec.sid)}.json`, 'POST', {
+          Status: paused ? 'paused' : 'in-progress',
+          PauseBehavior: 'silence',
+        });
+        return ok({ ok: true, paused });
+      }
+
+      // Purge call recordings past the retention window (30 days by
+      // default). The frontend pings this daily; a Netlify scheduled
+      // function can hit it too.
+      case 'cleanup-call-recordings': {
+        const result = await cleanupCallRecordings();
+        return ok(result);
+      }
+
       // Calls the rep's own phone and records their voicemail-drop message
       case 'start-vm-recording': {
         if (!body.profileId) return err('profileId required');
         if (!body.phone)     return err('phone required (your forwarding number)');
         if (!body.from)      return err('from required (a Twilio number you own)');
-        const baseUrl = 'https://winwincalltoclose.netlify.app/api';
-        const url = `${baseUrl}?action=record-vm-twiml&profileId=${encodeURIComponent(body.profileId)}`;
+        const url = `${BASE_URL}?action=record-vm-twiml&profileId=${encodeURIComponent(body.profileId)}`;
         const j = await tw(`/Accounts/${twilioSid()}/Calls.json`, 'POST', {
           From: body.from, To: body.phone, Url: url, Method: 'POST',
         });
@@ -1244,16 +1548,17 @@ exports.handler = async (event) => {
         }
         if (!playUrl && !body.message) return err('No recorded voicemail message and no fallback text provided');
 
-        const { json: childCalls } = await tw(`/Accounts/${twilioSid()}/Calls.json?ParentCallSid=${encodeURIComponent(body.sid)}`);
+        const childCalls = await tw(`/Accounts/${twilioSid()}/Calls.json?ParentCallSid=${encodeURIComponent(body.sid)}`);
         const childCall = childCalls && childCalls.calls && childCalls.calls[0];
         if (!childCall) return err('Could not find the lead\'s call leg — they may have already hung up');
 
-        const inner = playUrl
+        const voice = body.voice || 'Polly.Ruth-Generative';
+        const inner = (playUrl && !body.forceTts)
           ? `<Play>${escapeXml(playUrl)}</Play>`
-          : `<Say voice="alice">${escapeXml(body.message)}</Say>`;
+          : `<Say voice="${escapeXml(voice)}">${escapeXml(body.message)}</Say>`;
         const dropTwiml = `<?xml version="1.0" encoding="UTF-8"?><Response>${inner}<Hangup/></Response>`;
         await tw(`/Accounts/${twilioSid()}/Calls/${encodeURIComponent(childCall.sid)}.json`, 'POST', { Twiml: dropTwiml });
-        return ok({ dropped: true, usedRecording: !!playUrl });
+        return ok({ dropped: true, usedRecording: !!(playUrl && !body.forceTts) });
       }
 
       // ════════════════════════════════════════════════════════
@@ -1917,14 +2222,13 @@ exports.handler = async (event) => {
       }
 
       // ════════════════════════════════════════════════════════
-      // CONTRACTS — upload + email via Zoho
+      // CONTRACTS — upload + email via Spacemail
       // ════════════════════════════════════════════════════════
 
       case 'upload-contract': {
         if (!body.dataBase64) return err('dataBase64 required');
         if (!body.filename)   return err('filename required');
         const mime = body.mimeType || 'application/pdf';
-        const ext  = (body.filename.match(/\.([a-z0-9]+)$/i) || [,'pdf'])[1].toLowerCase();
         const safeName = body.filename.replace(/[^a-zA-Z0-9._-]/g,'_');
         const path = `${Date.now()}_${Math.random().toString(36).slice(2,8)}_${safeName}`;
         const up = await uploadToStorage('contracts', path, body.dataBase64, mime);
@@ -2065,7 +2369,8 @@ exports.handler = async (event) => {
         if (!body.signerEmail)  return err('signerEmail required');
         if (!body.signerName)   return err('signerName required');
 
-        const SIGNWELL_KEY = process.env.SIGNWELL_API_KEY || 'YWNjZXNzOjhjOTYxY2I3NDlhMmIzNjAxOTI0ZTVlM2QwY2IzNTA4';
+        const SIGNWELL_KEY = process.env.SIGNWELL_API_KEY;
+        if (!SIGNWELL_KEY) return err('SIGNWELL_API_KEY not set in Netlify env vars', 500);
 
         const payload = {
           template_id: body.templateId,
@@ -2105,7 +2410,8 @@ exports.handler = async (event) => {
 
       case 'check-signature-status': {
         if (!body.documentId) return err('documentId required');
-        const SIGNWELL_KEY = process.env.SIGNWELL_API_KEY || 'YWNjZXNzOjhjOTYxY2I3NDlhMmIzNjAxOTI0ZTVlM2QwY2IzNTA4';
+        const SIGNWELL_KEY = process.env.SIGNWELL_API_KEY;
+        if (!SIGNWELL_KEY) return err('SIGNWELL_API_KEY not set in Netlify env vars', 500);
         const resp = await fetch('https://www.signwell.com/api/v1/documents/' + encodeURIComponent(body.documentId), {
           headers: { 'X-Api-Key': SIGNWELL_KEY },
         });
@@ -2121,7 +2427,8 @@ exports.handler = async (event) => {
       case 'get-comparables': {
         if (!body.address) return err('address required');
 
-        const PROPERTYREACH_KEY = process.env.PROPERTYREACH_API_KEY || 'test_Od67q03Md5PMJ1xykK9UBhKZbEQe3YlfTk6';
+        const PROPERTYREACH_KEY = process.env.PROPERTYREACH_API_KEY;
+        if (!PROPERTYREACH_KEY) return err('PROPERTYREACH_API_KEY not set in Netlify env vars', 500);
 
         // Parse "123 Main St, Springfield, NY 11735" into street/city/state/zip.
         // PropertyReach's target object accepts these as separate fields.
@@ -2187,7 +2494,8 @@ exports.handler = async (event) => {
 
       case 'search-realtors': {
         if (!body.zipCode) return err('zipCode required');
-        const APIFY_TOKEN = process.env.APIFY_API_TOKEN || 'apify_api_BzvtdXSFSTGcWCqj6yK784P6cDJkEJ1zJKzm';
+        const APIFY_TOKEN = process.env.APIFY_API_TOKEN;
+        if (!APIFY_TOKEN) return err('APIFY_API_TOKEN not set in Netlify env vars', 500);
         const page = parseInt(body.page || 0); // shuffle page offset
 
         const runResp = await fetch(
