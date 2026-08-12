@@ -842,6 +842,49 @@ body.view-mail header .callerid{display:none}
   .dd-stage-btn{font-size:10px;padding:6px 2px}
   .drip-start-grid{grid-template-columns:1fr}
 }
+/* ═══════════════════════════════════════════════════════════
+   CALL RECORDING
+   ═══════════════════════════════════════════════════════════ */
+.rec-pill{background:#b91c1c;color:#fff;border:none;border-radius:999px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;flex:0 0 auto}
+.rec-pill.paused{background:#4b5563}
+.rec-pill .rec-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#fff;margin-right:5px;vertical-align:middle;animation:recblink 1.4s infinite}
+.rec-pill.paused .rec-dot{animation:none;opacity:.5}
+@keyframes recblink{0%,100%{opacity:1}50%{opacity:.25}}
+.rv-row{background:#fff;border:1.5px solid #e5e7eb;border-radius:10px;padding:12px 14px;margin-bottom:8px}
+.rv-row.reviewed{border-color:#bbf7d0;background:#f8fdfa}
+.rv-head{display:flex;gap:10px;align-items:flex-start;margin-bottom:8px}
+.rv-who{flex:1;min-width:0}
+.rv-who .nm{font-size:14px;font-weight:600;color:#0f0d0a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rv-who .mt{font-size:11px;color:#6b7280;margin-top:2px}
+.rv-dur{font-size:11px;font-weight:700;color:#96751A;background:#faf3e0;border:1px solid #e8d29a;border-radius:6px;padding:3px 8px;flex-shrink:0}
+.rv-row audio{width:100%;margin-bottom:8px}
+.rv-score{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}
+.rv-chk{font-size:11px;font-weight:600;padding:5px 10px;border-radius:999px;border:1.5px solid #d1d5db;background:#fff;color:#6b7280;cursor:pointer;user-select:none}
+.rv-chk.on{background:#047857;border-color:#047857;color:#fff}
+.rv-note{width:100%;border:1.5px solid #e5e7eb;border-radius:7px;padding:8px 10px;font-size:13px;font-family:inherit;min-height:44px;resize:vertical;background:#f9fafb}
+.rv-note:focus{outline:none;border-color:#96751A;background:#fff}
+.rv-save{margin-top:6px;padding:7px 14px;background:#D4AF37;color:#0f0d0a;border:none;border-radius:7px;font-size:12px;font-weight:700;cursor:pointer}
+.rec-set{background:#f9fafb;border-radius:8px;padding:12px 14px;margin-top:10px}
+.rec-set h3{margin:0 0 8px;font-size:13px;color:#0f0d0a}
+.rec-set label{display:block;font-size:11px;color:#6b7280;font-weight:600;margin:8px 0 4px}
+.rec-set input,.rec-set select,.rec-set textarea{width:100%;padding:8px 10px;border:1.5px solid #d1d5db;border-radius:6px;font-size:13px;background:#fff;font-family:inherit}
+.rec-set textarea{min-height:52px;resize:vertical}
+.rec-legal{font-size:11px;color:#92400e;background:#fef3c7;border-radius:6px;padding:8px 10px;margin-top:8px;line-height:1.5}
+
+/* ═══════════════════════════════════════════════════════════
+   POWER DIAL — wrap-up pause between calls
+   ═══════════════════════════════════════════════════════════ */
+#pdWrapUp{background:#1c1917;border-radius:10px;padding:12px 14px;margin-top:10px;border:1px solid #96751A}
+#pdWrapUp .wu-top{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+#pdWrapUp .wu-lbl{font-size:13px;font-weight:700;color:#f5e6b8;flex:1;min-width:0}
+#pdWrapUp .wu-lbl span{display:block;font-weight:400;font-size:11px;color:#9ca3af;margin-top:2px}
+#pdWrapUp .wu-count{font-family:ui-monospace,monospace;font-size:26px;font-weight:700;color:#fff;min-width:38px;text-align:center}
+#pdWrapUp .wu-btns{display:flex;gap:6px;margin-top:10px;flex-wrap:wrap}
+#pdWrapUp .wu-btns button{flex:1 1 auto;padding:9px 12px;border-radius:7px;font-size:12px;font-weight:700;cursor:pointer;border:1.5px solid #374151;background:#374151;color:#e5e7eb;font-family:inherit}
+#pdWrapUp .wu-btns button:hover{background:#4b5563}
+#pdWrapUp .wu-go{background:#D4AF37;border-color:#D4AF37;color:#0f0d0a}
+#pdWrapUp .wu-hold{background:#b45309;border-color:#b45309;color:#fff}
+#pdWrapUp .wu-hold.on{background:#f59e0b;border-color:#f59e0b;color:#0f0d0a}
 </style>
 </head>
 <body>
@@ -891,6 +934,7 @@ body.view-mail header .callerid{display:none}
     <button class="header-link" data-open="manualDialModal">☎ Dial a number</button>
     <button class="header-link" data-open="numbersModal">📞 Numbers</button>
     <button class="header-link" data-open="logModal">📊 Log</button>
+    <button class="header-link" data-open="recModal">🎙 Recordings</button>
     <button class="header-link" data-open="uploadModal">⬆ Upload List</button>
     <button class="header-link" data-open="settingsModal">⚙ Settings</button>
   </div>
@@ -938,6 +982,17 @@ body.view-mail header .callerid{display:none}
     </div>
     <div style="font-size:11px;color:#9ca3af;text-align:center;padding:4px 0">
       Call the highlighted lead below → tap <b style="color:#fff">Mark as called</b> to auto-advance
+    </div>
+    <div id="pdWrapUp" class="hide">
+      <div class="wu-top">
+        <div class="wu-lbl">Wrap-up<span id="pdWrapWho">Log the call — status and notes</span></div>
+        <div class="wu-count" id="pdWrapCount">10</div>
+      </div>
+      <div class="wu-btns">
+        <button class="wu-hold" id="pdWrapHold">⏸ Hold</button>
+        <button id="pdWrapPlus">+20s</button>
+        <button class="wu-go" id="pdWrapGo">Next lead →</button>
+      </div>
     </div>
   </div>
   <div id="pdStartWrap">
@@ -995,6 +1050,18 @@ body.view-mail header .callerid{display:none}
     <div class="pd-setup-field">
       <label>Your phone (will ring you first)</label>
       <input type="tel" id="pdAgentPhone" placeholder="+15551234567">
+    </div>
+
+    <div class="pd-setup-field">
+      <label>Pause between calls (wrap-up time)</label>
+      <select id="pdWrapSecs">
+        <option value="0">No pause — dial straight through</option>
+        <option value="10" selected>10 seconds</option>
+        <option value="20">20 seconds</option>
+        <option value="30">30 seconds</option>
+        <option value="-1">Wait for me — advance only when I tap</option>
+      </select>
+      <div style="font-size:11px;color:#6b7280;margin-top:4px">Time to log the call before the next number dials. You can extend or skip the pause on the fly.</div>
     </div>
 
     <div id="pdSetupCount" style="font-size:13px;color:#6b7280;margin-bottom:14px"></div>
@@ -1397,6 +1464,36 @@ body.view-mail header .callerid{display:none}
         </div>
       </div>
 
+      <!-- Call recording (team-wide) -->
+      <div class="rec-set">
+        <h3>🎙 Call Recording (team-wide)</h3>
+        <label style="display:flex;align-items:center;gap:7px;font-size:13px;color:#0f0d0a;margin-top:0">
+          <input type="checkbox" id="recEnabled" style="width:auto"> Record outbound calls
+        </label>
+        <label>Disclosure voice</label>
+        <select id="recVoice">
+          <option value="Polly.Ruth-Generative">Ruth — female, most natural (Generative)</option>
+          <option value="Polly.Matthew-Generative">Matthew — male, most natural (Generative)</option>
+          <option value="Polly.Danielle-Generative">Danielle — female (Generative)</option>
+          <option value="Polly.Joanna-Neural">Joanna — female (Neural)</option>
+          <option value="Polly.Matthew-Neural">Matthew — male (Neural)</option>
+          <option value="Polly.Stephen-Neural">Stephen — male (Neural)</option>
+        </select>
+        <label>Disclosure mode</label>
+        <select id="recMode">
+          <option value="ai">🤖 AI voice — speaks the line below</option>
+          <option value="audio">🎙️ Recorded audio file</option>
+        </select>
+        <label>Recorded audio URL (used in audio mode)</label>
+        <input type="url" id="recAudioUrl" placeholder="https://…/disclosure.mp3">
+        <label>What the seller hears</label>
+        <textarea id="recText"></textarea>
+        <label>Delete recordings after (days)</label>
+        <input type="number" id="recRetention" min="1" max="365">
+        <button class="btn-primary" id="recSave" style="width:100%;margin-top:10px">Save recording settings</button>
+        <div class="rec-legal"><b>Why this plays on every call:</b> Florida requires all parties to consent before a call is recorded, and two of your three markets are Florida. The property state tells you where the house is, not where the owner is sitting — so the line plays on every call rather than branching by state.</div>
+      </div>
+
       <hr style="border:none;border-top:1px solid #e5e7eb;margin:16px 0">
       <button class="btn-primary" id="settingsSave" style="width:100%">Save device settings</button>
       <button class="btn-ghost" id="signOut" style="width:100%;margin-top:8px">Sign out</button>
@@ -1416,6 +1513,7 @@ body.view-mail header .callerid{display:none}
   <div class="row2">
     <span class="timer" id="cdTimer">00:00</span>
     <button class="cd-script" id="cdScript" title="Show the call script">📜 Script</button>
+    <button class="rec-pill hide" id="recPill" title="Pause recording — use it the moment they start reading out account numbers"><span class="rec-dot"></span>REC</button>
     <span class="from" id="cdFrom"></span>
   </div>
   <div class="btns">
@@ -1464,6 +1562,33 @@ body.view-mail header .callerid{display:none}
       <input type="text" id="ppNewName" placeholder="Your first name" maxlength="40" required>
       <button type="submit">Add</button>
     </form>
+  </div>
+</div>
+
+<!-- Call recordings review queue -->
+<div class="modal" id="recModal">
+  <div class="modal-box">
+    <div class="modal-head">
+      <h3>🎙 Call Recordings</h3>
+      <button class="modal-close" data-close="recModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="log-filters">
+        <select id="recRange">
+          <option value="1">Today</option>
+          <option value="7" selected>Last 7 days</option>
+          <option value="30">Last 30 days</option>
+        </select>
+        <select id="recMinDur">
+          <option value="90" selected>Real conversations (90s+)</option>
+          <option value="30">30s and up</option>
+          <option value="0">Everything</option>
+        </select>
+        <button class="btn-secondary" id="recRefresh">↻ Refresh</button>
+      </div>
+      <div style="font-size:12px;color:#6b7280;margin-bottom:10px" id="recSummary">—</div>
+      <div id="recList"></div>
+    </div>
   </div>
 </div>
 
@@ -1728,6 +1853,7 @@ function openModal(id){
   $(id).classList.add('open');
   if(id==='numbersModal') loadOwnedNumbers();
   if(id==='logModal')    loadLog();
+  if(id==='recModal')    loadCallRecordings();
   if(id==='settingsModal'){
     $('settingsForwardPhone').value = forwardPhone;
     $('settingsBackendUrl').value   = backend;
@@ -1735,6 +1861,7 @@ function openModal(id){
     $('settingsVmMode').value       = localStorage.getItem(LS.vmMode) || 'ai';
     $('settingsVmVoice').value      = localStorage.getItem(LS.vmVoice) || 'Polly.Ruth-Generative';
     refreshVmRecordStatus();
+    loadRecConfig();
   }
   if(id==='uploadModal'){
     $('uploadPreview').classList.add('hide');
@@ -2247,6 +2374,15 @@ let pdColorFilter = '';
 let pdStageFilter = '';
 let pdActiveSid = null;
 let pdPollTimer = null;
+// Frozen queue of property IDs, captured when the session starts.
+// pdGetList() shrinks as leads are marked called, so walking it by
+// index skipped a lead every time. The queue never changes mid-session.
+let pdQueue     = [];
+let pdSession   = null;   // {callerId, agentPhone, profileId}
+let pdWrapSecs  = 10;     // 0 = straight through · -1 = wait for a tap
+let pdWrapTimer = null;
+let pdWrapLeft  = 0;
+let pdWrapHeld  = false;
 
 function pdGetList(){
   let list = getFilteredProperties();
@@ -2321,23 +2457,31 @@ $('pdSetupStart').addEventListener('click', async () => {
   $('pdSetupScreen').classList.add('hide');
   $('powerDialBar').classList.remove('hide');
 
+  // Freeze the queue. pdGetList() shrinks as leads get marked called,
+  // so an index into the live list skips a lead after every call.
+  pdQueue   = list.map(p => p.id);
+  pdSession = { callerId, agentPhone, profileId };
+  pdWrapSecs = parseInt($('pdWrapSecs')?.value ?? '10', 10);
   pdActive  = true;
   pdIndex   = 0;
   pdActiveSid = null;
+  pdHideWrapUp();
 
   // Start the first call
-  await pdDialNext(list[0], callerId, agentPhone, profileId);
+  await pdDialNext(pdQueue[0], callerId, agentPhone, profileId);
 });
 
-async function pdDialNext(p, callerId, agentPhone, profileId){
-  if(!pdActive || !p) return;
+// Dial one lead by property ID. The queue holds IDs rather than
+// objects so a re-render or reload can't leave us on a stale copy.
+async function pdDialNext(propertyId, callerId, agentPhone, profileId){
+  if(!pdActive || !propertyId) return;
+  pdHideWrapUp();
 
-  // Update counter
-  const list = pdGetList();
-  const totalAll = getFilteredProperties().length;
-  const remaining = list.length;
-  const called = totalAll - remaining;
-  $('pdCounter').textContent = `${called} called · ${remaining} remaining`;
+  const p = properties.find(x => x.id === propertyId);
+  if(!p){ pdAdvance(); return; }
+
+  // Counter reads off the frozen queue — position, not a shrinking list
+  $('pdCounter').textContent = `Lead ${pdIndex+1} of ${pdQueue.length}`;
 
   // Highlight card
   if(currentView !== 'dialer') switchView('dialer');
@@ -2356,9 +2500,8 @@ async function pdDialNext(p, callerId, agentPhone, profileId){
   // Place the call via backend
   const phone = p.phones?.[0]?.e164;
   if(!phone){
-    // No phone — skip to next
     toast(`Skipping ${p.owners||'lead'} — no phone number`,'err');
-    pdAdvance(callerId, agentPhone, profileId);
+    pdAdvance();
     return;
   }
 
@@ -2372,55 +2515,118 @@ async function pdDialNext(p, callerId, agentPhone, profileId){
       profileId,
     }});
     pdActiveSid = r.sid;
-    // Poll for call completion then auto-advance
-    pdPollForCompletion(r.sid, callerId, agentPhone, profileId);
+    // Capture the id NOW. Reading it back after the call ends used to
+    // pull from a list that had already shifted, marking the wrong lead.
+    pdPollForCompletion(r.sid, p.id);
   } catch(e){
     toast('Call failed: '+e.message,'err');
-    setTimeout(() => pdAdvance(callerId, agentPhone, profileId), 2000);
+    setTimeout(() => pdAdvance(), 2000);
   }
 }
 
-function pdPollForCompletion(sid, callerId, agentPhone, profileId){
+function pdPollForCompletion(sid, propertyId){
   if(!pdActive) return;
   clearTimeout(pdPollTimer);
   pdPollTimer = setTimeout(async () => {
     if(!pdActive) return;
     try {
       const r = await api(`call-status&sid=${encodeURIComponent(sid)}`);
-      if(r.status === 'completed' || r.status === 'failed' || r.status === 'busy' || r.status === 'no-answer' || r.status === 'canceled'){
-        // Mark lead as called in local state
-        const list = pdGetList();
-        const p = list[pdIndex];
+      const done = ['completed','failed','busy','no-answer','canceled'].includes(r.status);
+      if(done){
+        pdActiveSid = null;
+        // Mark the lead we actually dialed
+        const p = properties.find(x => x.id === propertyId);
         if(p){
           if(!p.lead) p.lead = {};
           p.lead.called = true;
           api('update-lead', {method:'POST', body:{propertyId:p.id, called:true}}).catch(()=>{});
           renderPage(); refreshCounter();
         }
-        // Advance to next
-        setTimeout(() => pdAdvance(callerId, agentPhone, profileId), 1500);
+        pdStartWrapUp(p);
       } else {
-        // Still in progress — poll again in 3 seconds
-        pdPollForCompletion(sid, callerId, agentPhone, profileId);
+        pdPollForCompletion(sid, propertyId);
       }
     } catch(e){
-      pdPollForCompletion(sid, callerId, agentPhone, profileId);
+      pdPollForCompletion(sid, propertyId);
     }
   }, 3000);
 }
 
-function pdAdvance(callerId, agentPhone, profileId){
+// ── Wrap-up pause ──────────────────────────────────────────────
+// The window between hanging up and the next number dialing. Without
+// it there was nowhere to set a status or type a note — by the time
+// you'd tapped the dropdown the next call was already ringing.
+function pdStartWrapUp(p){
   if(!pdActive) return;
+  const atEnd = pdIndex + 1 >= pdQueue.length;
+  if(atEnd){ toast('All leads dialed! 🎉','ok'); pdStop(); return; }
+
+  // No pause configured — go straight on, with a beat to let the
+  // "called" write land so the card doesn't flicker.
+  if(pdWrapSecs === 0){ setTimeout(() => pdAdvance(), 800); return; }
+
+  const bar = $('pdWrapUp');
+  const who = $('pdWrapWho');
+  if(who) who.textContent = p ? ('Log ' + (p.owners || 'this lead') + ' — status and notes')
+                              : 'Log the call — status and notes';
+  pdWrapHeld = false;
+  $('pdWrapHold')?.classList.remove('on');
+  if($('pdWrapHold')) $('pdWrapHold').textContent = '⏸ Hold';
+  bar?.classList.remove('hide');
+
+  if(pdWrapSecs < 0){
+    // "Wait for me" — no countdown, advance only on the button
+    $('pdWrapCount').textContent = '—';
+    return;
+  }
+  pdWrapLeft = pdWrapSecs;
+  $('pdWrapCount').textContent = pdWrapLeft;
+  clearInterval(pdWrapTimer);
+  pdWrapTimer = setInterval(() => {
+    if(!pdActive){ clearInterval(pdWrapTimer); return; }
+    if(pdWrapHeld) return;
+    pdWrapLeft--;
+    $('pdWrapCount').textContent = Math.max(0, pdWrapLeft);
+    if(pdWrapLeft <= 0){ clearInterval(pdWrapTimer); pdAdvance(); }
+  }, 1000);
+}
+
+function pdHideWrapUp(){
+  clearInterval(pdWrapTimer);
+  pdWrapTimer = null;
+  pdWrapHeld = false;
+  $('pdWrapUp')?.classList.add('hide');
+}
+
+$('pdWrapGo')?.addEventListener('click', () => { if(pdActive) pdAdvance(); });
+$('pdWrapPlus')?.addEventListener('click', () => {
+  pdWrapLeft += 20;
+  $('pdWrapCount').textContent = pdWrapLeft;
+});
+$('pdWrapHold')?.addEventListener('click', () => {
+  pdWrapHeld = !pdWrapHeld;
+  const b = $('pdWrapHold');
+  b.classList.toggle('on', pdWrapHeld);
+  b.textContent = pdWrapHeld ? '▶ Resume' : '⏸ Hold';
+  if(pdWrapHeld) $('pdWrapCount').textContent = 'held';
+  else $('pdWrapCount').textContent = Math.max(0, pdWrapLeft);
+});
+
+function pdAdvance(){
+  if(!pdActive || !pdSession) return;
+  pdHideWrapUp();
   pdIndex++;
-  const list = pdGetList();
-  if(pdIndex >= list.length){ toast('All leads dialed! 🎉','ok'); pdStop(); return; }
-  pdDialNext(list[pdIndex], callerId, agentPhone, profileId);
+  if(pdIndex >= pdQueue.length){ toast('All leads dialed! 🎉','ok'); pdStop(); return; }
+  pdDialNext(pdQueue[pdIndex], pdSession.callerId, pdSession.agentPhone, pdSession.profileId);
 }
 
 function pdStop(){
   pdActive = false;
   clearTimeout(pdPollTimer);
+  pdHideWrapUp();
   pdActiveSid = null;
+  pdQueue = [];
+  pdSession = null;
   $('pdStartWrap').classList.remove('hide');
   $('powerDialBar').classList.add('hide');
   $('pdSetupScreen').classList.add('hide');
@@ -2435,21 +2641,18 @@ $('pdSkip').addEventListener('click', () => {
     api('end-call', {method:'POST', body:{sid:pdActiveSid}}).catch(()=>{});
     pdActiveSid = null;
   }
-  const stored = localStorage.getItem('pd_caller') || activeCallerId;
-  const storedAgent = forwardPhone;
-  const storedProfile = String(activeProfileId || '');
-  pdAdvance(stored, storedAgent, storedProfile);
+  pdAdvance();
 });
 $('pdPrev').addEventListener('click', () => {
-  if(!pdActive) return;
-  pdIndex = Math.max(0, pdIndex - 2);
+  if(!pdActive || !pdSession) return;
   clearTimeout(pdPollTimer);
+  pdHideWrapUp();
   if(pdActiveSid){
     api('end-call', {method:'POST', body:{sid:pdActiveSid}}).catch(()=>{});
     pdActiveSid = null;
   }
-  const stored = localStorage.getItem('pd_caller') || activeCallerId;
-  pdAdvance(stored, forwardPhone, String(activeProfileId || ''));
+  pdIndex = Math.max(0, pdIndex - 1);
+  pdDialNext(pdQueue[pdIndex], pdSession.callerId, pdSession.agentPhone, pdSession.profileId);
 });
 
 // ── Search bar ────────────────────────────────────────────────
@@ -2732,6 +2935,7 @@ async function placeCall(p, ph, btn, phidx){
       profileId: activeProfileId,
     }});
     activeCall = { sid:r.sid, btn, propertyId:p.id, phidx: (phidx==null?0:phidx), startedAt:Date.now() };
+    recPillShow(r.sid, r.recording);
     setDrawerState('Ringing your phone','ringing');
     btn.querySelector('.badge:last-child').textContent='RINGING';
     activeCall.tickTimer = setInterval(updateDrawerTimer, 1000);
@@ -2762,6 +2966,7 @@ async function placeManualCall(toNumber, label){
       profileId: activeProfileId,
     }});
     activeCall = { sid:r.sid, btn:null, propertyId:null, startedAt:Date.now() };
+    recPillShow(r.sid, r.recording);
     setDrawerState('Ringing your phone','ringing');
     activeCall.tickTimer = setInterval(updateDrawerTimer, 1000);
     pollCallStatus(r.sid);
@@ -3037,7 +3242,11 @@ function showDrawer(o, hasLead){
   if(scriptAutoOpen) openScriptPanel();
   else if($('scriptPanel').classList.contains('open')) renderScriptPanel();
 }
-function hideDrawer(){ closeScriptPanel(); $('callDrawer').classList.remove('open'); }
+function hideDrawer(){
+  closeScriptPanel();
+  $('callDrawer').classList.remove('open');
+  recPillReset();
+}
 function setDrawerState(text, cls){ const st=$('cdState'); st.textContent=text; st.className='state '+(cls||''); }
 function updateDrawerTimer(){
   if(!activeCall) return;
@@ -5962,6 +6171,192 @@ renderPage = function(){
   });
 };
 
+
+// ═══════════════════════════════════════════════════════════════
+// CALL RECORDING
+// Records the team's own outbound calls so you can hear where a
+// call went wrong. The seller hears a disclosure before the two
+// legs bridge — see the note in Settings for why it plays on
+// every call rather than branching by state.
+// ═══════════════════════════════════════════════════════════════
+
+const REC_CRITERIA = [
+  ['gotLotZoning',      'Lot / zoning'],
+  ['surfacedMotivation','Motivation'],
+  ['namedANumber',      'Named a number'],
+  ['handledRebuttal',   'Handled rebuttal'],
+  ['setNextStep',       'Set next step'],
+];
+const REC_VOICE_DEFAULT = 'Polly.Ruth-Generative';
+const REC_TEXT_DEFAULT  = 'Just so you know, this call may be recorded for quality purposes.';
+
+// ── REC pill in the live-call drawer ───────────────────────────
+let recPillSid = null, recPillPaused = false;
+
+function recPillShow(sid, recordingOn){
+  const pill = $('recPill');
+  if(!pill) return;
+  recPillSid = sid;
+  recPillPaused = false;
+  pill.classList.remove('paused');
+  pill.innerHTML = '<span class="rec-dot"></span>REC';
+  // Backend tells us whether recording is actually on for this call
+  pill.classList.toggle('hide', !recordingOn);
+}
+function recPillReset(){
+  recPillSid = null;
+  recPillPaused = false;
+  const pill = $('recPill');
+  if(!pill) return;
+  pill.classList.add('hide');
+  pill.classList.remove('paused');
+  pill.innerHTML = '<span class="rec-dot"></span>REC';
+}
+$('recPill')?.addEventListener('click', async () => {
+  if(!recPillSid){ toast('No live call to pause','err'); return; }
+  const pill = $('recPill');
+  pill.disabled = true;
+  try {
+    await api(recPillPaused ? 'resume-recording' : 'pause-recording',
+      {method:'POST', body:{ callSid: recPillSid }});
+    recPillPaused = !recPillPaused;
+    pill.classList.toggle('paused', recPillPaused);
+    pill.innerHTML = '<span class="rec-dot"></span>' + (recPillPaused ? 'PAUSED' : 'REC');
+    toast(recPillPaused ? 'Recording paused' : 'Recording resumed','ok');
+  } catch(e){ toast(e.message,'err'); }
+  pill.disabled = false;
+});
+
+// ── Review queue ───────────────────────────────────────────────
+function recMmSs(sec){
+  sec = parseInt(sec || 0, 10);
+  return Math.floor(sec/60) + ':' + String(sec % 60).padStart(2,'0');
+}
+function recWhen(iso){
+  if(!iso) return '';
+  const d = new Date(iso);
+  return d.toLocaleDateString([], {month:'short', day:'numeric'}) + ' ' +
+         d.toLocaleTimeString([], {hour:'numeric', minute:'2-digit'});
+}
+
+async function loadCallRecordings(){
+  const list = $('recList');
+  if(!list) return;
+  list.innerHTML = '<div class="list-loading">Loading…</div>';
+  try {
+    const days   = $('recRange').value;
+    const minDur = $('recMinDur').value;
+    const j = await api(`list-call-recordings&days=${days}&minDuration=${minDur}`);
+    renderCallRecordings(j.recordings || []);
+  } catch(e){
+    list.innerHTML = '<div class="empty" style="color:#b91c1c">'+escapeHtml(e.message)+'</div>';
+    $('recSummary').textContent = '—';
+  }
+}
+
+function renderCallRecordings(rows){
+  const list = $('recList');
+  const done = rows.filter(r => r.review).length;
+  $('recSummary').innerHTML = rows.length
+    ? `<b>${rows.length}</b> recording${rows.length===1?'':'s'} · <b>${done}</b> reviewed · <b>${rows.length-done}</b> waiting`
+    : '';
+  if(!rows.length){
+    list.innerHTML = '<div class="empty">No recordings in this window.<br><span style="font-size:11px">Short calls are filtered out — switch to “Everything” to see them all.</span></div>';
+    return;
+  }
+  list.innerHTML = '';
+  rows.forEach(r => {
+    const rev = r.review || {};
+    const row = document.createElement('div');
+    row.className = 'rv-row' + (r.review ? ' reviewed' : '');
+    row.innerHTML = `
+      <div class="rv-head">
+        <div class="rv-who">
+          <div class="nm">${escapeHtml(r.owners || fmtPhone(r.to_number) || '(unknown)')}</div>
+          <div class="mt">${escapeHtml(recWhen(r.started_at))}${r.property_address ? ' · '+escapeHtml(r.property_address) : ''}</div>
+        </div>
+        <span class="rv-dur">${recMmSs(r.recording_duration || r.duration)}</span>
+      </div>
+      ${r.playbackUrl
+        ? `<audio controls preload="none" src="${escapeHtml(r.playbackUrl)}"></audio>`
+        : '<div class="muted" style="font-size:12px;margin-bottom:8px">Audio unavailable — it may have passed the 30-day window.</div>'}
+      <div class="rv-score">
+        ${REC_CRITERIA.map(([k,label]) => {
+          const col = k.replace(/[A-Z]/g, m => '_' + m.toLowerCase());
+          return `<span class="rv-chk${rev[col] ? ' on' : ''}" data-k="${k}">${escapeHtml(label)}</span>`;
+        }).join('')}
+      </div>
+      <textarea class="rv-note" placeholder="What would you do differently?">${escapeHtml(rev.notes || '')}</textarea>
+      <button class="rv-save">Save review</button>`;
+
+    row.querySelectorAll('.rv-chk').forEach(c =>
+      c.addEventListener('click', () => c.classList.toggle('on')));
+
+    row.querySelector('.rv-save').addEventListener('click', async ev => {
+      const btn = ev.currentTarget;
+      btn.disabled = true; btn.textContent = 'Saving…';
+      const body = {
+        callId: r.id,
+        profileId: activeProfileId || null,
+        notes: row.querySelector('.rv-note').value.trim(),
+      };
+      row.querySelectorAll('.rv-chk').forEach(c => { body[c.dataset.k] = c.classList.contains('on'); });
+      try {
+        await api('save-call-review', {method:'POST', body});
+        row.classList.add('reviewed');
+        btn.textContent = 'Saved ✓';
+        setTimeout(() => { btn.disabled = false; btn.textContent = 'Save review'; }, 2000);
+      } catch(err){
+        toast('Could not save: '+err.message,'err');
+        btn.disabled = false; btn.textContent = 'Save review';
+      }
+    });
+    list.appendChild(row);
+  });
+}
+
+$('recRefresh')?.addEventListener('click', loadCallRecordings);
+$('recRange')?.addEventListener('change', loadCallRecordings);
+$('recMinDur')?.addEventListener('change', loadCallRecordings);
+
+// ── Recording settings (team-wide, stored server-side) ─────────
+async function loadRecConfig(){
+  try {
+    const j = await api('get-recording-config');
+    const c = j.config || {};
+    $('recEnabled').checked = c.enabled !== false;
+    $('recVoice').value     = c.voice || REC_VOICE_DEFAULT;
+    $('recMode').value      = c.disclosure_mode || 'ai';
+    $('recAudioUrl').value  = c.disclosure_audio_url || '';
+    $('recText').value      = c.disclosure_text || REC_TEXT_DEFAULT;
+    $('recRetention').value = c.retention_days || 30;
+  } catch(e){ /* silent — settings still usable */ }
+}
+$('recSave')?.addEventListener('click', async () => {
+  const btn = $('recSave');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  try {
+    await api('set-recording-config', {method:'POST', body:{
+      enabled:            $('recEnabled').checked,
+      voice:              $('recVoice').value,
+      disclosureMode:     $('recMode').value,
+      disclosureAudioUrl: $('recAudioUrl').value.trim(),
+      disclosureText:     $('recText').value.trim(),
+      retentionDays:      $('recRetention').value,
+    }});
+    toast('Recording settings saved','ok');
+  } catch(e){ toast('Could not save: '+e.message,'err'); }
+  btn.disabled = false; btn.textContent = 'Save recording settings';
+});
+
+// ── 30-day purge ───────────────────────────────────────────────
+// Runs once per app load. With three people dialing six days a week
+// that fires far more often than a daily job needs to — so there's
+// no netlify.toml change and no scheduled function to maintain.
+async function tickRecordingPurge(){
+  try { await api('cleanup-call-recordings', {method:'POST', body:{}}); } catch {}
+}
+
 // ── Boot ────────────────────────────────────────────────────────
 async function boot(){
   // Verify password is still valid
@@ -5989,6 +6384,7 @@ async function boot(){
   loadWebLeads(true);
   // Kick the drip processor on load + load inbox badge count
   tickDrips();
+  tickRecordingPurge();
   api('list-inbox').then(j => {
     const ct = (j.threads || []).length;
     $('inboxBadge').textContent = ct ? '· '+ct : '';
