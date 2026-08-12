@@ -1610,7 +1610,7 @@ const LS = {
   vmMessage:'cb_vm_message', vmMode:'cb_vm_mode', vmVoice:'cb_vm_voice', stateFilter:'cb_state_filter',
 };
 // Bump this on every deploy so you can see which build is actually live
-const BUILD_ID = 'build 2026-08-11 · rec+wrapup';
+const BUILD_ID = 'build 2026-08-07e';
 const DEFAULT_VM_MESSAGE = "Hi {FirstName}, this is Win-Win Property Solutions reaching out about your property at {Address}. We buy houses in your area and would love to make you a fair cash offer. Give us a call back at {CallbackNumber} whenever it's convenient. Thanks, and have a great day.";
 let backend  = localStorage.getItem(LS.backend) || '/api';
 let password = localStorage.getItem(LS.pwd) || '';
@@ -2379,6 +2379,11 @@ let pdPollTimer = null;
 // index skipped a lead every time. The queue never changes mid-session.
 let pdQueue     = [];
 let pdSession   = null;   // {callerId, agentPhone, profileId}
+// Conference mode: the agent dials in ONCE and stays on the line for
+// the whole session. pdConf is the conference name, pdAgentSid the
+// agent's leg. Ending that leg ends the session.
+let pdConf      = null;
+let pdAgentSid  = null;
 let pdWrapSecs  = 10;     // 0 = straight through · -1 = wait for a tap
 let pdWrapTimer = null;
 let pdWrapLeft  = 0;
@@ -2465,10 +2470,38 @@ $('pdSetupStart').addEventListener('click', async () => {
   pdActive  = true;
   pdIndex   = 0;
   pdActiveSid = null;
+  pdConf = null; pdAgentSid = null;
   pdHideWrapUp();
 
-  // Start the first call
-  await pdDialNext(pdQueue[0], callerId, agentPhone, profileId);
+  // Ring the agent into the conference ONCE. Every lead after this
+  // is dialed into the same conference, so the phone never hangs up
+  // and calls back between numbers.
+  $('pdCounter').textContent = 'Calling your phone — answer and stay on';
+  try {
+    const st = await api('power-dial-start', {method:'POST', body:{
+      agentPhone, from: callerId, profileId,
+    }});
+    pdConf     = st.conference;
+    pdAgentSid = st.sid;
+  } catch(e){
+    toast('Could not start the session: '+e.message,'err');
+    pdStop();
+    return;
+  }
+
+  // Give the agent time to actually pick up before the first seller
+  // is dialed in — otherwise lead one rings into an empty conference.
+  toast('Answer your phone — first lead dials in 15 seconds','ok');
+  let waited = 0;
+  const warm = setInterval(() => {
+    if(!pdActive){ clearInterval(warm); return; }
+    waited++;
+    $('pdCounter').textContent = `Starting in ${Math.max(0, 15 - waited)}s — answer your phone`;
+    if(waited >= 15){
+      clearInterval(warm);
+      pdDialNext(pdQueue[0], callerId, agentPhone, profileId);
+    }
+  }, 1000);
 });
 
 // Dial one lead by property ID. The queue holds IDs rather than
@@ -2481,7 +2514,8 @@ async function pdDialNext(propertyId, callerId, agentPhone, profileId){
   if(!p){ pdAdvance(); return; }
 
   // Counter reads off the frozen queue — position, not a shrinking list
-  $('pdCounter').textContent = `Lead ${pdIndex+1} of ${pdQueue.length}`;
+  $('pdCounter').textContent = `Lead ${pdIndex+1} of ${pdQueue.length}`
+    + (pdConf ? ' · you stay connected' : '');
 
   // Highlight card
   if(currentView !== 'dialer') switchView('dialer');
@@ -2506,15 +2540,25 @@ async function pdDialNext(propertyId, callerId, agentPhone, profileId){
   }
 
   try {
-    const r = await api('power-dial-call', {method:'POST', body:{
-      to: phone,
-      from: callerId,
-      agentPhone,
-      sellerName: p.owners || 'your next lead',
-      propertyId: p.id,
-      profileId,
-    }});
+    // Conference mode when a session is up, bridge mode otherwise.
+    const r = pdConf
+      ? await api('power-dial-lead', {method:'POST', body:{
+          to: phone,
+          from: callerId,
+          conference: pdConf,
+          propertyId: p.id,
+          profileId,
+        }})
+      : await api('power-dial-call', {method:'POST', body:{
+          to: phone,
+          from: callerId,
+          agentPhone,
+          sellerName: p.owners || 'your next lead',
+          propertyId: p.id,
+          profileId,
+        }});
     pdActiveSid = r.sid;
+    recPillShow(r.sid, r.recording);
     // Capture the id NOW. Reading it back after the call ends used to
     // pull from a list that had already shifted, marking the wrong lead.
     pdPollForCompletion(r.sid, p.id);
@@ -2624,7 +2668,14 @@ function pdStop(){
   pdActive = false;
   clearTimeout(pdPollTimer);
   pdHideWrapUp();
+  // Drop the seller's leg, then the agent's — otherwise the agent sits
+  // in a silent conference after the session bar disappears.
+  if(pdActiveSid) api('end-call', {method:'POST', body:{sid:pdActiveSid}}).catch(()=>{});
+  if(pdAgentSid)  api('power-dial-end', {method:'POST', body:{sid:pdAgentSid}}).catch(()=>{});
   pdActiveSid = null;
+  pdAgentSid = null;
+  pdConf = null;
+  recPillReset();
   pdQueue = [];
   pdSession = null;
   $('pdStartWrap').classList.remove('hide');
@@ -3306,7 +3357,10 @@ $('cdVoicemail').addEventListener('click', async ()=>{
       .replace(/\{CallbackNumber\}/gi, fmtPhone(activeCallerId) || 'this number');
     const r = await api('drop-voicemail', {method:'POST', body:{
       sid: activeCall.sid, profileId: activeProfileId, message,
-      voice: vmVoice, forceTts: vmMode === 'ai'
+      voice: vmVoice, forceTts: vmMode === 'ai',
+      // In conference power dial the seller's call has no child leg —
+      // the sid we hold IS their leg.
+      direct: !!(pdActive && pdConf && activeCall.sid === pdActiveSid),
     }});
     toast(r.usedRecording ? 'Your recorded voicemail was dropped' : 'AI voicemail dropped — personalized for ' + streetAddr, 'ok');
     finishCall('VM dropped', false);
