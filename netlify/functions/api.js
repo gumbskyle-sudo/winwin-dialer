@@ -341,6 +341,30 @@ async function cleanupCallRecordings() {
   return { purged: paths.length, retentionDays: days };
 }
 
+// ════════════════════════════════════════════════════════════════
+// POWER DIAL — CONFERENCE MODE
+// ════════════════════════════════════════════════════════════════
+//
+// The old flow placed a brand new call to the agent for every lead,
+// so the phone hung up and rang again on each number. Here the agent
+// dials in ONCE and stays in a conference for the whole session;
+// each seller is dialed into that same conference and dropped out
+// when the call ends. The agent's leg never breaks.
+//
+//   power-dial-start  → rings the agent, parks them in the conference
+//   power-dial-lead   → dials one seller into that conference
+//   power-dial-hangup → drops the seller, agent stays put
+//   power-dial-end    → ends the session and the agent's leg
+//
+// Recording rides on the SELLER's leg, not the conference, so you get
+// one file per lead rather than one four-hour file per session.
+
+// Held between leads. Silence rather than hold music — the agent is
+// listening for the next connect, not waiting on support.
+function holdTwiml() {
+  return `<?xml version="1.0" encoding="UTF-8"?><Response><Pause length="600"/><Redirect>${escapeXml(BASE_URL + '?action=pd-hold')}</Redirect></Response>`;
+}
+
 // ── Supabase REST helpers (no SDK — keeps function tiny) ──────
 function supaUrl() {
   const u = process.env.SUPABASE_URL;
@@ -956,6 +980,10 @@ exports.handler = async (event) => {
   if (action === 'rec-whisper') {
     return await handleRecWhisper();
   }
+  // Keeps the agent's conference leg alive between leads.
+  if (action === 'pd-hold') {
+    return { statusCode: 200, headers: { 'Content-Type': 'text/xml' }, body: holdTwiml() };
+  }
   if (action === 'recording-status') {
     return await handleRecordingStatus(event);
   }
@@ -1370,6 +1398,90 @@ exports.handler = async (event) => {
         return ok({ sid: j.sid, status: j.status, recording: !!recCfg.enabled });
       }
 
+      // ── Conference power dial: ring the agent once ────────────
+      // Body: {agentPhone, from, profileId}
+      // The agent joins a conference and STAYS there for the whole
+      // session. endConferenceOnExit means hanging up ends the session.
+      case 'power-dial-start': {
+        if (!body.agentPhone) return err('agentPhone required');
+        if (!body.from)       return err('from required');
+
+        const conf = 'pd-' + (body.profileId || 'x') + '-' + Date.now().toString(36);
+        const hold = escapeXml(`${BASE_URL}?action=pd-hold`);
+
+        const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response>`
+          + `<Say voice="alice">Power dialer connected. Stay on the line — leads will come through automatically.</Say>`
+          + `<Dial><Conference startConferenceOnEnter="true" endConferenceOnExit="true" beep="false" `
+          + `waitUrl="${hold}" waitMethod="POST">${escapeXml(conf)}</Conference></Dial></Response>`;
+
+        const j = await tw(`/Accounts/${twilioSid()}/Calls.json`, 'POST', {
+          From: body.from,
+          To:   body.agentPhone,
+          Twiml: twiml,
+          StatusCallback: `${BASE_URL}?action=twilio-status`,
+          StatusCallbackMethod: 'POST',
+          StatusCallbackEvent: 'completed',
+        });
+
+        return ok({ sid: j.sid, status: j.status, conference: conf });
+      }
+
+      // ── Conference power dial: dial one seller in ─────────────
+      // Body: {to, from, conference, propertyId, profileId}
+      // Recording goes on THIS leg, so each lead is its own file.
+      // The disclosure plays to the seller before they join, so the
+      // agent never hears it and it can't be skipped.
+      case 'power-dial-lead': {
+        if (!body.to)         return err('to required');
+        if (!body.from)       return err('from required');
+        if (!body.conference) return err('conference required — start a session first');
+
+        const recCfg = await getRecordingConfig();
+        const say = (recCfg && recCfg.enabled && recCfg.disclosure_mode !== 'audio')
+          ? `<Say voice="${escapeXml(recCfg.voice || 'Polly.Ruth-Generative')}">${escapeXml(recCfg.disclosure_text || DEFAULT_DISCLOSURE)}</Say>`
+          : ((recCfg && recCfg.enabled && recCfg.disclosure_audio_url)
+              ? `<Play>${escapeXml(recCfg.disclosure_audio_url)}</Play>` : '');
+
+        const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response>${say}`
+          + `<Dial><Conference startConferenceOnEnter="true" endConferenceOnExit="false" beep="false">`
+          + `${escapeXml(body.conference)}</Conference></Dial></Response>`;
+
+        const j = await tw(`/Accounts/${twilioSid()}/Calls.json`, 'POST', {
+          From: body.from,
+          To:   body.to,
+          Twiml: twiml,
+          Timeout: 25,
+          StatusCallback: `${BASE_URL}?action=twilio-status`,
+          StatusCallbackMethod: 'POST',
+          StatusCallbackEvent: 'completed',
+          ...recordingParams(recCfg),
+        });
+
+        try {
+          await supa('/calls', 'POST', [{
+            twilio_sid: j.sid,
+            property_id: body.propertyId ? String(body.propertyId) : null,
+            from_number: body.from,
+            to_number:   body.to,
+            status: j.status || 'queued',
+            profile_id: body.profileId || null,
+            recording_status: recCfg.enabled ? 'pending' : 'none',
+          }], { Prefer: 'return=minimal' });
+        } catch (e) { console.warn('power dial lead persist failed', e.message); }
+
+        return ok({ sid: j.sid, status: j.status, recording: !!recCfg.enabled });
+      }
+
+      // ── Conference power dial: end the whole session ──────────
+      // Body: {sid} — the agent's leg. Dropping it ends the conference.
+      case 'power-dial-end': {
+        if (!body.sid) return err('sid required');
+        try {
+          await tw(`/Accounts/${twilioSid()}/Calls/${encodeURIComponent(body.sid)}.json`, 'POST', { Status: 'completed' });
+        } catch (e) { /* already gone — fine */ }
+        return ok({ ended: true });
+      }
+
       case 'call-status': {
         if (!qs.sid) return err('sid required');
         const j = await tw(`/Accounts/${twilioSid()}/Calls/${encodeURIComponent(qs.sid)}.json`);
@@ -1548,16 +1660,24 @@ exports.handler = async (event) => {
         }
         if (!playUrl && !body.message) return err('No recorded voicemail message and no fallback text provided');
 
-        const childCalls = await tw(`/Accounts/${twilioSid()}/Calls.json?ParentCallSid=${encodeURIComponent(body.sid)}`);
-        const childCall = childCalls && childCalls.calls && childCalls.calls[0];
-        if (!childCall) return err('Could not find the lead\'s call leg — they may have already hung up');
+        // In conference power-dial mode the seller's call IS the sid we
+        // were given — there's no child leg to look up.
+        let targetSid = null;
+        if (body.direct) {
+          targetSid = body.sid;
+        } else {
+          const childCalls = await tw(`/Accounts/${twilioSid()}/Calls.json?ParentCallSid=${encodeURIComponent(body.sid)}`);
+          const childCall = childCalls && childCalls.calls && childCalls.calls[0];
+          if (!childCall) return err('Could not find the lead\'s call leg — they may have already hung up');
+          targetSid = childCall.sid;
+        }
 
         const voice = body.voice || 'Polly.Ruth-Generative';
         const inner = (playUrl && !body.forceTts)
           ? `<Play>${escapeXml(playUrl)}</Play>`
           : `<Say voice="${escapeXml(voice)}">${escapeXml(body.message)}</Say>`;
         const dropTwiml = `<?xml version="1.0" encoding="UTF-8"?><Response>${inner}<Hangup/></Response>`;
-        await tw(`/Accounts/${twilioSid()}/Calls/${encodeURIComponent(childCall.sid)}.json`, 'POST', { Twiml: dropTwiml });
+        await tw(`/Accounts/${twilioSid()}/Calls/${encodeURIComponent(targetSid)}.json`, 'POST', { Twiml: dropTwiml });
         return ok({ dropped: true, usedRecording: !!(playUrl && !body.forceTts) });
       }
 
