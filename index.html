@@ -160,6 +160,22 @@ body.hide-called .card.called{display:none}
 .pd-btn:hover{background:#4b5563}
 .pd-stop{border-color:#dc2626;background:#dc2626;color:#fff}
 .pd-stop:hover{background:#b91c1c}
+
+/* Now-dialing panel — who you're on with right now */
+.pd-now{margin-top:10px;padding:10px 12px;background:#1c1917;border:1px solid #292524;border-radius:9px}
+.pd-now-lbl{font-size:10px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:#a8a29e}
+.pd-now-name{font-size:17px;font-weight:700;color:#fff;line-height:1.3;margin-top:2px}
+.pd-now-sub{font-size:12px;color:#a8a29e;margin-top:1px}
+.pd-now-row{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:7px;flex-wrap:wrap}
+.pd-now-phone{font-size:14px;font-weight:600;color:#e7e5e4;font-variant-numeric:tabular-nums}
+.pd-now-state{font-size:11px;font-weight:700;padding:3px 9px;border-radius:99px;background:#374151;color:#e5e7eb}
+.pd-now-state.live{background:#065f46;color:#d1fae5}
+.pd-now-state.vm{background:#b91c1c;color:#fff}
+.pd-now-state.ringing{background:#78350f;color:#fde68a}
+
+/* Paused */
+.pd-paused-note{margin-top:8px;padding:7px 10px;background:#78350f;color:#fde68a;border-radius:7px;font-size:12px;font-weight:600;text-align:center}
+.pd-btn.paused{background:#b45309;border-color:#b45309;color:#fff}
 .card.pd-active{outline:3px solid #96751A;outline-offset:3px;box-shadow:0 0 0 8px rgba(31,111,235,.12)}
 .mark-btn{display:block;width:100%;margin-top:12px;font-size:15px;padding:13px 16px;border-radius:8px;border:2px solid #047857;background:#fff;color:#047857;cursor:pointer;font-weight:700;text-align:center;-webkit-tap-highlight-color:rgba(4,120,87,.3);transition:transform .05s,background .15s,color .15s}
 .mark-btn:active{transform:scale(.97);background:#ecfdf5}
@@ -975,10 +991,23 @@ body.view-mail header .callerid{display:none}
         <span id="pdCounter" style="font-size:13px;font-weight:600;color:#fff"></span>
       </div>
       <div class="pd-actions">
+        <button id="pdPause" class="pd-btn">⏸ Pause</button>
         <button id="pdPrev" class="pd-btn">← Back</button>
         <button id="pdSkip" class="pd-btn">Skip →</button>
         <button id="pdStop" class="pd-btn pd-stop">■ Stop</button>
       </div>
+    </div>
+    <div id="pdNowDialing" class="pd-now hide">
+      <div class="pd-now-lbl">Now dialing</div>
+      <div class="pd-now-name" id="pdNowName">—</div>
+      <div class="pd-now-sub" id="pdNowAddr"></div>
+      <div class="pd-now-row">
+        <span class="pd-now-phone" id="pdNowPhone"></span>
+        <span class="pd-now-state" id="pdNowState">Dialing…</span>
+      </div>
+    </div>
+    <div id="pdPausedNote" class="pd-paused-note hide">
+      Paused — finishing this lead, then holding. Your line stays open.
     </div>
     <div style="font-size:11px;color:#9ca3af;text-align:center;padding:4px 0">
       Call the highlighted lead below → tap <b style="color:#fff">Mark as called</b> to auto-advance
@@ -2388,6 +2417,29 @@ let pdWrapSecs  = 10;     // 0 = straight through · -1 = wait for a tap
 let pdWrapTimer = null;
 let pdWrapLeft  = 0;
 let pdWrapHeld  = false;
+// Pause: finish the lead you're on, then hold. The agent's leg stays up,
+// so resuming doesn't ring your phone again.
+let pdPaused    = false;
+
+// ── Now-dialing panel ─────────────────────────────────────────
+function pdShowNow(p, phone){
+  const box = $('pdNowDialing');
+  if(!box) return;
+  box.classList.remove('hide');
+  $('pdNowName').textContent  = p?.owners || 'Unknown owner';
+  $('pdNowAddr').textContent  = p?.property_address || '';
+  $('pdNowPhone').textContent = phone ? fmtPhone(phone) : '';
+  pdSetState('Dialing…', '');
+}
+function pdSetState(text, cls){
+  const el = $('pdNowState');
+  if(!el) return;
+  el.textContent = text;
+  el.className = 'pd-now-state' + (cls ? ' ' + cls : '');
+}
+function pdHideNow(){
+  $('pdNowDialing')?.classList.add('hide');
+}
 
 function pdGetList(){
   let list = getFilteredProperties();
@@ -2558,6 +2610,7 @@ async function pdDialNext(propertyId, callerId, agentPhone, profileId){
           profileId,
         }});
     pdActiveSid = r.sid;
+    pdShowNow(p, phone);
     recPillShow(r.sid, r.recording);
     // Capture the id NOW. Reading it back after the call ends used to
     // pull from a list that had already shifted, marking the wrong lead.
@@ -2575,6 +2628,18 @@ function pdPollForCompletion(sid, propertyId){
     if(!pdActive) return;
     try {
       const r = await api(`call-status&sid=${encodeURIComponent(sid)}`);
+
+      // Live state on the now-dialing panel
+      if(r.isMachine){
+        pdSetState('Voicemail — safe to skip', 'vm');
+      } else if(r.isHuman){
+        pdSetState('Live — human answered', 'live');
+      } else if(r.status === 'in-progress'){
+        pdSetState('Connected', 'live');
+      } else if(r.status === 'ringing'){
+        pdSetState('Ringing', 'ringing');
+      }
+
       const done = ['completed','failed','busy','no-answer','canceled'].includes(r.status);
       if(done){
         pdActiveSid = null;
@@ -2659,13 +2724,54 @@ $('pdWrapHold')?.addEventListener('click', () => {
 function pdAdvance(){
   if(!pdActive || !pdSession) return;
   pdHideWrapUp();
+  // Paused — stop here rather than dialing the next lead. The agent's
+  // conference leg is untouched, so Resume picks up without re-ringing.
+  if(pdPaused){
+    pdHideNow();
+    $('pdCounter').textContent = `Paused at lead ${pdIndex+1} of ${pdQueue.length}`;
+    return;
+  }
   pdIndex++;
   if(pdIndex >= pdQueue.length){ toast('All leads dialed! 🎉','ok'); pdStop(); return; }
   pdDialNext(pdQueue[pdIndex], pdSession.callerId, pdSession.agentPhone, pdSession.profileId);
 }
 
+// ── Pause / Resume ────────────────────────────────────────────
+function pdSetPaused(on){
+  pdPaused = on;
+  const b = $('pdPause');
+  if(b){
+    b.textContent = on ? '▶ Resume' : '⏸ Pause';
+    b.classList.toggle('paused', on);
+  }
+  $('pdPausedNote')?.classList.toggle('hide', !on);
+  if(on){
+    // Freeze the wrap-up countdown so it can't advance underneath you
+    clearInterval(pdWrapTimer);
+  }
+}
+
+$('pdPause')?.addEventListener('click', () => {
+  if(!pdActive) return;
+  if(pdPaused){
+    pdSetPaused(false);
+    // Resume from wherever we stopped. If a call is still live, let it
+    // finish on its own; the poller will advance when it ends.
+    if(!pdActiveSid){
+      pdIndex++;
+      if(pdIndex >= pdQueue.length){ toast('All leads dialed! 🎉','ok'); pdStop(); return; }
+      pdDialNext(pdQueue[pdIndex], pdSession.callerId, pdSession.agentPhone, pdSession.profileId);
+    }
+  } else {
+    pdSetPaused(true);
+    toast(pdActiveSid ? 'Pausing after this call' : 'Paused', 'ok');
+  }
+});
+
 function pdStop(){
   pdActive = false;
+  pdSetPaused(false);
+  pdHideNow();
   clearTimeout(pdPollTimer);
   pdHideWrapUp();
   // Drop the seller's leg, then the agent's — otherwise the agent sits
