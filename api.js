@@ -15,6 +15,10 @@
 
 const TWILIO_BASE = 'https://api.twilio.com/2010-04-01';
 
+// Public URL of this function. Was hardcoded in three separate places;
+// override with APP_BASE_URL in Netlify env vars if the domain ever changes.
+const APP_BASE_URL = process.env.APP_BASE_URL || 'https://winwincalltoclose.netlify.app/api';
+
 // ── Auth & response helpers ───────────────────────────────────
 function corsHeaders() {
   return {
@@ -127,22 +131,22 @@ function escapeXml(s) {
 // Twilio recording media requires HTTP Basic Auth by default. Rather
 // than store a secret at rest, we rebuild this URL on demand from
 // env credentials + the stored (non-secret) RecordingSid.
+// Returns a URL the browser can actually play.
+// It points back at this function (action=recording), which attaches the
+// Twilio credentials server-side and streams the audio through.
+//
+// The old version embedded user:pass directly in the api.twilio.com URL.
+// That (a) shipped the Twilio auth token to every browser and (b) doesn't
+// play anyway — Chrome and Safari strip embedded credentials from media
+// requests, which is why recordings were silent.
 function recordingPlaybackUrl(recordingSid) {
-  let user, pass;
-  if (process.env.TWILIO_API_KEY_SID && process.env.TWILIO_API_KEY_SECRET) {
-    user = process.env.TWILIO_API_KEY_SID;
-    pass = process.env.TWILIO_API_KEY_SECRET;
-  } else {
-    user = process.env.TWILIO_ACCOUNT_SID;
-    pass = process.env.TWILIO_AUTH_TOKEN;
-  }
-  return `https://${encodeURIComponent(user)}:${encodeURIComponent(pass)}@api.twilio.com/2010-04-01/Accounts/${twilioSid()}/Recordings/${recordingSid}.mp3`;
+  return `/api?action=recording&sid=${encodeURIComponent(recordingSid)}`;
 }
 
 // TwiML played when we call a rep's own phone to record their VM drop message
 function handleRecordVmTwiml(event) {
   const qs = event.queryStringParameters || {};
-  const baseUrl = 'https://winwincalltoclose.netlify.app/api';
+  const baseUrl = APP_BASE_URL;
   const profileId = qs.profileId || '';
   const statusCb = `${baseUrl}?action=record-vm-status&profileId=${encodeURIComponent(profileId)}`;
   const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response>
@@ -522,7 +526,7 @@ async function _handleTwilioVoiceInboundInner(event) {
   }
 
   // Whisper URL — played only in the team member's ear after they answer
-  const baseUrl    = 'https://winwincalltoclose.netlify.app/api';
+  const baseUrl    = APP_BASE_URL;
   // Simple seamless connect — no whisper URL (was causing XML parse error 12100)
   const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Say voice="alice">Connecting</Say><Dial callerId="${escapeXml(to)}" timeout="30" answerOnBridge="true"><Number>${escapeXml(forwardTo)}</Number></Dial></Response>`;
 
@@ -536,6 +540,7 @@ async function handleTwilioStatus(event) {
       return { statusCode: 403, body: 'invalid signature' };
     }
   }
+  // ── SMS status ──────────────────────────────────────────
   const sid = params.MessageSid || '';
   const status = params.MessageStatus || '';
   if (sid && status) {
@@ -545,6 +550,182 @@ async function handleTwilioStatus(event) {
       }, { Prefer: 'return=minimal' });
     } catch {}
   }
+
+  // ── Voice status ────────────────────────────────────────
+  // BUGFIX: the power dialer pointed StatusCallback here, but this handler
+  // only ever looked at MessageSid/MessageStatus. Every voice callback was
+  // silently discarded, so call rows never left "queued" and the dialer had
+  // no reliable signal that a call had ended.
+  const callSid = params.CallSid || '';
+  const callStatus = params.CallStatus || '';
+  if (callSid && callStatus) {
+    const patch = { status: callStatus };
+    const dur = parseInt(params.CallDuration || '0', 10);
+    if (dur > 0) patch.duration = dur;
+    if (callStatus === 'completed' || callStatus === 'no-answer' ||
+        callStatus === 'busy' || callStatus === 'failed' || callStatus === 'canceled') {
+      patch.ended_at = new Date().toISOString();
+    }
+    try {
+      await supa(`/calls?twilio_sid=eq.${encodeURIComponent(callSid)}`, 'PATCH',
+        patch, { Prefer: 'return=minimal' });
+    } catch (e) { console.warn('voice status patch failed', e.message); }
+  }
+
+  return { statusCode: 200, body: 'ok' };
+}
+
+// ── Recording playback proxy ────────────────────────────────
+// Twilio's media URLs sit behind HTTP Basic auth, so an <audio> tag pointed
+// straight at them gets a 401 and fails silently. This attaches the
+// credentials server-side.
+//
+// The Range passthrough matters: iOS Safari opens every audio file with
+// "Range: bytes=0-1" and refuses to play if it gets a 200 back instead of
+// a 206. That alone will make a recording silent on an iPhone.
+async function handleRecordingProxy(event) {
+  const qs = event.queryStringParameters || {};
+  const sid = (qs.sid || '').trim();
+
+  if (!/^RE[0-9a-fA-F]{32}$/.test(sid)) {
+    return { statusCode: 400, body: 'invalid recording sid' };
+  }
+
+  const url = `${TWILIO_BASE}/Accounts/${twilioSid()}/Recordings/${sid}.mp3`;
+  const headers = { Authorization: twilioAuth() };
+
+  const range = event.headers.range || event.headers.Range;
+  if (range) headers.Range = range;
+
+  let r;
+  try {
+    r = await fetch(url, { headers });
+  } catch (e) {
+    return { statusCode: 502, body: 'upstream fetch failed' };
+  }
+
+  if (r.status === 404) {
+    // Not finished processing yet, or aged out of Twilio's retention.
+    return { statusCode: 404, body: 'recording not available' };
+  }
+  if (!r.ok && r.status !== 206) {
+    return { statusCode: r.status, body: `twilio returned ${r.status}` };
+  }
+
+  const buf = Buffer.from(await r.arrayBuffer());
+  const out = {
+    'Content-Type': 'audio/mpeg',
+    'Accept-Ranges': 'bytes',
+    'Cache-Control': 'private, max-age=3600',
+    'Access-Control-Allow-Origin': '*',
+  };
+  const cr = r.headers.get('content-range');
+  if (cr) out['Content-Range'] = cr;
+
+  return {
+    statusCode: r.status === 206 ? 206 : 200,
+    headers: out,
+    body: buf.toString('base64'),
+    isBase64Encoded: true,
+  };
+}
+
+// ── Conference status callback (power dialer) ───────────────
+// Fires when the agent's leg actually joins the conference. Only then do we
+// dial the seller, so the seller never sits listening to dead air while the
+// agent's phone is still ringing.
+//
+// This is also where answering machine detection lives. AMD cannot run on a
+// <Dial><Conference> leg — Twilio treats that destination as internal — so it
+// has to be set on the Participant we create here.
+async function handleConferenceStatus(event) {
+  const params = parseFormEncoded(event.body || '');
+  const qs = event.queryStringParameters || {};
+
+  if (process.env.TWILIO_AUTH_TOKEN) {
+    if (!verifyTwilioSignature(event, params)) {
+      return { statusCode: 403, body: 'invalid signature' };
+    }
+  }
+
+  const evt = params.StatusCallbackEvent || '';
+  const conferenceSid = params.ConferenceSid || '';
+  const room = qs.room || params.FriendlyName || '';
+
+  if (evt !== 'conference-start' || !conferenceSid) {
+    return { statusCode: 200, body: 'ok' };
+  }
+
+  const to   = qs.to   || '';
+  const from = qs.from || '';
+  if (!to || !from) return { statusCode: 200, body: 'missing to/from' };
+
+  const baseUrl = APP_BASE_URL;
+  const amdCb = `${baseUrl}?action=amd-status&room=${encodeURIComponent(room)}`;
+
+  try {
+    await tw(`/Accounts/${twilioSid()}/Conferences/${encodeURIComponent(conferenceSid)}/Participants.json`, 'POST', {
+      From: from,
+      To:   to,
+      // No ringback to the agent — they sit in silence until the seller is in.
+      EarlyMedia: 'false',
+      // Short tone the moment the seller joins. This is the "connected" cue.
+      Beep: 'onEnter',
+      StartConferenceOnEnter: 'true',
+      EndConferenceOnExit:    'true',
+      Timeout: 30,
+      // Answering machine detection.
+      // 'Enable' returns a verdict as soon as it can tell human from machine,
+      // which is what you want with a live agent already on the line.
+      // Switch to 'DetectMessageEnd' only if you want to auto-drop voicemails.
+      MachineDetection: 'Enable',
+      MachineDetectionTimeout: 15,
+      // Tuned for cell phones and residences per Twilio's guidance.
+      MachineDetectionSpeechThreshold: 1900,
+      MachineDetectionSpeechEndThreshold: 1400,
+      AmdStatusCallback: amdCb,
+      AmdStatusCallbackMethod: 'POST',
+      StatusCallback: `${baseUrl}?action=twilio-status`,
+      StatusCallbackMethod: 'POST',
+      StatusCallbackEvent: 'ringing answered completed',
+    });
+  } catch (e) {
+    console.warn('participant create failed', e.message);
+  }
+
+  return { statusCode: 200, body: 'ok' };
+}
+
+// ── AMD result callback ─────────────────────────────────────
+// Twilio posts here once it decides whether a human or a machine picked up.
+// We stamp it on the call row; the dialer polls call-status to read it.
+async function handleAmdStatus(event) {
+  const params = parseFormEncoded(event.body || '');
+  const qs = event.queryStringParameters || {};
+
+  if (process.env.TWILIO_AUTH_TOKEN) {
+    if (!verifyTwilioSignature(event, params)) {
+      return { statusCode: 403, body: 'invalid signature' };
+    }
+  }
+
+  const room = qs.room || '';
+  const callSid = params.CallSid || '';
+  // human | machine_start | machine_end_beep | machine_end_silence |
+  // machine_end_other | fax | unknown
+  const answeredBy = params.AnsweredBy || '';
+
+  if (answeredBy && (callSid || room)) {
+    const filter = callSid
+      ? `twilio_sid=eq.${encodeURIComponent(callSid)}`
+      : `conference_room=eq.${encodeURIComponent(room)}`;
+    try {
+      await supa(`/calls?${filter}`, 'PATCH', {
+        answered_by: answeredBy,
+      }, { Prefer: 'return=minimal' });
+    } catch (e) { console.warn('amd patch failed', e.message); }
+  }
+
   return { statusCode: 200, body: 'ok' };
 }
 
@@ -777,6 +958,18 @@ exports.handler = async (event) => {
   }
   if (action === 'twilio-status') {
     return await handleTwilioStatus(event);
+  }
+  if (action === 'conference-status') {
+    return await handleConferenceStatus(event);
+  }
+  if (action === 'amd-status') {
+    return await handleAmdStatus(event);
+  }
+  // Recording playback also bypasses the password gate — an <audio> tag
+  // can't send the X-Access-Password header. Access is gated instead on
+  // knowing the 32-character recording SID, which is not guessable.
+  if (action === 'recording') {
+    return await handleRecordingProxy(event);
   }
   if (action === 'record-vm-twiml') {
     return handleRecordVmTwiml(event);
@@ -1145,17 +1338,44 @@ exports.handler = async (event) => {
         if (!body.from)      return err('from required');
         if (!body.agentPhone)return err('agentPhone required');
 
-        const baseUrl = 'https://winwincalltoclose.netlify.app/api';
-        const sessionId = body.sessionId || '';
+        const baseUrl = APP_BASE_URL;
+        const sessionId  = body.sessionId  || '';
         const propertyId = body.propertyId || '';
 
-        // TwiML played to the agent when they answer:
-        // say the seller name then dial out to the seller
-        const sellerName = (body.sellerName || 'your next lead').replace(/[<>&"]/g, '');
-        const connectTwiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Say voice="alice">Connecting to ${sellerName}</Say><Dial callerId="${escapeXml(body.from)}" timeout="30" answerOnBridge="true"><Number>${escapeXml(body.to)}</Number></Dial></Response>`;
+        // Unique room per call. This doubles as the key the AMD callback
+        // uses to find the right call row, since Twilio can't tell us the
+        // agent's call SID before that call exists.
+        const room = `pd-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-        // Status callback so we know when this leg ends
-        const statusCb = `${baseUrl}?action=twilio-status&sid=SID_PLACEHOLDER`;
+        const sellerName = (body.sellerName || 'your next lead').replace(/[<>&"]/g, '');
+
+        // Conference callback — fires when the agent joins. That's the
+        // trigger to dial the seller (see handleConferenceStatus).
+        const confCb =
+          `${baseUrl}?action=conference-status` +
+          `&room=${encodeURIComponent(room)}` +
+          `&to=${encodeURIComponent(body.to)}` +
+          `&from=${encodeURIComponent(body.from)}` +
+          `&propertyId=${encodeURIComponent(propertyId)}` +
+          `&sessionId=${encodeURIComponent(sessionId)}`;
+
+        // The agent hears the seller's name, then silence, then a single
+        // beep when the seller actually joins.
+        //   waitUrl=""              → no hold music, just silence
+        //   beep="false" (agent)    → no tone for the agent's own entry
+        //   Beep:'onEnter' (seller) → the connect tone, set in the callback
+        const connectTwiml =
+          `<?xml version="1.0" encoding="UTF-8"?>` +
+          `<Response>` +
+            `<Say voice="alice">Calling ${sellerName}</Say>` +
+            `<Dial>` +
+              `<Conference beep="false" startConferenceOnEnter="true" ` +
+              `endConferenceOnExit="true" waitUrl="" ` +
+              `statusCallback="${escapeXml(confCb)}" ` +
+              `statusCallbackMethod="POST" ` +
+              `statusCallbackEvent="start end">${escapeXml(room)}</Conference>` +
+            `</Dial>` +
+          `</Response>`;
 
         const j = await tw(`/Accounts/${twilioSid()}/Calls.json`, 'POST', {
           From: body.from,
@@ -1163,13 +1383,16 @@ exports.handler = async (event) => {
           Twiml: connectTwiml,
           StatusCallback: `${baseUrl}?action=twilio-status`,
           StatusCallbackMethod: 'POST',
-          StatusCallbackEvent: 'completed',
+          // BUGFIX: was 'completed' only, so the dialer never learned the
+          // agent leg had been answered or had failed to connect.
+          StatusCallbackEvent: 'initiated ringing answered completed',
         });
 
         // Persist call record
         try {
           await supa('/calls', 'POST', [{
             twilio_sid: j.sid,
+            conference_room: room,
             property_id: propertyId ? String(propertyId) : null,
             from_number: body.from,
             to_number:   body.to,
@@ -1178,7 +1401,135 @@ exports.handler = async (event) => {
           }], { Prefer: 'return=minimal' });
         } catch (e) { console.warn('power dial persist failed', e.message); }
 
-        return ok({ sid: j.sid, status: j.status });
+        // sellerName / sellerPhone come back so the dialer can show who is
+        // being called while the call is live.
+        return ok({
+          sid: j.sid,
+          status: j.status,
+          room,
+          sellerName: body.sellerName || '',
+          sellerPhone: body.to,
+          callerId: body.from,
+        });
+      }
+
+      // ── Power Dialer: open the session ─────────────────────────
+      // MISSING ACTION — index.html has always called this, and api.js
+      // never implemented it, so pdStop() fired on every session start.
+      //
+      // Rings the agent once and parks them in a conference. Every lead
+      // for the rest of the session is dialed into that same conference,
+      // so the agent's phone never hangs up and calls back between leads.
+      case 'power-dial-start': {
+        if (!body.agentPhone) return err('agentPhone required');
+        if (!body.from)       return err('from required');
+
+        const room = `pd-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+        // waitUrl="" → silence, not hold music, between leads.
+        // beep="false" → no tone for the agent's own entry; the connect
+        // tone comes from the seller joining (Beep:'onEnter' below).
+        const twiml =
+          `<?xml version="1.0" encoding="UTF-8"?>` +
+          `<Response>` +
+            `<Say voice="alice">You are connected. Leads will come to you.</Say>` +
+            `<Dial>` +
+              `<Conference beep="false" startConferenceOnEnter="true" ` +
+              `endConferenceOnExit="true" waitUrl="">${escapeXml(room)}</Conference>` +
+            `</Dial>` +
+          `</Response>`;
+
+        const j = await tw(`/Accounts/${twilioSid()}/Calls.json`, 'POST', {
+          From: body.from,
+          To:   body.agentPhone,
+          Twiml: twiml,
+          StatusCallback: `${APP_BASE_URL}?action=twilio-status`,
+          StatusCallbackMethod: 'POST',
+          StatusCallbackEvent: 'initiated ringing answered completed',
+        });
+
+        return ok({ sid: j.sid, conference: room, status: j.status });
+      }
+
+      // ── Power Dialer: dial one lead into the open session ──────
+      // MISSING ACTION — see above.
+      case 'power-dial-lead': {
+        if (!body.to)         return err('to required');
+        if (!body.from)       return err('from required');
+        if (!body.conference) return err('conference required');
+
+        // Resolve the room name to a live conference SID.
+        const { json: cj } = { json: await tw(
+          `/Accounts/${twilioSid()}/Conferences.json` +
+          `?FriendlyName=${encodeURIComponent(body.conference)}&Status=in-progress`
+        ) };
+        const conf = cj && Array.isArray(cj.conferences) && cj.conferences[0];
+        if (!conf) return err('Your line dropped — restart the session', 409);
+
+        const p = await tw(
+          `/Accounts/${twilioSid()}/Conferences/${encodeURIComponent(conf.sid)}/Participants.json`,
+          'POST', {
+            From: body.from,
+            To:   body.to,
+            // No ringback to the agent — silence until the seller is in.
+            EarlyMedia: 'false',
+            // The connect cue: one short tone when the seller joins.
+            Beep: 'onEnter',
+            StartConferenceOnEnter: 'true',
+            // Deliberately false. If the seller hanging up ended the
+            // conference, the agent would be dropped after every lead —
+            // which is the whole problem this session design avoids.
+            EndConferenceOnExit: 'false',
+            Timeout: 30,
+            // Answering machine detection. 'Enable' returns a verdict as
+            // soon as human/machine is clear, which is what you want with
+            // an agent already on the line. Use 'DetectMessageEnd' only if
+            // you want to auto-drop a voicemail.
+            MachineDetection: 'Enable',
+            MachineDetectionTimeout: 15,
+            MachineDetectionSpeechThreshold: 1900,
+            MachineDetectionSpeechEndThreshold: 1400,
+            AmdStatusCallback: `${APP_BASE_URL}?action=amd-status`,
+            AmdStatusCallbackMethod: 'POST',
+            StatusCallback: `${APP_BASE_URL}?action=twilio-status`,
+            StatusCallbackMethod: 'POST',
+            StatusCallbackEvent: 'ringing answered completed',
+            // Off by default — pass record:true from the front end to
+            // record the seller's leg.
+            Record: body.record ? 'true' : 'false',
+          }
+        );
+
+        try {
+          await supa('/calls', 'POST', [{
+            twilio_sid: p.call_sid,
+            conference_room: body.conference,
+            property_id: body.propertyId ? String(body.propertyId) : null,
+            from_number: body.from,
+            to_number:   body.to,
+            status: 'queued',
+            profile_id: body.profileId || null,
+          }], { Prefer: 'return=minimal' });
+        } catch (e) { console.warn('lead persist failed', e.message); }
+
+        return ok({
+          sid: p.call_sid,
+          recording: !!body.record,
+          sellerName: body.sellerName || '',
+          sellerPhone: body.to,
+          callerId: body.from,
+        });
+      }
+
+      // ── Power Dialer: close the session ────────────────────────
+      // MISSING ACTION — pdStop() called this to drop the agent's leg.
+      case 'power-dial-end': {
+        if (!body.sid) return err('sid required');
+        try {
+          await tw(`/Accounts/${twilioSid()}/Calls/${encodeURIComponent(body.sid)}.json`,
+            'POST', { Status: 'completed' });
+        } catch (e) { /* already gone is fine */ }
+        return ok({ ended: true });
       }
 
       case 'call-status': {
@@ -1191,10 +1542,24 @@ exports.handler = async (event) => {
             status: j.status, duration: dur, ended_at: j.end_time || null,
           }, { Prefer: 'return=minimal' });
         } catch (e) { /* non-fatal */ }
+
+        // Read back whatever AMD decided, so the dialer can show
+        // "Voicemail" and let the operator skip instead of waiting.
+        let answeredBy = '';
+        try {
+          const { json: rows } = await supa(
+            `/calls?twilio_sid=eq.${encodeURIComponent(qs.sid)}&select=answered_by`
+          );
+          if (Array.isArray(rows) && rows[0]) answeredBy = rows[0].answered_by || '';
+        } catch (e) { /* non-fatal */ }
+
         return ok({
           sid: j.sid, status: j.status, duration: dur,
           startTime: j.start_time, endTime: j.end_time,
           from: j.from, to: j.to,
+          answeredBy,
+          isMachine: answeredBy.startsWith('machine') || answeredBy === 'fax',
+          isHuman:   answeredBy === 'human',
         });
       }
 
