@@ -428,6 +428,39 @@ body.view-pipeline header .callerid{display:none}
 .dd-archive{background:rgba(255,255,255,.1);border:none;color:#fff;padding:5px 9px;border-radius:5px;font-size:11px;cursor:pointer;font-family:inherit}
 .dd-archive:hover{background:rgba(239,68,68,.4)}
 .dd-stage-bar{display:flex;gap:3px;margin-top:10px;background:rgba(0,0,0,.25);border-radius:7px;padding:3px}
+
+/* Dead deal */
+.dd-dead{background:rgba(255,255,255,.1);border:1.5px solid rgba(255,255,255,.25);color:#fff;border-radius:7px;padding:6px 11px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;margin-right:6px}
+.dd-dead:hover{background:#b91c1c;border-color:#b91c1c}
+.dead-reasons{display:flex;flex-direction:column;gap:7px}
+.dead-reason{display:block;width:100%;text-align:left;padding:12px 14px;border:2px solid #e5e7eb;border-radius:9px;background:#fff;color:#0f0d0a;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit}
+.dead-reason:hover{border-color:#d1d5db;background:#f9fafb}
+.dead-reason.sel{border-color:#b91c1c;background:#fef2f2;color:#b91c1c}
+.dead-row{padding:12px 0;border-bottom:1px solid #e5e7eb}
+.dead-row:last-child{border-bottom:none}
+.dead-row .nm{font-size:14px;font-weight:700}
+.dead-row .rs{font-size:12px;color:#b91c1c;font-weight:600;margin-top:2px}
+.dead-row .nt{font-size:12px;color:#6b7280;margin-top:3px}
+.dead-row button{margin-top:7px;padding:6px 12px;font-size:12px;font-weight:600;border:1.5px solid #d1d5db;background:#fff;border-radius:6px;cursor:pointer}
+
+/* Metrics */
+.mx-grid{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-bottom:18px}
+.mx-card{padding:12px;border:1px solid #e5e7eb;border-radius:10px;background:#f9fafb}
+.mx-card .k{font-size:10px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:#6b7280}
+.mx-card .v{font-size:23px;font-weight:800;color:#0f0d0a;line-height:1.15;margin-top:3px}
+.mx-card .s{font-size:11px;color:#6b7280;margin-top:2px}
+.mx-card.good .v{color:#047857}
+.mx-card.bad .v{color:#b91c1c}
+.mx-h{font-size:13px;font-weight:700;margin:0 0 8px;color:#0f0d0a}
+.mx-bar-row{margin-bottom:9px}
+.mx-bar-lbl{display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px}
+.mx-bar-lbl b{font-weight:700}
+.mx-bar{height:7px;background:#e5e7eb;border-radius:99px;overflow:hidden}
+.mx-bar span{display:block;height:100%;background:#b91c1c;border-radius:99px}
+.mx-tbl{width:100%;border-collapse:collapse;font-size:12px}
+.mx-tbl th{text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:#6b7280;padding:5px 6px;border-bottom:1px solid #e5e7eb}
+.mx-tbl td{padding:7px 6px;border-bottom:1px solid #f3f4f6}
+.mx-tbl td.num{text-align:right;font-variant-numeric:tabular-nums}
 .dd-stage-btn{flex:1;padding:7px 4px;background:transparent;border:none;color:rgba(255,255,255,.55);font-size:11px;font-weight:600;cursor:pointer;border-radius:4px;font-family:inherit}
 .dd-stage-btn.active{background:#fff;color:#0f0d0a}
 .dd-stage-btn:hover:not(.active){color:#fff}
@@ -1107,8 +1140,56 @@ body.view-mail header .callerid{display:none}
   <div id="pipelineView">
     <div class="pipe-toolbar">
       <div class="pipe-summary" id="pipeSummary">—</div>
+      <button class="header-link on-light" id="pipeMetricsBtn">📊 Metrics</button>
+      <button class="header-link on-light" id="pipeDeadBtn">💀 Dead <span id="pipeDeadCount"></span></button>
     </div>
     <div class="pipe-board" id="pipeBoard"></div>
+  </div>
+
+  <!-- Dead reason picker -->
+  <div class="modal" id="deadModal">
+    <div class="modal-box">
+      <div class="modal-head">
+        <h3>Why didn't it work?</h3>
+        <button class="modal-close" id="deadClose">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="dead-reasons" id="deadReasons"></div>
+        <label style="display:block;font-size:12px;font-weight:600;color:#6b7280;margin:14px 0 4px">
+          Anything worth remembering (optional)
+        </label>
+        <textarea class="notes-ta" id="deadNotes" rows="3"
+          placeholder="e.g. wanted 240k, best buyer was at 205k"></textarea>
+        <button class="btn-primary" id="deadSave" style="width:100%;margin-top:14px" disabled>
+          Mark deal dead
+        </button>
+        <div style="font-size:11px;color:#6b7280;text-align:center;margin-top:8px">
+          Stays in your metrics — you can revive it later.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Dead deals list -->
+  <div class="modal" id="deadListModal">
+    <div class="modal-box">
+      <div class="modal-head">
+        <h3>Dead deals</h3>
+        <button class="modal-close" id="deadListClose">✕</button>
+      </div>
+      <div class="modal-body" id="deadListBody">Loading…</div>
+    </div>
+  </div>
+
+  <!-- Metrics -->
+  <div class="modal" id="metricsModal">
+    <div class="modal-box">
+      <div class="modal-head">
+        <h3>Pipeline metrics</h3>
+        <button class="modal-close" id="metricsClose">✕</button>
+      </div>
+      <div class="modal-body" id="metricsBody">Loading…</div>
+    </div>
   </div>
 
   <!-- Inbox view -->
@@ -1573,6 +1654,7 @@ body.view-mail header .callerid{display:none}
     <div class="dd-head-row">
       <button class="dd-back" id="ddBack">← Pipeline</button>
       <div class="dd-title" id="ddTitle">—<span class="sub" id="ddSub"></span></div>
+      <button class="dd-dead" id="ddDead">Didn't work</button>
       <button class="dd-archive" id="ddArchive">Archive</button>
     </div>
     <div class="dd-stage-bar" id="ddStageBar"></div>
@@ -4456,6 +4538,156 @@ const STAGES = [
   {id:'closed',       label:'Closed',         hint:'Done'},
 ];
 
+// ── Dead deals ────────────────────────────────────────────────
+// Edit this list freely — the reason string is what gets stored and
+// what the metrics group by, so keep the wording stable once you
+// start collecting data.
+const DEAD_REASONS = [
+  'Price — seller wouldn\'t come down',
+  'Went with another investor',
+  'Listed with an agent',
+  'Seller went dark',
+  'Title, liens, or back taxes',
+  'Condition worse than expected',
+  'No buyer at that price',
+  'Occupancy — tenant, probate, or heirs',
+  'Seller changed their mind',
+  'Bad lead — wrong owner or not for sale',
+  'Other',
+];
+let deadPickReason = null;
+
+function openDeadModal(){
+  if(!openDealId) return;
+  deadPickReason = null;
+  $('deadNotes').value = '';
+  $('deadSave').disabled = true;
+  const box = $('deadReasons');
+  box.innerHTML = '';
+  DEAD_REASONS.forEach(r => {
+    const b = el(`<button type="button" class="dead-reason">${escapeHtml(r)}</button>`);
+    b.addEventListener('click', () => {
+      deadPickReason = r;
+      box.querySelectorAll('.dead-reason').forEach(x => x.classList.remove('sel'));
+      b.classList.add('sel');
+      $('deadSave').disabled = false;
+    });
+    box.appendChild(b);
+  });
+  $('deadModal').classList.add('open');
+}
+
+$('ddDead')?.addEventListener('click', openDeadModal);
+$('deadClose')?.addEventListener('click', () => $('deadModal').classList.remove('open'));
+
+$('deadSave')?.addEventListener('click', async () => {
+  if(!openDealId || !deadPickReason) return;
+  const btn = $('deadSave');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  try {
+    await api('mark-deal-dead', {method:'POST', body:{
+      id: openDealId,
+      reason: deadPickReason,
+      notes: $('deadNotes').value.trim(),
+      actingProfileId: activeProfileId || null,
+    }});
+    $('deadModal').classList.remove('open');
+    toast('Marked dead — it still counts in your metrics','ok');
+    $('dealDetail').classList.remove('open');
+    loadPipeline();
+  } catch(e){
+    toast('Could not save: '+e.message,'err');
+  }
+  btn.disabled = false; btn.textContent = 'Mark deal dead';
+});
+
+// ── Dead deals list ───────────────────────────────────────────
+$('pipeDeadBtn')?.addEventListener('click', async () => {
+  $('deadListModal').classList.add('open');
+  const body = $('deadListBody');
+  body.innerHTML = 'Loading…';
+  try {
+    const j = await api('list-deals');
+    const dead = (j.deals || []).filter(d => d.stage === 'dead');
+    if(!dead.length){ body.innerHTML = '<div class="empty">Nothing dead yet.</div>'; return; }
+    body.innerHTML = '';
+    dead.sort((a,b) => new Date(b.dead_at||0) - new Date(a.dead_at||0));
+    dead.forEach(d => {
+      const row = el(`<div class="dead-row">
+        <div class="nm">${escapeHtml(d.owners || d.property_address || 'Deal #'+d.id)}</div>
+        <div class="rs">${escapeHtml(d.dead_reason || 'No reason recorded')}</div>
+        ${d.dead_notes ? `<div class="nt">${escapeHtml(d.dead_notes)}</div>` : ''}
+        <button type="button">↩ Revive to Hot Lead</button>
+      </div>`);
+      row.querySelector('button').addEventListener('click', async () => {
+        try {
+          await api('revive-deal', {method:'POST', body:{id:d.id, stage:'hot'}});
+          row.remove();
+          toast('Back in the pipeline','ok');
+          loadPipeline();
+        } catch(e){ toast('Could not revive: '+e.message,'err'); }
+      });
+      body.appendChild(row);
+    });
+  } catch(e){
+    body.innerHTML = '<div class="empty" style="color:#b91c1c">'+escapeHtml(e.message)+'</div>';
+  }
+});
+$('deadListClose')?.addEventListener('click', () => $('deadListModal').classList.remove('open'));
+
+// ── Metrics ───────────────────────────────────────────────────
+$('metricsClose')?.addEventListener('click', () => $('metricsModal').classList.remove('open'));
+$('pipeMetricsBtn')?.addEventListener('click', async () => {
+  $('metricsModal').classList.add('open');
+  const box = $('metricsBody');
+  box.innerHTML = 'Loading…';
+  try {
+    const m = await api('deal-metrics');
+    const money = n => '$' + Math.round(n || 0).toLocaleString();
+    const days  = n => n == null ? '—' : (Math.round(n * 10) / 10) + 'd';
+    const rate  = n => n == null ? '—' : n + '%';
+
+    let h = `<div class="mx-grid">
+      <div class="mx-card good"><div class="k">Close rate</div><div class="v">${rate(m.totals.closeRate)}</div>
+        <div class="s">${m.totals.closed} closed of ${m.totals.closed + m.totals.dead} decided</div></div>
+      <div class="mx-card"><div class="k">In pipeline</div><div class="v">${m.totals.live}</div>
+        <div class="s">still working</div></div>
+      <div class="mx-card bad"><div class="k">Dead</div><div class="v">${m.totals.dead}</div>
+        <div class="s">avg ${days(m.speed.avgDaysToDead)} to die</div></div>
+      <div class="mx-card good"><div class="k">Assignment fees</div><div class="v">${money(m.money.totalAssignmentFees)}</div>
+        <div class="s">avg ${money(m.money.avgAssignmentFee)} · ${days(m.speed.avgDaysToClose)} to close</div></div>
+    </div>`;
+
+    if(m.deadReasons.length){
+      h += '<h4 class="mx-h">Why deals die</h4>';
+      m.deadReasons.forEach(r => {
+        h += `<div class="mx-bar-row">
+          <div class="mx-bar-lbl"><span>${escapeHtml(r.reason)}</span><b>${r.count} · ${r.pct}%</b></div>
+          <div class="mx-bar"><span style="width:${r.pct}%"></span></div>
+        </div>`;
+      });
+    }
+
+    if(m.bySource.length){
+      h += '<h4 class="mx-h" style="margin-top:18px">By source list</h4>';
+      h += '<table class="mx-tbl"><thead><tr><th>List</th><th class="num">Deals</th><th class="num">Closed</th><th class="num">Dead</th><th class="num">Rate</th></tr></thead><tbody>';
+      m.bySource.forEach(s => {
+        h += `<tr><td>${escapeHtml(s.source)}</td>
+          <td class="num">${s.total}</td>
+          <td class="num">${s.closed}</td>
+          <td class="num">${s.dead}</td>
+          <td class="num">${rate(s.closeRate)}</td></tr>`;
+      });
+      h += '</tbody></table>';
+    }
+
+    h += '<div style="font-size:11px;color:#6b7280;margin-top:16px">Close rate counts only deals that reached an outcome. Deals still in the pipeline are excluded so the number doesn\'t drift as you add leads.</div>';
+    box.innerHTML = h;
+  } catch(e){
+    box.innerHTML = '<div class="empty" style="color:#b91c1c">'+escapeHtml(e.message)+'</div>';
+  }
+});
+
 async function loadPipeline(){
   $('pipeBoard').innerHTML = '<div class="empty">Loading…</div>';
   try {
@@ -4471,6 +4703,10 @@ function renderPipeline(){
   const board = $('pipeBoard');
   board.innerHTML = '';
   let total = 0;
+  // Dead deals stay in the data for metrics but off the board.
+  const deadCount = pipelineDeals.filter(d => d.stage === 'dead').length;
+  const dc = $('pipeDeadCount');
+  if(dc) dc.textContent = deadCount ? `(${deadCount})` : '';
   STAGES.forEach(s => {
     const inStage = pipelineDeals.filter(d => d.stage === s.id);
     total += inStage.length;
