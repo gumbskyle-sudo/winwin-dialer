@@ -1823,6 +1823,7 @@ exports.handler = async (event) => {
           owners: 'owners', propertyAddress: 'property_address', mailingAddress: 'mailing_address',
           ownerLastName: 'owner_last_name',
           archived: 'archived',
+          deadReason: 'dead_reason', deadNotes: 'dead_notes',
           // Deal Qualifier Form fields
           qMotivation: 'q_motivation', qTimeline: 'q_timeline', qCondition: 'q_condition',
           qAskingPrice: 'q_asking_price', qMortgageBalance: 'q_mortgage_balance',
@@ -1858,6 +1859,136 @@ exports.handler = async (event) => {
       }
 
       // Archive (soft-delete) a deal
+      // ── Mark a deal dead, with a reason ────────────────────────
+      // Dead deals are NOT archived. They stay queryable so the metrics
+      // below can tell you why deals die, not just that they did.
+      case 'mark-deal-dead': {
+        const id = parseInt(body.id, 10);
+        if (!id) return err('id required');
+        if (!body.reason) return err('reason required');
+
+        const { json } = await supa(`/deals?id=eq.${id}`, 'PATCH', {
+          stage:       'dead',
+          dead_reason: body.reason,
+          dead_notes:  body.notes || null,
+          dead_at:     new Date().toISOString(),
+        });
+
+        try {
+          await supa('/deal_notes', 'POST', [{
+            deal_id: id,
+            profile_id: body.actingProfileId || null,
+            body: 'Marked dead — ' + body.reason + (body.notes ? ': ' + body.notes : ''),
+            kind: 'stage_change',
+          }], { Prefer: 'return=minimal' });
+        } catch (e) { /* non-fatal */ }
+
+        return ok({ deal: json && json[0] });
+      }
+
+      // ── Revive a dead deal ─────────────────────────────────────
+      case 'revive-deal': {
+        const id = parseInt(body.id, 10);
+        if (!id) return err('id required');
+        const { json } = await supa(`/deals?id=eq.${id}`, 'PATCH', {
+          stage:       body.stage || 'hot',
+          dead_reason: null,
+          dead_notes:  null,
+          dead_at:     null,
+        });
+        return ok({ deal: json && json[0] });
+      }
+
+      // ── Pipeline metrics ───────────────────────────────────────
+      // Everything is computed here rather than in the browser so the
+      // numbers don't depend on what happens to be loaded on screen.
+      case 'deal-metrics': {
+        const { json: deals } = await supa(
+          '/deals?archived=is.false&select=id,stage,dead_reason,dead_at,closed_at,created_at,' +
+          'source_list,assignment_fee,assigned_to_profile,deal_type&limit=5000'
+        );
+        const all = Array.isArray(deals) ? deals : [];
+
+        const isDead   = d => d.stage === 'dead';
+        const isClosed = d => d.stage === 'closed';
+        const isLive   = d => !isDead(d) && !isClosed(d);
+
+        const closed = all.filter(isClosed);
+        const dead   = all.filter(isDead);
+        const live   = all.filter(isLive);
+        const settled = closed.length + dead.length;
+
+        // Days between two timestamps, or null if either is missing
+        const daysBetween = (a, b) => {
+          if (!a || !b) return null;
+          const ms = new Date(b) - new Date(a);
+          return ms > 0 ? ms / 86400000 : null;
+        };
+        const avg = arr => {
+          const nums = arr.filter(n => typeof n === 'number' && !isNaN(n));
+          return nums.length ? nums.reduce((s, n) => s + n, 0) / nums.length : null;
+        };
+
+        // Why deals die, most common first
+        const reasonCounts = {};
+        dead.forEach(d => {
+          const r = d.dead_reason || 'Unspecified';
+          reasonCounts[r] = (reasonCounts[r] || 0) + 1;
+        });
+        const deadReasons = Object.entries(reasonCounts)
+          .map(([reason, count]) => ({
+            reason, count,
+            pct: dead.length ? Math.round((count / dead.length) * 100) : 0,
+          }))
+          .sort((a, b) => b.count - a.count);
+
+        // Which lists actually produce closings
+        const bySourceMap = {};
+        all.forEach(d => {
+          const k = d.source_list || 'Unknown';
+          if (!bySourceMap[k]) bySourceMap[k] = { source: k, total: 0, closed: 0, dead: 0, live: 0, fees: 0 };
+          const s = bySourceMap[k];
+          s.total++;
+          if (isClosed(d)) { s.closed++; s.fees += Number(d.assignment_fee) || 0; }
+          else if (isDead(d)) s.dead++;
+          else s.live++;
+        });
+        const bySource = Object.values(bySourceMap)
+          .map(s => ({
+            ...s,
+            closeRate: (s.closed + s.dead) ? Math.round((s.closed / (s.closed + s.dead)) * 100) : null,
+          }))
+          .sort((a, b) => b.total - a.total);
+
+        // Stage counts for the live pipeline
+        const byStage = {};
+        live.forEach(d => { byStage[d.stage] = (byStage[d.stage] || 0) + 1; });
+
+        const fees = closed.reduce((s, d) => s + (Number(d.assignment_fee) || 0), 0);
+
+        return ok({
+          totals: {
+            all: all.length,
+            live: live.length,
+            closed: closed.length,
+            dead: dead.length,
+            // Of deals that reached an outcome, how many closed
+            closeRate: settled ? Math.round((closed.length / settled) * 100) : null,
+          },
+          money: {
+            totalAssignmentFees: fees,
+            avgAssignmentFee: closed.length ? Math.round(fees / closed.length) : 0,
+          },
+          speed: {
+            avgDaysToClose: avg(closed.map(d => daysBetween(d.created_at, d.closed_at))),
+            avgDaysToDead:  avg(dead.map(d => daysBetween(d.created_at, d.dead_at))),
+          },
+          byStage,
+          deadReasons,
+          bySource,
+        });
+      }
+
       case 'archive-deal': {
         const id = parseInt(body.id, 10);
         if (!id) return err('id required');
