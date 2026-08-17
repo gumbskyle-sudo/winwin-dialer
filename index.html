@@ -1668,11 +1668,16 @@ body.view-mail header .callerid{display:none}
     <h2 id="ppTitle">Who's calling today?</h2>
     <p>Pick your profile so calls and deals get attributed to you. Sticks to this device.</p>
     <div class="profile-list" id="ppList"></div>
-    <div style="font-size:11px;color:#9ca3af;margin:8px 0 6px">Or add a new teammate:</div>
-    <form class="profile-new" id="ppNewForm">
-      <input type="text" id="ppNewName" placeholder="Your first name" maxlength="40" required>
-      <button type="submit">Add</button>
+    <div style="font-size:11px;color:#9ca3af;margin:8px 0 6px" id="ppAddLabel">Or add a new caller:</div>
+    <form class="profile-new" id="ppNewForm" style="flex-direction:column;align-items:stretch">
+      <input type="text" id="ppNewName" placeholder="First name" maxlength="40" required>
+      <input type="password" id="ppNewPass" placeholder="Their own password (6+ characters)" autocomplete="new-password">
+      <button type="submit">Add caller</button>
     </form>
+    <div style="font-size:11px;color:#9ca3af;margin-top:8px" id="ppAddHint">
+      A caller signs in with their own password — it's what identifies them, so
+      there's no name to pick and no way to sign in as someone else.
+    </div>
   </div>
 </div>
 
@@ -1811,6 +1816,24 @@ function fmtTalkTime(sec){
 }
 
 // ── Login flow ──────────────────────────────────────────────────
+// The backend answers 'ping' with who this password belongs to:
+// {name, role:'admin'|'caller', profileId}. A caller is pinned to their
+// own profile — the picker never opens for them.
+let currentUser = null;
+
+function isAdmin(){ return !currentUser || currentUser.role === 'admin'; }
+
+function applyUser(){
+  if(currentUser && currentUser.role === 'caller' && currentUser.profileId){
+    activeProfileId   = currentUser.profileId;
+    activeProfileName = currentUser.name;
+    localStorage.setItem(LS.profileId, activeProfileId);
+    localStorage.setItem(LS.profileName, activeProfileName);
+    $('profilePicker').classList.remove('open');
+  }
+  updateProfileBadge();
+}
+
 $('loginForm').addEventListener('submit', async e => {
   e.preventDefault();
   const pw = $('pwInput').value;
@@ -1820,7 +1843,8 @@ $('loginForm').addEventListener('submit', async e => {
   const oldPwd = password;
   password = pw;
   try {
-    await api('ping');
+    const j = await api('ping');
+    currentUser = j.user || null;
     localStorage.setItem(LS.pwd, pw);
     showApp();
     boot();
@@ -4463,24 +4487,71 @@ function updateProfileBadge(){
     b.classList.add('hide');
   }
 }
-$('profileBadge').addEventListener('click', () => showProfilePicker());
+$('profileBadge').addEventListener('click', () => {
+  if(currentUser && currentUser.role === 'caller'){
+    toast('Signed in as '+currentUser.name,'ok');
+    return;
+  }
+  showProfilePicker();
+});
 
 async function showProfilePicker(){
+  // Callers are identified by their password — nothing to pick, nothing
+  // to switch to. This is the bit that stops one caller working as another.
+  if(currentUser && currentUser.role === 'caller') return;
   await loadProfiles();
+  const admin = isAdmin();
   const list = $('ppList');
   list.innerHTML = '';
   if(!allProfiles.length){
-    list.innerHTML = '<div class="muted" style="font-size:12px;text-align:center;padding:6px">No profiles yet — add one below.</div>';
+    list.innerHTML = '<div class="muted" style="font-size:12px;text-align:center;padding:6px">No callers yet — add one below.</div>';
   } else {
     allProfiles.forEach(p => {
-      const b = el(`<button type="button" class="profile-pick">${escapeHtml(p.name)}</button>`);
+      const row = el('<div style="display:flex;gap:6px;align-items:stretch"></div>');
+      const lock = p.has_password
+        ? '<span style="font-size:10px;color:#059669;font-weight:600"> · own login</span>'
+        : '<span style="font-size:10px;color:#9ca3af;font-weight:600"> · no password</span>';
+      const inactive = (p.is_active === false)
+        ? '<span style="font-size:10px;color:#b91c1c;font-weight:600"> · off</span>' : '';
+      const b = el(`<button type="button" class="profile-pick" style="flex:1">${escapeHtml(p.name)}${lock}${inactive}</button>`);
       b.addEventListener('click', () => pickProfile(p));
-      list.appendChild(b);
+      row.appendChild(b);
+      if(admin){
+        const k = el('<button type="button" class="profile-pick" style="flex:0 0 auto;padding:12px 11px" title="Set password">🔑</button>');
+        k.addEventListener('click', (ev) => { ev.stopPropagation(); setCallerPassword(p); });
+        row.appendChild(k);
+      }
+      list.appendChild(row);
     });
   }
   $('ppNewName').value = '';
+  if($('ppNewPass')) $('ppNewPass').value = '';
+  // Only the owner hands out passwords.
+  ['ppNewPass','ppAddHint'].forEach(id => {
+    const n = $(id); if(n) n.style.display = admin ? '' : 'none';
+  });
   $('profilePicker').classList.add('open');
   setTimeout(() => $('ppNewName').focus(), 50);
+}
+
+// Owner sets, rotates, or clears one caller's password.
+async function setCallerPassword(p){
+  const pw = prompt(
+    p.has_password
+      ? `New password for ${p.name}\n\n(Leave blank to clear it and lock them out.)`
+      : `Password for ${p.name}\n\nThey'll sign in with this instead of the shared one.`,
+    ''
+  );
+  if(pw === null) return; // cancelled
+  if(pw && pw.trim().length < 6){ toast('Password must be at least 6 characters','err'); return; }
+  try {
+    const j = await api('set-profile-password',{method:'POST', body:{profileId:p.id, password:pw.trim()}});
+    p.has_password = !!j.has_password;
+    toast(j.has_password ? `${p.name} can now sign in with their own password` : `${p.name}'s password cleared`,'ok');
+    showProfilePicker();
+  } catch(err){
+    toast('Could not set password: '+err.message,'err');
+  }
 }
 function pickProfile(p){
   activeProfileId = p.id;
@@ -4495,10 +4566,20 @@ $('ppNewForm').addEventListener('submit', async e => {
   e.preventDefault();
   const name = $('ppNewName').value.trim();
   if(!name) return;
+  const pwNode = $('ppNewPass');
+  const pw = (pwNode && isAdmin()) ? pwNode.value.trim() : '';
+  if(pw && pw.length < 6){ toast('Password must be at least 6 characters','err'); return; }
   try {
-    const j = await api('create-profile',{method:'POST', body:{name}});
+    const j = await api('create-profile',{method:'POST', body: pw ? {name, password:pw} : {name}});
     allProfiles.push(j.profile);
-    pickProfile(j.profile);
+    if(pwNode) pwNode.value = '';
+    if(pw){
+      // Adding someone else — don't switch the owner's own attribution over to them.
+      toast(`${name} added. They sign in with the password you just set.`,'ok');
+      showProfilePicker();
+    } else {
+      pickProfile(j.profile);
+    }
   } catch(err){
     toast('Could not add: '+err.message,'err');
   }
@@ -6757,14 +6838,21 @@ async function tickRecordingPurge(){
 async function boot(){
   // Verify password is still valid
   badge('sync','Connecting…');
-  try { await api('ping'); }
+  try {
+    const j = await api('ping');
+    currentUser = j.user || null;
+  }
   catch(e){
     if(e.status === 401){ password=''; localStorage.removeItem(LS.pwd); showLogin(); return; }
     badge('err','Offline'); toast('Backend unreachable — check Settings','err');
   }
   await loadProfiles();
-  // If no profile picked yet, prompt
-  if(!activeProfileId || !allProfiles.find(p => p.id === activeProfileId)){
+  applyUser();
+  // A caller is already identified by their password. Only the owner —
+  // or an older build with no identity — still gets asked who's calling.
+  if(currentUser && currentUser.role === 'caller'){
+    updateProfileBadge();
+  } else if(!activeProfileId || !allProfiles.find(p => p.id === activeProfileId)){
     showProfilePicker();
   } else {
     updateProfileBadge();
