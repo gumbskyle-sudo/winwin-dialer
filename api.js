@@ -7,7 +7,16 @@
  *   TWILIO_ACCOUNT_SID        AC...
  *   TWILIO_API_KEY_SID        SK...   (preferred)
  *   TWILIO_API_KEY_SECRET     ...     (preferred)
- *   ACCESS_PASSWORD           a long random string your team shares
+ *   ACCESS_PASSWORD           the OWNER login — full admin access
+ *
+ * Callers no longer share ACCESS_PASSWORD. Each one gets their own
+ * password, stored as a SHA-256 hash on their profiles row
+ * (profiles.password_hash), set by the owner from the Team screen.
+ * One-time SQL to run in Supabase before deploying this:
+ *
+ *   alter table profiles add column if not exists password_hash text;
+ *   alter table profiles add column if not exists is_active boolean not null default true;
+ *   create index if not exists profiles_password_hash_idx on profiles(password_hash);
  *
  * Fallback if you don't make a Twilio API key:
  *   TWILIO_AUTH_TOKEN
@@ -30,6 +39,34 @@ function corsHeaders() {
 }
 const ok  = (body, code = 200) => ({ statusCode: code, headers: corsHeaders(), body: JSON.stringify(body) });
 const err = (msg,  code = 400) => ({ statusCode: code, headers: corsHeaders(), body: JSON.stringify({ error: msg }) });
+
+// ── Per-caller logins ─────────────────────────────────────────
+// This app shipped with one ACCESS_PASSWORD the whole team shared, which
+// meant a login said nothing about WHO was on the line and couldn't be
+// revoked for one person without changing it for everybody. Each caller
+// now has their own password hashed onto their profile row. The password
+// is what identifies them, so there's no username to type and no profile
+// picker to impersonate someone through.
+const authCrypto = require('crypto');
+
+function hashPassword(pw) {
+  return authCrypto.createHash('sha256').update(String(pw), 'utf8').digest('hex');
+}
+
+// Returns {name, role, profileId} or null if the password matches nobody.
+async function identifyUser(provided) {
+  if (!provided) return null;
+  const owner = process.env.ACCESS_PASSWORD;
+  // Owner password short-circuits — no DB round trip on the common path.
+  if (owner && provided === owner) return { name: 'Owner', role: 'admin', profileId: null };
+  const hash = hashPassword(provided);
+  const { json } = await supa(
+    `/profiles?password_hash=eq.${encodeURIComponent(hash)}&is_active=is.true&select=id,name&limit=1`
+  );
+  const p = Array.isArray(json) && json[0];
+  if (!p) return null;
+  return { name: p.name, role: 'caller', profileId: p.id };
+}
 
 // ── Twilio helpers ────────────────────────────────────────────
 function twilioAuth() {
@@ -982,11 +1019,18 @@ exports.handler = async (event) => {
   // password gate like everything else and the admin can trigger it
   // manually, plus the frontend pings it every page load.
 
-  // Password gate
+  // Password gate — the owner password, or any active caller's own password
   const expected = process.env.ACCESS_PASSWORD;
   if (!expected) return err('Server misconfigured: ACCESS_PASSWORD not set', 500);
   const provided = event.headers['x-access-password'] || event.headers['X-Access-Password'];
-  if (provided !== expected) return err('Unauthorized', 401);
+  let user;
+  try {
+    user = await identifyUser(provided);
+  } catch (e) {
+    // Almost always means the one-time SQL hasn't been run yet.
+    return err('Sign-in check failed (is password_hash on the profiles table?): ' + e.message, 500);
+  }
+  if (!user) return err('Unauthorized', 401);
 
   let body = {};
   if (event.body) { try { body = JSON.parse(event.body); } catch {} }
@@ -996,7 +1040,7 @@ exports.handler = async (event) => {
 
       // ── Auth ping (used by HTML to verify password) ─────────
       case 'ping':
-        return ok({ ok: true });
+        return ok({ ok: true, user });
 
       // ════════════════════════════════════════════════════════
       // PROPERTIES & LEADS
@@ -1724,18 +1768,29 @@ exports.handler = async (event) => {
 
       case 'list-profiles': {
         const { json } = await supa('/profiles?select=*&order=name.asc');
-        return ok({ profiles: json || [] });
+        // Strip the hash before this leaves the server — the UI only needs
+        // to know whether a caller has a password set, never what it is.
+        const profiles = (json || []).map(p => {
+          const { password_hash, ...rest } = p;
+          return { ...rest, has_password: !!password_hash };
+        });
+        return ok({ profiles });
       }
 
       case 'create-profile': {
         const name = (body.name || '').trim();
         if (!name) return err('name required');
         if (name.length > 40) return err('name too long');
+        const pw = body.password ? String(body.password) : '';
+        if (pw && user.role !== 'admin') return err('Only the owner can set a caller password', 403);
+        if (pw && pw.length < 6) return err('Password must be at least 6 characters');
         try {
           const row = { name };
           if (body.phone) row.phone = body.phone;
+          if (pw) row.password_hash = hashPassword(pw);
           const { json } = await supa('/profiles', 'POST', [row]);
-          return ok({ profile: json[0] });
+          const { password_hash, ...profile } = json[0] || {};
+          return ok({ profile: { ...profile, has_password: !!password_hash } });
         } catch (e) {
           if (String(e.message).match(/duplicate|unique/i)) return err('That name is already taken', 409);
           throw e;
@@ -1745,6 +1800,40 @@ exports.handler = async (event) => {
       case 'update-profile-phone': {
         if (!body.profileId) return err('profileId required');
         await supa(`/profiles?id=eq.${encodeURIComponent(body.profileId)}`, 'PATCH', { phone: body.phone || '' });
+        return ok({ ok: true });
+      }
+
+      // Owner sets or rotates one caller's password. Sending an empty
+      // password clears it, which locks that caller out entirely.
+      case 'set-profile-password': {
+        if (user.role !== 'admin') return err('Only the owner can change caller passwords', 403);
+        if (!body.profileId) return err('profileId required');
+        const pw = body.password ? String(body.password) : '';
+        if (pw && pw.length < 6) return err('Password must be at least 6 characters');
+        const hash = pw ? hashPassword(pw) : null;
+        if (hash) {
+          // Two people on the same password would make the login ambiguous.
+          const { json: clash } = await supa(
+            `/profiles?password_hash=eq.${encodeURIComponent(hash)}&select=id,name&limit=1`
+          );
+          const other = Array.isArray(clash) && clash[0];
+          if (other && String(other.id) !== String(body.profileId)) {
+            return err('That password is already in use by ' + other.name, 409);
+          }
+          if (process.env.ACCESS_PASSWORD && pw === process.env.ACCESS_PASSWORD) {
+            return err('That is the owner password — pick a different one', 409);
+          }
+        }
+        await supa(`/profiles?id=eq.${encodeURIComponent(body.profileId)}`, 'PATCH', { password_hash: hash });
+        return ok({ ok: true, has_password: !!hash });
+      }
+
+      // Switch a caller off without deleting their name, so their old
+      // calls and assignments stay attributed to them in the history.
+      case 'set-profile-active': {
+        if (user.role !== 'admin') return err('Only the owner can activate or deactivate callers', 403);
+        if (!body.profileId) return err('profileId required');
+        await supa(`/profiles?id=eq.${encodeURIComponent(body.profileId)}`, 'PATCH', { is_active: body.active !== false });
         return ok({ ok: true });
       }
 
