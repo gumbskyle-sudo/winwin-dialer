@@ -1153,6 +1153,12 @@ main{max-width:100%}
     </div>
 
     <div class="pd-setup-field">
+      <label>Script for this session</label>
+      <select id="pdScriptSel"></select>
+      <div style="font-size:11px;color:#6b7280;margin-top:4px">Opens automatically on every connect, pre-filled with that lead's name and property. You can still switch scripts mid-call.</div>
+    </div>
+
+    <div class="pd-setup-field">
       <label>Who is dialing</label>
       <select id="pdProfileSel"></select>
     </div>
@@ -1572,6 +1578,16 @@ main{max-width:100%}
         <div style="font-size:11px;color:#6b7280;margin-top:4px">This is the number Twilio bridges to on THIS device. Saved locally — it only updates a teammate's stored callback number if you confirm the prompt, so logging into someone else's profile on a borrowed phone won't silently overwrite their number.</div>
       </div>
       <div class="field">
+        <label>Company name (used in call scripts)</label>
+        <input type="text" id="settingsCompany" placeholder="Win-Win Property Solutions">
+        <div style="font-size:11px;color:#6b7280;margin-top:4px">Fills <code>{Company}</code> everywhere it appears in a script.</div>
+      </div>
+      <div class="field">
+        <label>Website (used in call scripts)</label>
+        <input type="text" id="settingsWebsite" placeholder="winwinproperties.net">
+        <div style="font-size:11px;color:#6b7280;margin-top:4px">Fills <code>{Website}</code> — what you read out when a seller asks where to look you up.</div>
+      </div>
+      <div class="field">
         <label>Backend URL</label>
         <input type="text" id="settingsBackendUrl" placeholder="/api">
         <div style="font-size:11px;color:#6b7280;margin-top:4px">Default <code>/api</code> works if you're using Netlify. Change if hosting the function elsewhere.</div>
@@ -1777,7 +1793,12 @@ const LS = {
   profileId:'cb_profile_id', profileName:'cb_profile_name',
   hideOthers:'cb_hide_others', hiddenColors:'cb_hidden_colors',
   vmMessage:'cb_vm_message', vmMode:'cb_vm_mode', vmVoice:'cb_vm_voice', stateFilter:'cb_state_filter',
+  company:'cb_company', website:'cb_website',
 };
+const DEFAULT_COMPANY = 'Win-Win Property Solutions';
+const DEFAULT_WEBSITE = 'winwinproperties.net';
+const companyName = () => localStorage.getItem(LS.company) || DEFAULT_COMPANY;
+const companySite = () => localStorage.getItem(LS.website) || DEFAULT_WEBSITE;
 // Bump this on every deploy so you can see which build is actually live
 const BUILD_ID = 'build 2026-08-07e';
 const DEFAULT_VM_MESSAGE = "Hi {FirstName}, this is Win-Win Property Solutions reaching out about your property at {Address}. We buy houses in your area and would love to make you a fair cash offer. Give us a call back at {CallbackNumber} whenever it's convenient. Thanks, and have a great day.";
@@ -2048,6 +2069,8 @@ function openModal(id){
     $('settingsVmMessage').value    = localStorage.getItem(LS.vmMessage) || DEFAULT_VM_MESSAGE;
     $('settingsVmMode').value       = localStorage.getItem(LS.vmMode) || 'ai';
     $('settingsVmVoice').value      = localStorage.getItem(LS.vmVoice) || 'Polly.Ruth-Generative';
+    $('settingsCompany').value      = companyName();
+    $('settingsWebsite').value      = companySite();
     refreshVmRecordStatus();
     loadRecConfig();
   }
@@ -2628,6 +2651,12 @@ $('pdStartBtn').addEventListener('click', () => {
     `<option value="${escapeHtml(n.phoneNumber)}"${n.phoneNumber===activeCallerId?' selected':''}>${escapeHtml(fmtPhone(n.phoneNumber))}</option>`
   ).join('');
 
+  // Populate script dropdown
+  const ssel = $('pdScriptSel');
+  if(ssel) ssel.innerHTML = Object.entries(CALL_SCRIPTS).map(([k,v]) =>
+    `<option value="${escapeHtml(k)}"${k===activeScriptKey?' selected':''}>${escapeHtml(v.name)}</option>`
+  ).join('');
+
   // Pre-fill agent phone from settings
   $('pdAgentPhone').value = forwardPhone || '';
 
@@ -2664,6 +2693,12 @@ $('pdSetupStart').addEventListener('click', async () => {
   pdStageFilter = $('pdStageFilter')?.value || '';
   const list = pdGetList();
   if(!list.length){ toast('No leads match your selection','err'); return; }
+
+  // Lock in the script chosen for this session
+  if($('pdScriptSel') && $('pdScriptSel').value){
+    activeScriptKey = $('pdScriptSel').value;
+    localStorage.setItem('cb_script_key', activeScriptKey);
+  }
 
   // Save agent phone for this session
   forwardPhone = agentPhone;
@@ -3241,7 +3276,7 @@ document.addEventListener('toggle', e => {
 async function placeCall(p, ph, btn, phidx){
   btn.classList.add('dialing');
   btn.querySelector('.badge:last-child').textContent='DIALING';
-  showDrawer({name:p.owners, num:ph.e164, state:'Initializing', from:fmtPhone(activeCallerId), addr:p.property_address}, true);
+  showDrawer({name:p.owners, num:ph.e164, state:'Initializing', from:fmtPhone(activeCallerId), addr:p.property_address, prop:p}, true);
   try {
     const r = await api('make-call',{method:'POST', body:{
       to: toE164(ph.e164),
@@ -3438,9 +3473,134 @@ const CALL_SCRIPTS = {
       ]},
     ],
   },
+
+  closer1: {
+    name: "\u260E\uFE0F Closer \u2014 First Call",
+    sections: [
+      { t:'Introduction', lines:[
+        { k:'say', x:"Hi {FirstName}, how are you doing today?" },
+        { k:'say', x:"My name is {YourName} with {Company}. I'm actually calling in regards to your property at {StreetAddress}." },
+        { k:'say', x:"It looks like your property got paired with us because they thought we'd be a good fit for you. Did I catch you at a bad time?" },
+        { k:'ask', x:"Great \u2014 and it looks like in my notes here you're interested in selling that property at {StreetAddress}, correct?" },
+      ]},
+
+      { t:'Setting expectations', lines:[
+        { k:'say', x:"Great {FirstName}, so the point of this phone call is to get more information and see if the property qualifies for an as-is cash offer for our portfolio. By the end of this call I'll give you a yes or no, and if it's a yes I'll take it to my acquisitions team to see what the property comes back at. Sound good?" },
+        { k:'say', x:"And lastly, if you want to grab a pen and paper, jot down my contact information: my name is {YourName}, the company is {Company}, and our website is {Website}." },
+      ]},
+
+      { t:'Why they\u2019re selling', lines:[
+        { k:'ask', x:"So catch me up to speed {FirstName} \u2014 why are you considering selling?" },
+        { k:'ask', x:"How long have you been thinking about selling?" },
+        { k:'ask', x:"Do you have any plans for what to do after you sell?" },
+        { k:'ask', x:"What will selling do for you, or help you accomplish?" },
+        { k:'ask', x:"What are you going to do with the money, if you don't mind me asking?" },
+        { k:'ask', x:"How long have you lived there or owned the property?" },
+      ]},
+
+      { t:'Decision makers', lines:[
+        { k:'ask', x:"Is it just you that owns the property and makes the decision?" },
+        { k:'ask', x:"Are they available to hop on the call with us?" },
+        { k:'ask', x:"When was the last time you two spoke about selling the property?" },
+        { k:'ask', x:"Would there be anyone else who might be even a tiny bit upset that you're selling the property?" },
+      ]},
+
+      { t:'Neighborhood & exterior', lines:[
+        { k:'ask', x:"Before we get into the house, can you tell me a little about how you've liked living in that neighborhood?" },
+        { k:'ask', x:"How are the neighbors?" },
+        { k:'ask', x:"Do you know if there are a lot of renters on that block, or mostly owners?" },
+        { k:'ask', x:"Is there anything wrong with the structure of the home? The foundation? The siding?" },
+        { k:'ask', x:"What does the condition of the roof look like \u2014 how old is it?" },
+      ]},
+
+      { t:'Inside the house', lines:[
+        { k:'say', x:"Okay great {FirstName}, now what I'd like you to do, best you can, is walk me through the front door of the house." },
+        { k:'ask', x:"Is the inside still original from {YearBuilt}, or have there been updates done?" },
+        { k:'ask', x:"Are you currently living there, or is it vacant or tenant occupied?" },
+        { k:'ask', x:"How many bedrooms and bathrooms are there?" },
+        { k:'ask', x:"What does the kitchen look like \u2014 any upgrades to the cabinets or appliances, or would you say it's dated?" },
+        { k:'ask', x:"How about the bathrooms \u2014 any updates, or original?" },
+        { k:'ask', x:"What are the floors like?" },
+        { k:'ask', x:"How about the windows \u2014 newer or original?" },
+        { k:'ask', x:"What can you tell me about the HVAC and plumbing? Is everything working properly? Have you had that checked recently?" },
+        { k:'ask', x:"If you personally had 20\u201330k to change certain things in the house, what would you spend it on? Just to help me get a better idea." },
+        { k:'ask', x:"Is there anything I haven't asked you about that you might need help with regarding the property?" },
+        { k:'say', x:"Okay {FirstName}, I'm writing all of this up for my acquisitions team to review \u2014 I appreciate the information so far." },
+      ]},
+
+      { t:'Liens, timeline & price', lines:[
+        { k:'ask', x:"Oh, before I forget \u2014 are there any liens or mortgages on the property? How much is still left on the mortgage?" },
+        { k:'say', x:"The only reason I ask isn't to be nosey \u2014 depending on how much is left, we can put a few different options in front of you." },
+        { k:'say', x:"One of the things sellers like about us is we're flexible on how quick we close \u2014 usually 21 to 30 days." },
+        { k:'ask', x:"So if my team came back with an offer that made sense for you, what closing timeline would be best?" },
+        { k:'ask', x:"And with that said \u2014 if we look into your property and come to an agreement on a fair price, you're definitely ready to sell it, right?" },
+        { k:'ask', x:"Based on everything you've told me, how much were you hoping to get for the property?" },
+        { k:'ask', x:"Do you have a ballpark? I don't want to go back to my team empty handed." },
+      ]},
+
+      { t:'How the process works', lines:[
+        { k:'ask', x:"If we can get an offer approved, do you mind if I tell you briefly how the process works?" },
+        { k:'say', x:"Once the offer is approved and accepted, we e-sign a simple two-page agreement \u2014 it's plain English, easy for anyone to read. After that we'd need access to the property a couple of times to get our contractors or financial partners in for five minutes, while the title report is being run. Once the title company says we're good to go, we schedule closing, we close, and you get paid. Super simple." },
+        { k:'ask', x:"Any questions about that?" },
+      ]},
+
+      { t:'Booking the callback', lines:[
+        { k:'say', x:"Okay {FirstName}, what I'm going to do is run this back and see what my team comes up with. It usually takes about 10 to 15 minutes \u2014 can I call you back at that point?" },
+        { k:'say', x:"The call will only take about five minutes, and all we ask is a confident yes or no on whether you want to move forward. A no is perfectly okay, no hard feelings. Sound good?" },
+        { k:'say', x:"Great, hang tight and I'll call you back at this number. Thank you {FirstName}." },
+      ]},
+
+      { t:'Objections', lines:[
+        { k:'sub', x:'"I just want an offer" / rude' },
+        { k:'say', x:"Hey {FirstName}, I'm sure you get these calls all the time, am I right? Am I the first or the fifth person to call you today? What I can tell you is this call isn't going to be like the other ones \u2014 the difference is we can actually close on your property and help you in a few different ways." },
+
+        { k:'sub', x:'"My mortgage amount is none of your business"' },
+        { k:'say', x:"Totally understand \u2014 you remind me of my grandfather, straight to business. The only reason I asked is that it changes which options I can put in front of you." },
+
+        { k:'sub', x:'"My realtor said I can get X"' },
+        { k:'say', x:"Gotcha {FirstName}. I love real estate agents, that's how I got started in this business, but they'll sometimes promise the moon just to get a listing." },
+        { k:'ask', x:"Did they provide you recent comps, and were those comps newly renovated or in as-is condition like yours?" },
+
+        { k:'sub', x:'"How can you make an offer without seeing my house?"' },
+        { k:'say', x:"Because we have a very specific buy box and we do our homework extensively \u2014 and we will see the property before we close." },
+
+        { k:'sub', x:'"Shouldn\u2019t you already know all this about my property?"' },
+        { k:'say', x:"I can find out a fair bit, but I can't see the condition inside, the occupancy, things of that nature. If you can hang with me through a few questions, I promise I'll get an offer over to you." },
+
+        { k:'sub', x:'"I have to think about it / I\u2019m not sure"' },
+        { k:'ask', x:"Totally understand {FirstName} \u2014 is there anything specific that's causing you to hesitate?" },
+        { k:'say', x:"Got it {FirstName}, so it sounds to me \u2014 and correct me if I'm wrong \u2014 like you aren't super serious about selling right now and you're just gathering offers, which is 100% okay." },
+        { k:'ask', x:"Is that the case?" },
+
+        { k:'sub', x:'"I have a higher offer"' },
+        { k:'ask', x:"I hear that pretty often \u2014 can you walk me through the offer? What are the terms, the price, and is it in writing?" },
+
+        { k:'sub', x:'"I have to talk to my wife/husband"' },
+        { k:'ask', x:"Got it \u2014 at the beginning you mentioned you were the main decision maker, correct? When did you two last talk about selling?" },
+        { k:'ask', x:"Knowing them, what do you think they'd say about the offer? Is there a time we can all hop on the phone together to go through it?" },
+
+        { k:'sub', x:'"The property next door sold for X"' },
+        { k:'ask', x:"That's helpful to know \u2014 how does that house compare to yours on square footage, lot size, bedrooms and bathrooms, and the condition inside?" },
+        { k:'say', x:"Yours is {Sqft} square feet on a {LotSize} lot, built in {YearBuilt}, so the two may not be lining up the way it looks on paper." },
+
+        { k:'sub', x:'"I don\u2019t have a place to move to"' },
+        { k:'say', x:"Actually, I can connect you with a great realtor in the area who can help you find a new spot to move into." },
+
+        { k:'sub', x:'"I need time to move out"' },
+        { k:'say', x:"That's totally fine, we can close when you move out." },
+        { k:'ask', x:"How long do you think it would take you? What can I do to help with that process?" },
+      ]},
+    ],
+  },
 };
 
 let activeScriptKey = localStorage.getItem('cb_script_key') || 'lux';
+// A caller may have a deleted script saved from a previous build — fall back
+// to the first one that still exists instead of rendering an empty panel.
+if(!CALL_SCRIPTS[activeScriptKey]){
+  activeScriptKey = Object.keys(CALL_SCRIPTS)[0];
+  localStorage.setItem('cb_script_key', activeScriptKey);
+}
 let scriptAutoOpen  = localStorage.getItem('cb_script_auto') !== '0';
 let scriptCtx = {};
 
@@ -3466,9 +3626,28 @@ function firstNameOnly(owners){
 // Fill placeholders; unknowns render as a visible red blank rather than silently vanishing
 function fillScript(text, ctx, forCopy){
   const vals = {
-    FirstName: ctx.firstName || '',
-    StreetName: ctx.streetName || '',
-    YourName: ctx.yourName || '',
+    FirstName:      ctx.firstName || '',
+    LastName:       ctx.lastName || '',
+    OwnerName:      ctx.ownerName || '',
+    Address:        ctx.address || '',
+    StreetAddress:  ctx.streetAddress || '',
+    StreetName:     ctx.streetName || '',
+    City:           ctx.city || '',
+    State:          ctx.stateAbbr || '',
+    Zip:            ctx.zip || '',
+    YearBuilt:      ctx.yearBuilt || '',
+    Sqft:           ctx.sqft || '',
+    LotSize:        ctx.lotSize || '',
+    Zoning:         ctx.zoning || '',
+    Beds:           ctx.beds || '',
+    Baths:          ctx.baths || '',
+    PropertyType:   ctx.propertyType || '',
+    APN:            ctx.apn || '',
+    County:         ctx.county || '',
+    YourName:       ctx.yourName || '',
+    Company:        ctx.company || DEFAULT_COMPANY,
+    Website:        ctx.website || DEFAULT_WEBSITE,
+    CallbackNumber: ctx.callbackNumber || '',
     Price: '',
   };
   return String(text).replace(/\{(\w+)\}/g, (m, key) => {
@@ -3499,11 +3678,61 @@ function renderScriptPanel(){
     return `<details class="sp-sec"${i===0?' open':''}><summary><span class="sp-n">${i+1}</span>${escapeHtml(sec.t)}</summary><div class="sp-in">${body}</div></details>`;
   }).join('');
 }
+function lastNameOnly(owners){
+  if(!owners) return '';
+  let s = String(owners).trim();
+  if(s.includes(',')) s = s.split(',')[0].trim();      // "SMITH, JOHN"
+  else { const w = s.split(/\s+/); s = w.length > 1 ? w[w.length-1] : ''; }
+  if(!s) return '';
+  return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
+}
+// Pull a value out of the spec pairs the importer folded into notes
+function specVal(specs, ...names){
+  for(const n of names){
+    const hit = specs.find(sp => String(sp.k).toLowerCase() === n.toLowerCase());
+    if(hit && String(hit.v).trim()) return String(hit.v).trim();
+  }
+  return '';
+}
+// "312 Nathan Hale Rd, West Palm Beach, FL 33405" -> parts
+function addrParts(addr){
+  const parts = String(addr||'').split(',').map(x => x.trim()).filter(Boolean);
+  const street = parts[0] || '';
+  const city   = parts.length > 2 ? parts[1] : (parts.length === 2 ? parts[1].replace(/\s+[A-Z]{2}\s*\d{5}.*$/,'').trim() : '');
+  const tail   = parts.slice(city && parts.length > 2 ? 2 : 1).join(' ');
+  const m      = String(tail).match(/\b([A-Za-z]{2})\b[\s,]*(\d{5})?/);
+  return { street, city, st: m ? m[1].toUpperCase() : '', zip: m && m[2] ? m[2] : '' };
+}
 function setScriptContext(o){
+  const prop  = (o && o.prop) || null;
+  const specs = prop ? parseLeadSpecs(prop.notes || '').specs : [];
+  const addr  = (o && o.addr) || (prop && prop.property_address) || '';
+  const a     = addrParts(addr);
+  const bb    = specVal(specs, 'bed/bath', 'beds/baths');
+  const bbSplit = bb ? bb.split(/[\/|]/).map(x => x.trim()) : [];
   scriptCtx = {
-    firstName:  firstNameOnly(o && o.name),
-    streetName: streetNameOnly(o && o.addr),
-    yourName:   localStorage.getItem(LS.profileName) || '',
+    firstName:      firstNameOnly(o && o.name),
+    lastName:       lastNameOnly(o && o.name),
+    ownerName:      (o && o.name) ? String(o.name).trim() : '',
+    address:        addr,
+    streetAddress:  a.street,
+    streetName:     streetNameOnly(addr),
+    city:           a.city,
+    stateAbbr:      a.st,
+    zip:            a.zip,
+    yearBuilt:      specVal(specs, 'year built', 'built', 'yearbuilt'),
+    sqft:           specVal(specs, 'sqft', 'square footage', 'building sqft'),
+    lotSize:        specVal(specs, 'lot', 'lot size'),
+    zoning:         specVal(specs, 'zoning', 'zone'),
+    beds:           bbSplit[0] || specVal(specs, 'beds', 'bedrooms'),
+    baths:          bbSplit[1] || specVal(specs, 'baths', 'bathrooms'),
+    propertyType:   specVal(specs, 'property type', 'type'),
+    apn:            specVal(specs, 'apn'),
+    county:         specVal(specs, 'county'),
+    yourName:       localStorage.getItem(LS.profileName) || '',
+    company:        companyName(),
+    website:        companySite(),
+    callbackNumber: fmtPhone(forwardPhone || activeCallerId) || '',
   };
 }
 function openScriptPanel(){
@@ -3901,6 +4130,8 @@ $('settingsSave').addEventListener('click', async () => {
   localStorage.setItem(LS.vmMessage, $('settingsVmMessage').value.trim() || DEFAULT_VM_MESSAGE);
   localStorage.setItem(LS.vmMode, $('settingsVmMode').value);
   localStorage.setItem(LS.vmVoice, $('settingsVmVoice').value);
+  localStorage.setItem(LS.company, $('settingsCompany').value.trim() || DEFAULT_COMPANY);
+  localStorage.setItem(LS.website, $('settingsWebsite').value.trim() || DEFAULT_WEBSITE);
   refreshCallerStrip();
   $('settingsModal').classList.remove('open');
   toast('Saved','ok');
