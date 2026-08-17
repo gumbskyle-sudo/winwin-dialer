@@ -78,6 +78,7 @@ main{padding:12px;max-width:720px;margin:0 auto;padding-bottom:100px}
 .search-bar-wrap input:focus{outline:none;border-color:#96751A}
 /* ── Realtor Search ─────────────────────────────────────────── */
 .realtor-search-bar{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}
+.realtor-search-bar button{flex:0 0 auto}
 .realtor-search-bar input{flex:1;min-width:120px;padding:11px 14px;border:1.5px solid #d1d5db;border-radius:10px;font-size:15px}
 .realtor-card{background:#fff;border:1.5px solid #e5e7eb;border-radius:12px;padding:14px;margin-bottom:10px;display:flex;gap:12px;align-items:flex-start}
 .realtor-photo{width:48px;height:48px;border-radius:50%;object-fit:cover;flex-shrink:0;background:#f3f4f6}
@@ -683,7 +684,7 @@ body.view-d4d #cards,body.view-d4d #pageNav,body.view-d4d #pipelineView,body.vie
 body.view-d4d #d4dView{display:block}
 body.view-d4d header .callerid{display:none}
 body:not(.view-d4d) .d4d-sheet{display:none !important}
-#d4dMap{height:calc(100vh - 250px);min-height:320px;border-radius:12px;border:1px solid #e5e0d5;z-index:0;background:#eee}
+#d4dMap{height:calc(100vh - 250px);height:calc(100dvh - 250px);min-height:320px;border-radius:12px;border:1px solid #e5e0d5;z-index:0;background:#eee}
 .d4d-bar{display:flex;gap:8px;align-items:center;padding:8px 0;flex-wrap:wrap}
 .d4d-bar button{font-size:13px;padding:7px 12px}
 .d4d-count{font-size:12px;color:#6b7280;margin-left:auto}
@@ -934,9 +935,61 @@ body.view-mail header .callerid{display:none}
 #pdWrapUp .wu-go{background:#D4AF37;border-color:#D4AF37;color:#0f0d0a}
 #pdWrapUp .wu-hold{background:#b45309;border-color:#b45309;color:#fff}
 #pdWrapUp .wu-hold.on{background:#f59e0b;border-color:#f59e0b;color:#0f0d0a}
+/* ══════════════════════════════════════════════════════════════
+   ANDROID / VIEW-SWITCHING FIXES  (added 2026-08-17)
+   Keep this block last in the stylesheet so it wins on specificity.
+   ══════════════════════════════════════════════════════════════ */
+
+/* --- Tab strip: scroll instead of clipping "Realtors" / "D4D" --- */
+.view-tabs{
+  flex-wrap:nowrap;
+  overflow-x:auto;
+  overflow-y:hidden;
+  -webkit-overflow-scrolling:touch;
+  scrollbar-width:none;
+  -ms-overflow-style:none;
+  scroll-snap-type:x proximity;
+}
+.view-tabs::-webkit-scrollbar{display:none}
+.view-tab{
+  flex:0 0 auto;
+  white-space:nowrap;
+  scroll-snap-align:start;
+}
+
+/* --- Header counter: long build strings must wrap, not overflow --- */
+#counter{overflow-wrap:anywhere;word-break:break-word}
+.title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* --- Exactly one view container visible at a time --- */
+body:not(.view-pipeline) #pipelineView,
+body:not(.view-inbox)    #inboxView,
+body:not(.view-mail)     #mailView,
+body:not(.view-buyers)   #buyersView,
+body:not(.view-realtors) #realtorsView,
+body:not(.view-d4d)      #d4dView{display:none!important}
+
+/* --- Dialer-only chrome is hidden on every other tab ---
+   (This was the bug: Hide-colors, State filter and Start Power Dialing
+   stayed on screen underneath the Realtors / Mail / Buyers views.)
+   #powerDialBar is deliberately NOT hidden, so an in-progress power
+   dial session can still be paused or stopped from any tab. */
+body:not(.view-dialer) #cards,
+body:not(.view-dialer) #pageNav,
+body:not(.view-dialer) .search-bar-wrap,
+body:not(.view-dialer) .filter-row,
+body:not(.view-dialer) .hide-color-row,
+body:not(.view-dialer) .state-filter-row,
+body:not(.view-dialer) #pdStartWrap,
+body:not(.view-dialer) #pdSetupScreen{display:none!important}
+body:not(.view-dialer) header .callerid{display:none}
+
+/* --- Android: no element may push the page sideways --- */
+html,body{overflow-x:hidden;max-width:100%}
+main{max-width:100%}
 </style>
 </head>
-<body>
+<body class="view-dialer">
 
 <noscript>
   <div style="background:#fee2e2;color:#991b1b;padding:14px;text-align:center;font-weight:600">
@@ -4593,6 +4646,7 @@ document.querySelectorAll('.view-tab').forEach(t => {
 });
 function switchView(v){
   currentView = v;
+  document.body.classList.toggle('view-dialer', v === 'dialer');
   document.body.classList.toggle('view-pipeline', v === 'pipeline');
   document.body.classList.toggle('view-inbox', v === 'inbox');
   document.body.classList.toggle('view-mail', v === 'mail');
