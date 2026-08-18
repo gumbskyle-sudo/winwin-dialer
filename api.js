@@ -712,11 +712,11 @@ async function handleConferenceStatus(event) {
       EndConferenceOnExit:    'true',
       Timeout: 30,
       // Answering machine detection.
-      // 'Enable' returns a verdict as soon as it can tell human from machine,
-      // which is what you want with a live agent already on the line.
-      // Switch to 'DetectMessageEnd' only if you want to auto-drop voicemails.
-      MachineDetection: 'Enable',
-      MachineDetectionTimeout: 15,
+      // 'DetectMessageEnd' waits for the greeting to finish, so the verdict
+      // arrives right at the beep — which is when a voicemail drop should
+      // start speaking. A human still comes back as 'human' immediately.
+      MachineDetection: 'DetectMessageEnd',
+      MachineDetectionTimeout: 30,
       // Tuned for cell phones and residences per Twilio's guidance.
       MachineDetectionSpeechThreshold: 1900,
       MachineDetectionSpeechEndThreshold: 1400,
@@ -1525,12 +1525,12 @@ exports.handler = async (event) => {
             // which is the whole problem this session design avoids.
             EndConferenceOnExit: 'false',
             Timeout: 30,
-            // Answering machine detection. 'Enable' returns a verdict as
-            // soon as human/machine is clear, which is what you want with
-            // an agent already on the line. Use 'DetectMessageEnd' only if
-            // you want to auto-drop a voicemail.
-            MachineDetection: 'Enable',
-            MachineDetectionTimeout: 15,
+            // Answering machine detection. 'DetectMessageEnd' holds the
+            // verdict until the outgoing greeting finishes, so an automatic
+            // voicemail drop starts speaking after the beep instead of
+            // talking over the greeting. Humans still return immediately.
+            MachineDetection: 'DetectMessageEnd',
+            MachineDetectionTimeout: 30,
             MachineDetectionSpeechThreshold: 1900,
             MachineDetectionSpeechEndThreshold: 1400,
             AmdStatusCallback: `${APP_BASE_URL}?action=amd-status`,
@@ -1588,7 +1588,7 @@ exports.handler = async (event) => {
         } catch (e) { /* non-fatal */ }
 
         // Read back whatever AMD decided, so the dialer can show
-        // "Voicemail" and let the operator skip instead of waiting.
+        // "Voicemail" and auto-drop instead of waiting.
         let answeredBy = '';
         try {
           const { json: rows } = await supa(
@@ -1596,6 +1596,10 @@ exports.handler = async (event) => {
           );
           if (Array.isArray(rows) && rows[0]) answeredBy = rows[0].answered_by || '';
         } catch (e) { /* non-fatal */ }
+        // Fallback: the AMD webhook can be dropped (bad signature, cold
+        // start, missing row). Twilio keeps the verdict on the Call itself,
+        // so read it from there rather than losing the detection entirely.
+        if (!answeredBy && j.answered_by) answeredBy = j.answered_by;
 
         return ok({
           sid: j.sid, status: j.status, duration: dur,
@@ -1660,16 +1664,37 @@ exports.handler = async (event) => {
         }
         if (!playUrl && !body.message) return err('No recorded voicemail message and no fallback text provided');
 
-        const { json: childCalls } = await tw(`/Accounts/${twilioSid()}/Calls.json?ParentCallSid=${encodeURIComponent(body.sid)}`);
-        const childCall = childCalls && childCalls.calls && childCalls.calls[0];
-        if (!childCall) return err('Could not find the lead\'s call leg — they may have already hung up');
+        // Which leg actually has the seller on it.
+        //   direct  → power dial: the seller is dialed into the conference
+        //             as their own call, so body.sid IS their leg.
+        //   default → single call: the seller sits on a child leg of the
+        //             agent's call, found by ParentCallSid.
+        // Falling back between the two means a drop never dies just because
+        // the call was placed through the other path.
+        let targetSid = null;
+        if (body.direct) {
+          targetSid = body.sid;
+        } else {
+          try {
+            const { json: childCalls } = await tw(`/Accounts/${twilioSid()}/Calls.json?ParentCallSid=${encodeURIComponent(body.sid)}`);
+            const childCall = childCalls && childCalls.calls && childCalls.calls[0];
+            if (childCall) targetSid = childCall.sid;
+          } catch (e) { console.warn('child leg lookup failed', e.message); }
+          if (!targetSid) targetSid = body.sid;
+        }
 
         const inner = playUrl
           ? `<Play>${escapeXml(playUrl)}</Play>`
           : `<Say voice="${escapeXml(voice)}">${escapeXml(body.message)}</Say>`;
-        const dropTwiml = `<?xml version="1.0" encoding="UTF-8"?><Response>${inner}<Hangup/></Response>`;
-        await tw(`/Accounts/${twilioSid()}/Calls/${encodeURIComponent(childCall.sid)}.json`, 'POST', { Twiml: dropTwiml });
-        return ok({ dropped: true, usedRecording: !!playUrl });
+        // Half a second of silence first so the machine's beep doesn't clip
+        // the opening word.
+        const dropTwiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Pause length="1"/>${inner}<Hangup/></Response>`;
+        try {
+          await tw(`/Accounts/${twilioSid()}/Calls/${encodeURIComponent(targetSid)}.json`, 'POST', { Twiml: dropTwiml });
+        } catch (e) {
+          return err('Could not drop the voicemail — the lead may have already hung up (' + e.message + ')');
+        }
+        return ok({ dropped: true, usedRecording: !!playUrl, leg: targetSid });
       }
 
       // ════════════════════════════════════════════════════════
@@ -1956,12 +1981,49 @@ exports.handler = async (event) => {
         if (!id) return err('id required');
         if (!body.reason) return err('reason required');
 
-        const { json } = await supa(`/deals?id=eq.${id}`, 'PATCH', {
-          stage:       'dead',
-          dead_reason: body.reason,
-          dead_notes:  body.notes || null,
-          dead_at:     new Date().toISOString(),
-        });
+        // The full patch needs dead_reason / dead_notes / dead_at on the
+        // deals table. If those columns were never migrated, PostgREST
+        // rejects the WHOLE patch — which is why marking a deal dead used
+        // to silently leave it sitting in its old pipeline column. Retry
+        // with just the stage so the deal at least leaves the board, and
+        // say plainly what didn't get saved.
+        let json = null;
+        let degraded = false;
+        let degradedReason = '';
+        try {
+          ({ json } = await supa(`/deals?id=eq.${id}`, 'PATCH', {
+            stage:       'dead',
+            dead_reason: body.reason,
+            dead_notes:  body.notes || null,
+            dead_at:     new Date().toISOString(),
+          }));
+        } catch (e) {
+          degraded = true;
+          degradedReason = e.message || 'patch rejected';
+          console.warn('mark-deal-dead full patch failed:', degradedReason);
+          try {
+            ({ json } = await supa(`/deals?id=eq.${id}`, 'PATCH', { stage: 'dead' }));
+          } catch (e2) {
+            return err(
+              'Could not mark this deal dead: ' + (e2.message || degradedReason) +
+              '. The deals table likely needs the dead_reason, dead_notes and dead_at columns, ' +
+              'and stage must accept the value "dead".'
+            );
+          }
+        }
+
+        // Read it back. A PATCH that matched no rows returns 200 with an
+        // empty array, which looked like success to the dialer.
+        let saved = Array.isArray(json) ? json[0] : json;
+        if (!saved || saved.stage !== 'dead') {
+          const { json: check } = await supa(`/deals?id=eq.${id}&select=*`);
+          saved = Array.isArray(check) ? check[0] : null;
+        }
+        if (!saved) return err('Deal ' + id + ' was not found, so nothing was marked dead');
+        if (saved.stage !== 'dead') {
+          return err('The database refused to set stage to "dead" on deal ' + id +
+            '. Check for a CHECK constraint or enum on deals.stage that excludes it.');
+        }
 
         try {
           await supa('/deal_notes', 'POST', [{
@@ -1972,7 +2034,14 @@ exports.handler = async (event) => {
           }], { Prefer: 'return=minimal' });
         } catch (e) { /* non-fatal */ }
 
-        return ok({ deal: json && json[0] });
+        return ok({
+          deal: saved,
+          degraded,
+          reason: degraded
+            ? 'Stage was set to dead, but the reason and date could not be saved — ' +
+              'the deals table is missing dead_reason / dead_notes / dead_at (' + degradedReason + ')'
+            : undefined,
+        });
       }
 
       // ── Revive a dead deal ─────────────────────────────────────
