@@ -333,6 +333,14 @@ body.hide-called .card.called{display:none}
 .scriptpanel .sp-copy{background:#96751A;color:#fff;border:none;border-radius:7px;padding:7px 12px;font-size:12px;font-weight:700;cursor:pointer;margin-top:2px}
 .scriptpanel .sp-fill{background:#faf3e0;border-bottom:1px dashed #96751A;font-weight:700;padding:0 2px}
 .scriptpanel .sp-blank{background:#fee2e2;border-bottom:1px dashed #b91c1c;font-weight:700;padding:0 2px}
+.scriptpanel .sp-facts{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px}
+.scriptpanel .sf-col{border:1px solid #e8d29a;border-radius:10px;background:#fff;padding:8px 10px;min-width:0}
+.scriptpanel .sf-h{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:#96751A;margin-bottom:5px}
+.scriptpanel .sf-row{display:flex;gap:6px;font-size:12px;line-height:1.35;margin-bottom:3px;min-width:0}
+.scriptpanel .sf-k{flex:0 0 62px;color:#6b7280;font-weight:600}
+.scriptpanel .sf-v{flex:1;min-width:0;color:#0f0d0a;font-weight:600;overflow-wrap:anywhere}
+.scriptpanel .sf-none{font-size:12px;color:#9ca3af;font-style:italic}
+@media (max-width:520px){.scriptpanel .sp-facts{grid-template-columns:1fr}}
 .scriptpanel .sp-foot{flex:0 0 auto;border-top:1px solid #e8d29a;background:#fffdf7;padding:8px 12px;display:flex;align-items:center;gap:10px;font-size:11px;color:#6b7280}
 .scriptpanel .sp-foot label{display:flex;align-items:center;gap:5px;cursor:pointer}
 
@@ -940,50 +948,44 @@ body.view-mail header .callerid{display:none}
    Keep this block last in the stylesheet so it wins on specificity.
    ══════════════════════════════════════════════════════════════ */
 
-/* --- Tab strip: every tab visible at once, no sideways scrolling ---
-   (was an overflow-x strip, so Realtors / D4D sat off-screen) --- */
+/* --- Section tabs: one row that expands into a menu ---
+   The tab strip used to scroll sideways, so Realtors / D4D sat
+   off-screen. It now collapses to a single bar showing the view
+   you're on; tapping it opens the full list.
+   The list expands IN FLOW (not absolutely positioned) because
+   header has overflow:hidden and would clip a floating menu. --- */
+#viewMenuBtn{
+  display:flex;align-items:center;justify-content:space-between;gap:8px;
+  width:100%;margin-top:8px;padding:9px 12px;
+  background:#2a2e36;border:1px solid rgba(255,255,255,.12);
+  border-radius:8px;color:#fff;font-size:13px;font-weight:700;
+  font-family:inherit;cursor:pointer;
+}
+#viewMenuBtn .vm-caret{font-size:10px;opacity:.7;transition:transform .15s}
+#viewMenuBtn.open .vm-caret{transform:rotate(180deg)}
+#viewMenuBtn .vm-hint{font-size:10px;font-weight:600;opacity:.55;letter-spacing:.03em}
+
 .view-tabs{
-  display:grid;
-  grid-template-columns:repeat(4,minmax(0,1fr));
-  gap:3px;
+  display:none;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:4px;
+  margin-top:5px;
   overflow:visible;
   flex-wrap:wrap;
 }
+.view-tabs.open{display:grid}
 .view-tabs::-webkit-scrollbar{display:none}
 .view-tab{
   flex:none;
   min-width:0;
-  padding:8px 3px;
-  font-size:11px;
+  padding:11px 8px;
+  font-size:13px;
   line-height:1.2;
+  text-align:left;
   white-space:nowrap;
   overflow:hidden;
   text-overflow:ellipsis;
 }
-@media (max-width:360px){
-  .view-tabs{grid-template-columns:repeat(3,minmax(0,1fr))}
-  .view-tab{font-size:10px}
-}
-
-/* --- Header tools collapse into one dropdown --- */
-.header-menu-wrap{position:relative;margin-left:auto}
-#headerMenuBtn{
-  background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.25);
-  color:#fff;font-size:12px;font-weight:700;padding:5px 11px;border-radius:7px;
-  cursor:pointer;font-family:inherit;white-space:nowrap;
-}
-#headerMenuBtn:active{background:rgba(255,255,255,.22)}
-#headerMenu{
-  display:none;position:absolute;right:0;top:calc(100% + 6px);z-index:70;
-  background:#1c1917;border:1px solid rgba(245,230,184,.3);border-radius:10px;
-  box-shadow:0 8px 24px rgba(0,0,0,.45);padding:5px;min-width:190px;
-}
-#headerMenu.open{display:block}
-#headerMenu .header-link{
-  display:block;width:100%;text-align:left;text-decoration:none;
-  color:#f5e6b8;font-size:13px;padding:10px 12px;border-radius:7px;
-}
-#headerMenu .header-link:active{background:rgba(245,230,184,.15)}
 
 /* --- Header counter: long build strings must wrap, not overflow --- */
 #counter{overflow-wrap:anywhere;word-break:break-word}
@@ -1049,7 +1051,12 @@ main{max-width:100%}
     <span id="syncBadge" class="sync-badge">…</span>
   </div>
   <div id="counter" class="muted">Loading…</div>
-  <div class="view-tabs">
+  <button type="button" id="viewMenuBtn">
+    <span id="viewMenuLabel">📞 Dialer</span>
+    <span class="vm-hint">SECTIONS</span>
+    <span class="vm-caret">▼</span>
+  </button>
+  <div class="view-tabs" id="viewTabs">
     <button class="view-tab active" data-view="dialer">📞 Dialer</button>
     <button class="view-tab" data-view="pipeline">📋 Pipeline <span id="pipeBadge" style="font-size:10px;opacity:.6"></span></button>
     <button class="view-tab" data-view="inbox">💬 Inbox <span id="inboxBadge" style="font-size:10px;opacity:.6"></span></button>
@@ -1061,17 +1068,12 @@ main{max-width:100%}
   <div class="header-controls">
     <label><input type="checkbox" id="hideCalled">&nbsp;Hide called</label>
     <label><input type="checkbox" id="hideOthersAssigned">&nbsp;Hide others' leads</label>
-    <div class="header-menu-wrap">
-      <button type="button" id="headerMenuBtn">☰ Menu</button>
-      <div id="headerMenu">
-        <button class="header-link" data-open="manualDialModal">☎ Dial a number</button>
-        <button class="header-link" data-open="numbersModal">📞 Numbers</button>
-        <button class="header-link" data-open="logModal">📊 Log</button>
-        <button class="header-link" data-open="recModal">🎙 Recordings</button>
-        <button class="header-link" data-open="uploadModal">⬆ Upload List</button>
-        <button class="header-link" data-open="settingsModal">⚙ Settings</button>
-      </div>
-    </div>
+    <button class="header-link" data-open="manualDialModal">☎ Dial a number</button>
+    <button class="header-link" data-open="numbersModal">📞 Numbers</button>
+    <button class="header-link" data-open="logModal">📊 Log</button>
+    <button class="header-link" data-open="recModal">🎙 Recordings</button>
+    <button class="header-link" data-open="uploadModal">⬆ Upload List</button>
+    <button class="header-link" data-open="settingsModal">⚙ Settings</button>
   </div>
   <div class="callerid">
     <span class="dot warn" id="cidDot"></span>
@@ -1261,6 +1263,7 @@ main{max-width:100%}
         </label>
         <textarea class="notes-ta" id="deadNotes" rows="3"
           placeholder="e.g. wanted 240k, best buyer was at 205k"></textarea>
+        <div id="deadErr" class="hide" style="margin-top:12px;padding:10px 12px;border-radius:8px;background:#fef2f2;border:1px solid #fca5a5;color:#991b1b;font-size:12px;line-height:1.45;overflow-wrap:anywhere"></div>
         <button class="btn-primary" id="deadSave" style="width:100%;margin-top:14px" disabled>
           Mark deal dead
         </button>
@@ -1765,7 +1768,7 @@ main{max-width:100%}
     <div class="dd-head-row">
       <button class="dd-back" id="ddBack">← Pipeline</button>
       <div class="dd-title" id="ddTitle">—<span class="sub" id="ddSub"></span></div>
-      <button class="dd-dead" id="ddDead">Didn't work</button>
+      <button class="dd-dead" id="ddDead">💀 Mark dead</button>
       <button class="dd-archive" id="ddArchive">Archive</button>
     </div>
     <div class="dd-stage-bar" id="ddStageBar"></div>
@@ -3729,6 +3732,10 @@ function fillScript(text, ctx, forCopy){
     PropertyType:   ctx.propertyType || '',
     APN:            ctx.apn || '',
     County:         ctx.county || '',
+    MailingAddress: ctx.mailingAddress || '',
+    Email:          ctx.email || '',
+    ListName:       ctx.listName || '',
+    LeadPhone:      ctx.leadPhone || '',
     YourName:       ctx.yourName || '',
     Company:        ctx.company || DEFAULT_COMPANY,
     Website:        ctx.website || DEFAULT_WEBSITE,
@@ -3742,12 +3749,56 @@ function fillScript(text, ctx, forCopy){
     return `<span class="sp-blank">[${escapeHtml(key.replace(/([A-Z])/g,' $1').trim().toUpperCase())}]</span>`;
   });
 }
+// Everything known about this lead, owner and property side by side.
+function scriptFactsHtml(){
+  const c = scriptCtx || {};
+  const row = (k, v) => v ? `<div class="sf-row"><span class="sf-k">${escapeHtml(k)}</span><span class="sf-v">${escapeHtml(v)}</span></div>` : '';
+
+  const owner = [
+    row('Owner',   c.ownerName),
+    row('Goes by', c.firstName),
+    row('Phone',   c.leadPhone),
+    row('Email',   c.email),
+    row('Mailing', c.mailingAddress),
+  ].join('');
+
+  // Named fields first, then anything else the import carried, so a spec
+  // we don't have a slot for still shows up instead of vanishing.
+  const named = ['year built','built','yearbuilt','sqft','square footage','building sqft',
+                 'lot','lot size','zoning','zone','bed/bath','beds/baths','beds','bedrooms',
+                 'baths','bathrooms','property type','type','apn','county'];
+  const extra = (c.allSpecs || [])
+    .filter(sp => !named.includes(String(sp.k).toLowerCase()))
+    .map(sp => row(sp.k, sp.v)).join('');
+
+  const property = [
+    row('Address',  c.address),
+    row('City',     [c.city, c.stateAbbr, c.zip].filter(Boolean).join(' ')),
+    row('Beds/Baths', [c.beds, c.baths].filter(Boolean).join(' / ')),
+    row('Sqft',     c.sqft),
+    row('Lot',      c.lotSize),
+    row('Zoning',   c.zoning),
+    row('Built',    c.yearBuilt),
+    row('Type',     c.propertyType),
+    row('APN',      c.apn),
+    row('County',   c.county),
+    row('List',     c.listName),
+    extra,
+  ].join('');
+
+  if(!owner && !property) return '';
+  return `<div class="sp-facts">
+    <div class="sf-col"><div class="sf-h">👤 Owner</div>${owner || '<div class="sf-none">Nothing on file</div>'}</div>
+    <div class="sf-col"><div class="sf-h">🏠 Property</div>${property || '<div class="sf-none">Nothing on file</div>'}</div>
+  </div>`;
+}
+
 function renderScriptPanel(){
   const sc = CALL_SCRIPTS[activeScriptKey] || CALL_SCRIPTS.lux;
   $('spSelect').innerHTML = Object.entries(CALL_SCRIPTS)
     .map(([k,v]) => `<option value="${escapeHtml(k)}"${k===activeScriptKey?' selected':''}>${escapeHtml(v.name)}</option>`).join('');
   $('spSub').textContent = [scriptCtx.firstName, scriptCtx.streetName].filter(Boolean).join(' · ') || 'No lead attached';
-  $('spBody').innerHTML = sc.sections.map((sec, i) => {
+  $('spBody').innerHTML = scriptFactsHtml() + sc.sections.map((sec, i) => {
     const body = sec.lines.map(l => {
       const html = fillScript(l.x, scriptCtx, false);
       if(l.k === 'say')  return `<div class="sp-say">${html}</div>`;
@@ -3790,7 +3841,13 @@ function addrParts(addr){
 }
 function setScriptContext(o){
   const prop  = (o && o.prop) || null;
-  const specs = prop ? parseLeadSpecs(prop.notes || '').specs : [];
+  // Property specs are stored on the LEAD row as "Key: value · Key: value"
+  // (that's what the cards read). Reading prop.notes here meant every
+  // property placeholder came back blank while owner fields filled fine.
+  const lead  = (prop && prop.lead) || {};
+  const specSrc = [lead.va_notes, lead.notes, prop && prop.notes]
+    .filter(x => x && String(x).trim()).join('\n');
+  const specs = specSrc ? parseLeadSpecs(specSrc).specs : [];
   const addr  = (o && o.addr) || (prop && prop.property_address) || '';
   const a     = addrParts(addr);
   const bb    = specVal(specs, 'bed/bath', 'beds/baths');
@@ -3814,10 +3871,16 @@ function setScriptContext(o){
     propertyType:   specVal(specs, 'property type', 'type'),
     apn:            specVal(specs, 'apn'),
     county:         specVal(specs, 'county'),
+    mailingAddress: (prop && prop.mailing_address) || '',
+    email:          (prop && prop.email) || '',
+    listName:       (prop && prop.list_name) || lead.list_name || '',
+    leadPhone:      fmtPhone((o && o.num) || (prop && prop.phones && prop.phones[0] && prop.phones[0].e164)) || '',
     yourName:       localStorage.getItem(LS.profileName) || '',
     company:        companyName(),
     website:        companySite(),
     callbackNumber: fmtPhone(forwardPhone || activeCallerId) || '',
+    // Everything the importer gave us, for the facts panel
+    allSpecs:       specs,
   };
 }
 function openScriptPanel(){
@@ -5001,16 +5064,21 @@ $('ppNewForm').addEventListener('submit', async e => {
 // ═══════════════════════════════════════════════════════════════
 // VIEW SWITCHING (Dialer ↔ Pipeline)
 // ═══════════════════════════════════════════════════════════════
-// ── Header tools dropdown ─────────────────────────────────────
-$('headerMenuBtn')?.addEventListener('click', e => {
-  e.stopPropagation();
-  $('headerMenu')?.classList.toggle('open');
-});
-document.addEventListener('click', e => {
-  const menu = $('headerMenu');
-  if(!menu || !menu.classList.contains('open')) return;
-  if(e.target.closest('#headerMenuBtn')) return;
-  menu.classList.remove('open');
+// ── View menu (the 7 section tabs, collapsed into one row) ────
+// It expands IN FLOW rather than floating, because header has
+// overflow:hidden — an absolutely positioned menu gets clipped.
+function setViewMenuLabel(v){
+  const btn = document.querySelector(`.view-tab[data-view="${v}"]`);
+  const lbl = $('viewMenuLabel');
+  if(btn && lbl) lbl.textContent = btn.textContent.trim();
+}
+function closeViewMenu(){
+  $('viewTabs')?.classList.remove('open');
+  $('viewMenuBtn')?.classList.remove('open');
+}
+$('viewMenuBtn')?.addEventListener('click', () => {
+  $('viewTabs')?.classList.toggle('open');
+  $('viewMenuBtn')?.classList.toggle('open');
 });
 
 document.querySelectorAll('.view-tab').forEach(t => {
@@ -5026,6 +5094,8 @@ function switchView(v){
   document.body.classList.toggle('view-realtors', v === 'realtors');
   document.body.classList.toggle('view-d4d', v === 'd4d');
   document.querySelectorAll('.view-tab').forEach(t => t.classList.toggle('active', t.dataset.view === v));
+  setViewMenuLabel(v);
+  closeViewMenu();
   if(v === 'pipeline') loadPipeline();
   if(v === 'inbox') loadInbox();
   if(v === 'mail') loadMail();
@@ -5068,6 +5138,7 @@ function openDeadModal(){
   if(!openDealId) return;
   deadPickReason = null;
   $('deadNotes').value = '';
+  $('deadErr')?.classList.add('hide');
   $('deadSave').disabled = true;
   const box = $('deadReasons');
   box.innerHTML = '';
@@ -5092,20 +5163,42 @@ $('deadSave')?.addEventListener('click', async () => {
   const btn = $('deadSave');
   btn.disabled = true; btn.textContent = 'Saving…';
   const deadId = openDealId;
+  const deadNotes = $('deadNotes').value.trim();
+  $('deadErr')?.classList.add('hide');
   try {
-    const res = await api('mark-deal-dead', {method:'POST', body:{
-      id: deadId,
-      reason: deadPickReason,
-      notes: $('deadNotes').value.trim(),
-      actingProfileId: activeProfileId || null,
-    }});
-    // Confirm the stage really persisted. It used to fire and forget, so a
-    // rejected write left the card sitting in its old column with no warning.
+    // Two independent routes to the same result. mark-deal-dead writes the
+    // reason and timestamp; if that endpoint or those columns aren't there,
+    // update-deal sets the stage on its own. One of them has to land before
+    // this counts as saved.
+    let res = null, firstErr = '';
+    try {
+      res = await api('mark-deal-dead', {method:'POST', body:{
+        id: deadId,
+        reason: deadPickReason,
+        notes: deadNotes,
+        actingProfileId: activeProfileId || null,
+      }});
+    } catch(e1){ firstErr = e1.message || String(e1); }
+
     if(!res || !res.deal || res.deal.stage !== 'dead'){
-      throw new Error(
-        (res && res.reason) ||
-        'The server did not save the dead status. Run the deals-table migration (dead_reason / dead_notes / dead_at) and check that stage allows "dead".'
-      );
+      try {
+        await api('update-deal', {method:'POST', body:{
+          id: deadId, stage:'dead', _previousStage: (openDealData && openDealData.deal && openDealData.deal.stage) || '',
+          deadReason: deadPickReason, deadNotes, actingProfileId: activeProfileId || null,
+        }});
+      } catch(e2){
+        throw new Error((firstErr ? firstErr + ' — ' : '') + (e2.message || String(e2)));
+      }
+      // Read it back from the server. No optimistic assumptions this time.
+      const check = await api('get-deal&id=' + encodeURIComponent(deadId));
+      if(!check || !check.deal || check.deal.stage !== 'dead'){
+        throw new Error(
+          (firstErr ? firstErr + ' — ' : '') +
+          'The database accepted the request but the deal is still on stage "' +
+          ((check && check.deal && check.deal.stage) || 'unknown') +
+          '". A CHECK constraint or enum on deals.stage is most likely blocking the value "dead".'
+        );
+      }
     }
     // Move it off the board immediately, before the refetch comes back
     const local = pipelineDeals.find(d => String(d.id) === String(deadId));
@@ -5122,7 +5215,12 @@ $('deadSave')?.addEventListener('click', async () => {
     openDealId = null; openDealData = null;
     loadPipeline();
   } catch(e){
-    toast('Could not save: '+e.message,'err');
+    const box = $('deadErr');
+    if(box){
+      box.textContent = 'Could not mark this deal dead: ' + e.message;
+      box.classList.remove('hide');
+    }
+    toast('Could not save — see the message in the box','err');
   }
   btn.disabled = false; btn.textContent = 'Mark deal dead';
 });
@@ -5336,6 +5434,9 @@ function renderDealDetail(){
     btn.addEventListener('click', () => changeStage(s.id));
     sb.appendChild(btn);
   });
+  const deadBtn = el(`<button class="dd-stage-btn${d.stage==='dead'?' active':''}" data-stage="dead" style="border-color:#b91c1c;color:#b91c1c">💀 Dead</button>`);
+  deadBtn.addEventListener('click', openDeadModal);
+  sb.appendChild(deadBtn);
 
   // Body
   const body = $('ddBody');
