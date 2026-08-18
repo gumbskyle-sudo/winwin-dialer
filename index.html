@@ -940,22 +940,50 @@ body.view-mail header .callerid{display:none}
    Keep this block last in the stylesheet so it wins on specificity.
    ══════════════════════════════════════════════════════════════ */
 
-/* --- Tab strip: scroll instead of clipping "Realtors" / "D4D" --- */
+/* --- Tab strip: every tab visible at once, no sideways scrolling ---
+   (was an overflow-x strip, so Realtors / D4D sat off-screen) --- */
 .view-tabs{
-  flex-wrap:nowrap;
-  overflow-x:auto;
-  overflow-y:hidden;
-  -webkit-overflow-scrolling:touch;
-  scrollbar-width:none;
-  -ms-overflow-style:none;
-  scroll-snap-type:x proximity;
+  display:grid;
+  grid-template-columns:repeat(4,minmax(0,1fr));
+  gap:3px;
+  overflow:visible;
+  flex-wrap:wrap;
 }
 .view-tabs::-webkit-scrollbar{display:none}
 .view-tab{
-  flex:0 0 auto;
+  flex:none;
+  min-width:0;
+  padding:8px 3px;
+  font-size:11px;
+  line-height:1.2;
   white-space:nowrap;
-  scroll-snap-align:start;
+  overflow:hidden;
+  text-overflow:ellipsis;
 }
+@media (max-width:360px){
+  .view-tabs{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .view-tab{font-size:10px}
+}
+
+/* --- Header tools collapse into one dropdown --- */
+.header-menu-wrap{position:relative;margin-left:auto}
+#headerMenuBtn{
+  background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.25);
+  color:#fff;font-size:12px;font-weight:700;padding:5px 11px;border-radius:7px;
+  cursor:pointer;font-family:inherit;white-space:nowrap;
+}
+#headerMenuBtn:active{background:rgba(255,255,255,.22)}
+#headerMenu{
+  display:none;position:absolute;right:0;top:calc(100% + 6px);z-index:70;
+  background:#1c1917;border:1px solid rgba(245,230,184,.3);border-radius:10px;
+  box-shadow:0 8px 24px rgba(0,0,0,.45);padding:5px;min-width:190px;
+}
+#headerMenu.open{display:block}
+#headerMenu .header-link{
+  display:block;width:100%;text-align:left;text-decoration:none;
+  color:#f5e6b8;font-size:13px;padding:10px 12px;border-radius:7px;
+}
+#headerMenu .header-link:active{background:rgba(245,230,184,.15)}
 
 /* --- Header counter: long build strings must wrap, not overflow --- */
 #counter{overflow-wrap:anywhere;word-break:break-word}
@@ -1033,12 +1061,17 @@ main{max-width:100%}
   <div class="header-controls">
     <label><input type="checkbox" id="hideCalled">&nbsp;Hide called</label>
     <label><input type="checkbox" id="hideOthersAssigned">&nbsp;Hide others' leads</label>
-    <button class="header-link" data-open="manualDialModal">☎ Dial a number</button>
-    <button class="header-link" data-open="numbersModal">📞 Numbers</button>
-    <button class="header-link" data-open="logModal">📊 Log</button>
-    <button class="header-link" data-open="recModal">🎙 Recordings</button>
-    <button class="header-link" data-open="uploadModal">⬆ Upload List</button>
-    <button class="header-link" data-open="settingsModal">⚙ Settings</button>
+    <div class="header-menu-wrap">
+      <button type="button" id="headerMenuBtn">☰ Menu</button>
+      <div id="headerMenu">
+        <button class="header-link" data-open="manualDialModal">☎ Dial a number</button>
+        <button class="header-link" data-open="numbersModal">📞 Numbers</button>
+        <button class="header-link" data-open="logModal">📊 Log</button>
+        <button class="header-link" data-open="recModal">🎙 Recordings</button>
+        <button class="header-link" data-open="uploadModal">⬆ Upload List</button>
+        <button class="header-link" data-open="settingsModal">⚙ Settings</button>
+      </div>
+    </div>
   </div>
   <div class="callerid">
     <span class="dot warn" id="cidDot"></span>
@@ -1156,6 +1189,15 @@ main{max-width:100%}
       <label>Script for this session</label>
       <select id="pdScriptSel"></select>
       <div style="font-size:11px;color:#6b7280;margin-top:4px">Opens automatically on every connect, pre-filled with that lead's name and property. You can still switch scripts mid-call.</div>
+    </div>
+
+    <div class="pd-setup-field">
+      <label>Answering machine → auto voicemail</label>
+      <select id="pdAutoVm">
+        <option value="1">✅ On — drop the AI voicemail automatically after the beep</option>
+        <option value="0">Off — I'll tap VM Drop myself</option>
+      </select>
+      <div style="font-size:11px;color:#6b7280;margin-top:4px">Twilio listens for a machine. When it hears the greeting end, the voicemail plays and the dialer moves to the next lead. Voice and wording are in Settings.</div>
     </div>
 
     <div class="pd-setup-field">
@@ -1793,6 +1835,7 @@ const LS = {
   profileId:'cb_profile_id', profileName:'cb_profile_name',
   hideOthers:'cb_hide_others', hiddenColors:'cb_hidden_colors',
   vmMessage:'cb_vm_message', vmMode:'cb_vm_mode', vmVoice:'cb_vm_voice', stateFilter:'cb_state_filter',
+  vmAuto:'cb_vm_auto',
   company:'cb_company', website:'cb_website',
 };
 const DEFAULT_COMPANY = 'Win-Win Property Solutions';
@@ -1801,7 +1844,7 @@ const companyName = () => localStorage.getItem(LS.company) || DEFAULT_COMPANY;
 const companySite = () => localStorage.getItem(LS.website) || DEFAULT_WEBSITE;
 // Bump this on every deploy so you can see which build is actually live
 const BUILD_ID = 'build 2026-08-07e';
-const DEFAULT_VM_MESSAGE = "Hi {FirstName}, this is Win-Win Property Solutions reaching out about your property at {Address}. We buy houses in your area and would love to make you a fair cash offer. Give us a call back at {CallbackNumber} whenever it's convenient. Thanks, and have a great day.";
+const DEFAULT_VM_MESSAGE = "Hi {FirstName}, we are calling from Win Win Properties to give you a quick offer on your property at {Address}. Give us a call back at {CallbackNumber}, or find us online at win win properties dot net. That's W W W dot winwinproperties dot net. Thanks, and have a great day.";
 let backend  = localStorage.getItem(LS.backend) || '/api';
 let password = localStorage.getItem(LS.pwd) || '';
 let forwardPhone   = localStorage.getItem(LS.forward) || '';
@@ -2602,6 +2645,10 @@ let pdWrapHeld  = false;
 // Pause: finish the lead you're on, then hold. The agent's leg stays up,
 // so resuming doesn't ring your phone again.
 let pdPaused    = false;
+// Auto voicemail drop when answering-machine detection says machine.
+let pdAutoVm    = localStorage.getItem('cb_vm_auto') !== '0';
+let pdVmDropped = false;   // one drop per lead, never two
+let pdVmDropping = false;
 
 // ── Now-dialing panel ─────────────────────────────────────────
 function pdShowNow(p, phone){
@@ -2657,6 +2704,9 @@ $('pdStartBtn').addEventListener('click', () => {
     `<option value="${escapeHtml(k)}"${k===activeScriptKey?' selected':''}>${escapeHtml(v.name)}</option>`
   ).join('');
 
+  // Auto-voicemail toggle (defaults on)
+  if($('pdAutoVm')) $('pdAutoVm').value = (localStorage.getItem(LS.vmAuto) === '0') ? '0' : '1';
+
   // Pre-fill agent phone from settings
   $('pdAgentPhone').value = forwardPhone || '';
 
@@ -2693,6 +2743,12 @@ $('pdSetupStart').addEventListener('click', async () => {
   pdStageFilter = $('pdStageFilter')?.value || '';
   const list = pdGetList();
   if(!list.length){ toast('No leads match your selection','err'); return; }
+
+  // Lock in the auto-voicemail choice for this session
+  if($('pdAutoVm')){
+    pdAutoVm = $('pdAutoVm').value === '1';
+    localStorage.setItem(LS.vmAuto, pdAutoVm ? '1' : '0');
+  }
 
   // Lock in the script chosen for this session
   if($('pdScriptSel') && $('pdScriptSel').value){
@@ -2806,6 +2862,18 @@ async function pdDialNext(propertyId, callerId, agentPhone, profileId){
     pdActiveSid = r.sid;
     pdShowNow(p, phone);
     recPillShow(r.sid, r.recording);
+
+    // Bring up the live-call drawer for this lead. This is what puts the
+    // script on screen and re-enables VM Drop during a power dial session —
+    // the power dialer used to run without it, so neither ever appeared.
+    if(activeCall && activeCall.tickTimer) clearInterval(activeCall.tickTimer);
+    pdVmDropped = false; pdVmDropping = false;
+    activeCall = { sid:r.sid, btn:null, propertyId:p.id, phidx:0, startedAt:Date.now() };
+    showDrawer({
+      name: p.owners, num: phone, state:'Dialing…',
+      from: fmtPhone(callerId), addr: p.property_address, prop: p,
+    }, false);
+    activeCall.tickTimer = setInterval(updateDrawerTimer, 1000);
     // Capture the id NOW. Reading it back after the call ends used to
     // pull from a list that had already shifted, marking the wrong lead.
     pdPollForCompletion(r.sid, p.id);
@@ -2823,9 +2891,14 @@ function pdPollForCompletion(sid, propertyId){
     try {
       const r = await api(`call-status&sid=${encodeURIComponent(sid)}`);
 
+      // Machine picked up → drop the voicemail automatically
+      if(r.isMachine && pdAutoVm && !pdVmDropped && !pdVmDropping){
+        pdAutoDropVoicemail(sid, propertyId);
+      }
+
       // Live state on the now-dialing panel
       if(r.isMachine){
-        pdSetState('Voicemail — safe to skip', 'vm');
+        pdSetState(pdVmDropped ? 'Voicemail dropped' : 'Voicemail — safe to skip', 'vm');
       } else if(r.isHuman){
         pdSetState('Live — human answered', 'live');
       } else if(r.status === 'in-progress'){
@@ -2836,7 +2909,13 @@ function pdPollForCompletion(sid, propertyId){
 
       const done = ['completed','failed','busy','no-answer','canceled'].includes(r.status);
       if(done){
+        // A voicemail drop in flight has to finish playing before we move on
+        if(pdVmDropping){ pdPollForCompletion(sid, propertyId); return; }
         pdActiveSid = null;
+        // Tear down the call drawer / script panel for this lead
+        if(activeCall && activeCall.sid === sid){
+          finishCall(pdVmDropped ? 'Voicemail dropped' : 'Ended', false);
+        }
         // Mark the lead we actually dialed
         const p = properties.find(x => x.id === propertyId);
         if(p){
@@ -2868,6 +2947,9 @@ function pdStartWrapUp(p){
   // "called" write land so the card doesn't flicker.
   if(pdWrapSecs === 0){ setTimeout(() => pdAdvance(), 800); return; }
 
+  // The script panel covers the page, so it has to come down before the
+  // wrap-up bar can be seen or tapped.
+  closeScriptPanel();
   const bar = $('pdWrapUp');
   const who = $('pdWrapWho');
   if(who) who.textContent = p ? ('Log ' + (p.owners || 'this lead') + ' — status and notes')
@@ -2876,6 +2958,7 @@ function pdStartWrapUp(p){
   $('pdWrapHold')?.classList.remove('on');
   if($('pdWrapHold')) $('pdWrapHold').textContent = '⏸ Hold';
   bar?.classList.remove('hide');
+  setTimeout(() => { try { bar?.scrollIntoView({behavior:'smooth', block:'center'}); } catch{} }, 120);
 
   if(pdWrapSecs < 0){
     // "Wait for me" — no countdown, advance only on the button
@@ -2966,6 +3049,8 @@ function pdStop(){
   pdActive = false;
   pdSetPaused(false);
   pdHideNow();
+  if(activeCall) finishCall('Session ended', false);
+  closeScriptPanel();
   clearTimeout(pdPollTimer);
   pdHideWrapUp();
   // Drop the seller's leg, then the agent's — otherwise the agent sits
@@ -3834,6 +3919,53 @@ $('cdNextLead').addEventListener('click', async ()=>{
   finishCall('Skipped', false);
   setTimeout(() => placeCall(next, next.phones[0], findLeadButton(next.id, 0) || dummyCallBtn, 0), 400);
 });
+// Build the spoken voicemail for one lead. Shared by the VM Drop button
+// and by the automatic drop when answering-machine detection fires.
+function buildVmMessage(p){
+  const first = (p && p.owners ? String(p.owners).trim().split(/[\s,&]+/)[0] : '') || 'there';
+  const streetAddr = (p && p.property_address ? String(p.property_address).split(',')[0].trim() : 'your property');
+  return (localStorage.getItem(LS.vmMessage) || DEFAULT_VM_MESSAGE)
+    .replace(/\{FirstName\}/gi, first)
+    .replace(/\{OwnerName\}/gi, (p && p.owners) ? String(p.owners).trim() : first)
+    .replace(/\{Address\}/gi, streetAddr)
+    .replace(/\{Website\}/gi, 'win win properties dot net')
+    .replace(/\{CallbackNumber\}/gi, fmtPhone(forwardPhone || activeCallerId) || 'this number');
+}
+
+// Automatic drop during a power dial session. The seller's leg is dialed
+// straight into the conference, so it has no parent call — `direct` tells
+// the backend to speak into this sid rather than hunting for a child leg.
+async function pdAutoDropVoicemail(sid, propertyId){
+  if(pdVmDropped || pdVmDropping) return;
+  pdVmDropping = true;
+  const p = properties.find(x => x.id === propertyId);
+  pdSetState('Voicemail — dropping…', 'vm');
+  try {
+    await api('drop-voicemail', {method:'POST', body:{
+      sid,
+      profileId: (pdSession && pdSession.profileId) || activeProfileId,
+      message: buildVmMessage(p),
+      voice: localStorage.getItem(LS.vmVoice) || 'Polly.Ruth-Generative',
+      forceTts: (localStorage.getItem(LS.vmMode) || 'ai') === 'ai',
+      direct: true,
+    }});
+    pdVmDropped = true;
+    pdSetState('Voicemail dropped', 'vm');
+    toast('Voicemail dropped for ' + ((p && p.owners) || 'this lead'), 'ok');
+    if(p){
+      p.lead = p.lead || {};
+      p.lead.lead_status = 'voicemail';
+      p.lead.called = true;
+      api('update-lead', {method:'POST', body:{propertyId:p.id, leadStatus:'voicemail'}}).catch(()=>{});
+    }
+  } catch(e){
+    pdSetState('Voicemail drop failed', 'vm');
+    toast('Auto voicemail failed: ' + e.message, 'err');
+  } finally {
+    pdVmDropping = false;
+  }
+}
+
 $('cdVoicemail').addEventListener('click', async ()=>{
   if(!activeCall) return;
   const btn = $('cdVoicemail');
@@ -3843,12 +3975,9 @@ $('cdVoicemail').addEventListener('click', async ()=>{
     const vmVoice = localStorage.getItem(LS.vmVoice) || 'Polly.Ruth-Generative';
     // Personalize the message for THIS lead
     const p = properties.find(x => x.id === activeCall.propertyId);
-    const first = (p && p.owners ? String(p.owners).trim().split(/[\s,&]+/)[0] : '') || 'there';
     const streetAddr = (p && p.property_address ? String(p.property_address).split(',')[0].trim() : 'your property');
-    const message = (localStorage.getItem(LS.vmMessage) || DEFAULT_VM_MESSAGE)
-      .replace(/\{FirstName\}/gi, first)
-      .replace(/\{Address\}/gi, streetAddr)
-      .replace(/\{CallbackNumber\}/gi, fmtPhone(activeCallerId) || 'this number');
+    const message = buildVmMessage(p);
+    pdVmDropped = true;
     const r = await api('drop-voicemail', {method:'POST', body:{
       sid: activeCall.sid, profileId: activeProfileId, message,
       voice: vmVoice, forceTts: vmMode === 'ai',
@@ -4872,6 +5001,18 @@ $('ppNewForm').addEventListener('submit', async e => {
 // ═══════════════════════════════════════════════════════════════
 // VIEW SWITCHING (Dialer ↔ Pipeline)
 // ═══════════════════════════════════════════════════════════════
+// ── Header tools dropdown ─────────────────────────────────────
+$('headerMenuBtn')?.addEventListener('click', e => {
+  e.stopPropagation();
+  $('headerMenu')?.classList.toggle('open');
+});
+document.addEventListener('click', e => {
+  const menu = $('headerMenu');
+  if(!menu || !menu.classList.contains('open')) return;
+  if(e.target.closest('#headerMenuBtn')) return;
+  menu.classList.remove('open');
+});
+
 document.querySelectorAll('.view-tab').forEach(t => {
   t.addEventListener('click', () => switchView(t.dataset.view));
 });
@@ -4950,16 +5091,35 @@ $('deadSave')?.addEventListener('click', async () => {
   if(!openDealId || !deadPickReason) return;
   const btn = $('deadSave');
   btn.disabled = true; btn.textContent = 'Saving…';
+  const deadId = openDealId;
   try {
-    await api('mark-deal-dead', {method:'POST', body:{
-      id: openDealId,
+    const res = await api('mark-deal-dead', {method:'POST', body:{
+      id: deadId,
       reason: deadPickReason,
       notes: $('deadNotes').value.trim(),
       actingProfileId: activeProfileId || null,
     }});
+    // Confirm the stage really persisted. It used to fire and forget, so a
+    // rejected write left the card sitting in its old column with no warning.
+    if(!res || !res.deal || res.deal.stage !== 'dead'){
+      throw new Error(
+        (res && res.reason) ||
+        'The server did not save the dead status. Run the deals-table migration (dead_reason / dead_notes / dead_at) and check that stage allows "dead".'
+      );
+    }
+    // Move it off the board immediately, before the refetch comes back
+    const local = pipelineDeals.find(d => String(d.id) === String(deadId));
+    if(local){
+      local.stage = 'dead';
+      local.dead_reason = deadPickReason;
+      local.dead_at = new Date().toISOString();
+    }
+    if(openDealData && openDealData.deal) openDealData.deal.stage = 'dead';
+    renderPipeline();
     $('deadModal').classList.remove('open');
     toast('Marked dead — it still counts in your metrics','ok');
     $('dealDetail').classList.remove('open');
+    openDealId = null; openDealData = null;
     loadPipeline();
   } catch(e){
     toast('Could not save: '+e.message,'err');
