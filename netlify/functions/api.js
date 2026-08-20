@@ -514,13 +514,81 @@ async function _handleTwilioVoiceInboundInner(event) {
   const qs   = event.queryStringParameters || {};
   const from = params.From || '';
   const to   = params.To   || '';
+  const step = qs.step || '';
+
+  const xml = (inner) => ({
+    statusCode: 200,
+    headers: { 'Content-Type': 'text/xml' },
+    body: `<?xml version="1.0" encoding="UTF-8"?><Response>${inner}</Response>`,
+  });
+  const selfUrl = (st) => escapeXml(`${APP_BASE_URL}?action=twilio-voice-inbound&step=${st}`);
 
   // ── Whisper endpoint — played ONLY to the team member answering ──
   // The seller never hears this. No keypress needed — connects instantly.
   if (qs.whisper === '1') {
     const name = decodeURIComponent(qs.name || 'a seller');
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Say voice="alice">Call from ${name}</Say></Response>`;
-    return { statusCode: 200, headers: { 'Content-Type': 'text/xml' }, body: twiml };
+    return xml(`<Say voice="alice">Call from ${escapeXml(name)}</Say>`);
+  }
+
+  const vmVoice = 'Polly.Ruth-Generative';
+
+  // ── Step 3: the caller finished leaving a message ─────────────
+  // Twilio POSTs here with the recording. One row per message; the
+  // dialer's Voicemail tab reads them back.
+  if (step === 'vmdone') {
+    const recSid = params.RecordingSid || '';
+    const dur    = parseInt(params.RecordingDuration || '0', 10) || 0;
+    // Under two seconds is a hangup, not a message. Don't clutter the box.
+    if (recSid && dur >= 2) {
+      try {
+        await supa('/inbound_voicemails', 'POST', [{
+          from_number: from,
+          to_number:   to,
+          recording_sid: recSid,
+          duration:    dur,
+          heard:       false,
+        }], { Prefer: 'return=minimal,resolution=merge-duplicates' });
+      } catch (e) { console.error('voicemail save failed:', e.message); }
+    }
+    return xml(`<Say voice="${vmVoice}">Got it. We will call you right back. Goodbye.</Say><Hangup/>`);
+  }
+
+  const vmGreeting = (await getAppConfig('voice_vm_greeting')) ||
+    'You have reached Win Win Properties. Nobody can take your call right now. ' +
+    'Please leave your name, your number, and the property address after the tone, and we will call you right back.';
+
+  const voicemailXml = () =>
+    `<Say voice="${vmVoice}">${escapeXml(vmGreeting)}</Say>` +
+    `<Record maxLength="120" playBeep="true" trim="trim-silence" timeout="4" ` +
+    `action="${selfUrl('vmdone')}" method="POST"/>` +
+    `<Say voice="${vmVoice}">We did not get that. Goodbye.</Say><Hangup/>`;
+
+  // ── Step 2b: the forward is over ──────────────────────────────
+  // Answered → nothing left to do. Anything else (no answer, busy,
+  // declined) → take a message instead of dropping the call.
+  if (step === 'after') {
+    const st = params.DialCallStatus || '';
+    if (st === 'completed' || st === 'answered') return xml('<Hangup/>');
+    return xml(voicemailXml());
+  }
+
+  // ── Step 1: screen the caller ─────────────────────────────────
+  // This is the fix for phones ringing with nobody there. Auto-dialers
+  // and robocallers never press a key, so they never reach a handset —
+  // they hit the voicemail box or drop. A real seller presses 1.
+  const screenOn = (await getAppConfig('voice_screen')) !== '0';
+  if (screenOn && step !== 'connect') {
+    const greeting = (await getAppConfig('voice_greeting')) ||
+      'Thanks for calling Win Win Properties. Press 1 to be connected, ' +
+      'or stay on the line to leave a message.';
+    return xml(
+      `<Gather numDigits="1" timeout="6" action="${selfUrl('connect')}" method="POST">` +
+        `<Say voice="${vmVoice}">${escapeXml(greeting)}</Say>` +
+        `<Pause length="2"/>` +
+        `<Say voice="${vmVoice}">${escapeXml(greeting)}</Say>` +
+      `</Gather>` +
+      voicemailXml()
+    );
   }
 
   let forwardTo  = null;
@@ -556,17 +624,18 @@ async function _handleTwilioVoiceInboundInner(event) {
   // Final hardcoded fallback — forwards to Kyle if nothing else resolves
   if (!forwardTo) forwardTo = '+15162734255';
 
-  if (!forwardTo) {
-    const twiml = '<?xml version="1.0" encoding="UTF-8"?><Response><Say voice="alice">Thanks for calling. No one is available right now. Please leave a message after the tone.</Say><Record maxLength="120" /></Response>';
-    return { statusCode: 200, headers: { 'Content-Type': 'text/xml' }, body: twiml };
-  }
+  // Nobody to ring — go straight to the message.
+  if (!forwardTo) return xml(voicemailXml());
 
-  // Whisper URL — played only in the team member's ear after they answer
-  const baseUrl    = APP_BASE_URL;
-  // Simple seamless connect — no whisper URL (was causing XML parse error 12100)
-  const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Say voice="alice">Connecting</Say><Dial callerId="${escapeXml(to)}" timeout="30" answerOnBridge="true"><Number>${escapeXml(forwardTo)}</Number></Dial></Response>`;
-
-  return { statusCode: 200, headers: { 'Content-Type': 'text/xml' }, body: twiml };
+  const ringSecs = parseInt(await getAppConfig('voice_ring_seconds'), 10) || 25;
+  // action= is what makes the voicemail box work: when this Dial ends
+  // unanswered, Twilio comes back to us instead of hanging up on them.
+  return xml(
+    `<Dial callerId="${escapeXml(to)}" timeout="${ringSecs}" answerOnBridge="true" ` +
+    `action="${selfUrl('after')}" method="POST">` +
+    `<Number>${escapeXml(forwardTo)}</Number>` +
+    `</Dial>`
+  );
 }
 // ── Twilio status callback (delivery status updates) ────────
 async function handleTwilioStatus(event) {
@@ -978,7 +1047,7 @@ async function cleanupExpiredRecordings() {
 // Bumped whenever this file changes in a way the frontend depends on.
 // The Settings screen reads it, so a half-finished deploy is visible
 // instead of showing up later as a mystery "Unknown action" error.
-const API_VERSION = '2026-08-20-a';
+const API_VERSION = '2026-08-20-b';
 
 // ── Main handler ──────────────────────────────────────────────
 exports.handler = async (event) => {
@@ -1621,6 +1690,55 @@ exports.handler = async (event) => {
       // Rings one phone with a short message and nothing else. Used to
       // prove out a caller's own number: if this fails, no lead call from
       // that profile can possibly work.
+      // ── Voicemail box ───────────────────────────────────────
+      case 'list-voicemails': {
+        const { json } = await supa(
+          '/inbound_voicemails?select=*&order=created_at.desc&limit=200'
+        );
+        return ok({ voicemails: json || [] });
+      }
+
+      case 'mark-voicemail-heard': {
+        if (!body.id) return err('id required');
+        await supa(`/inbound_voicemails?id=eq.${encodeURIComponent(body.id)}`, 'PATCH',
+          { heard: body.heard === false ? false : true }, { Prefer: 'return=minimal' });
+        return ok({ updated: true });
+      }
+
+      case 'delete-voicemail': {
+        if (!body.id) return err('id required');
+        // Pull the audio off Twilio too, not just the row here.
+        try {
+          const { json: rows } = await supa(
+            `/inbound_voicemails?id=eq.${encodeURIComponent(body.id)}&select=recording_sid`
+          );
+          const sid = rows && rows[0] && rows[0].recording_sid;
+          if (sid) await tw(`/Accounts/${twilioSid()}/Recordings/${encodeURIComponent(sid)}.json`, 'DELETE');
+        } catch (e) { /* non-fatal — the row still goes */ }
+        await supa(`/inbound_voicemails?id=eq.${encodeURIComponent(body.id)}`, 'DELETE', null, { Prefer: 'return=minimal' });
+        return ok({ deleted: true });
+      }
+
+      // ── Inbound call handling settings ──────────────────────
+      case 'get-voice-settings': {
+        return ok({
+          screen:      (await getAppConfig('voice_screen')) !== '0',
+          greeting:    await getAppConfig('voice_greeting'),
+          vmGreeting:  await getAppConfig('voice_vm_greeting'),
+          ringSeconds: parseInt(await getAppConfig('voice_ring_seconds'), 10) || 25,
+          forwardTo:   await getAppConfig('default_voice_forward_number'),
+        });
+      }
+
+      case 'save-voice-settings': {
+        if (typeof body.screen === 'boolean')  await setAppConfig('voice_screen', body.screen ? '1' : '0');
+        if (typeof body.greeting === 'string') await setAppConfig('voice_greeting', body.greeting);
+        if (typeof body.vmGreeting === 'string') await setAppConfig('voice_vm_greeting', body.vmGreeting);
+        if (body.ringSeconds)                  await setAppConfig('voice_ring_seconds', String(parseInt(body.ringSeconds, 10) || 25));
+        if (typeof body.forwardTo === 'string') await setAppConfig('default_voice_forward_number', body.forwardTo);
+        return ok({ saved: true });
+      }
+
       // Which build of api.js is actually live.
       case 'api-version': {
         return ok({ version: API_VERSION, hasTestPhone: true });
