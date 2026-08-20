@@ -847,6 +847,22 @@ body:not(.view-d4d) .d4d-sheet{display:none !important}
 
 /* Inbox view */
 #inboxView{display:none}
+.ib-switch{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:0 0 10px}
+.ib-tab{padding:10px;border:1px solid #e5e7eb;border-radius:9px;background:#fff;color:#374151;
+  font-size:13px;font-weight:700;font-family:inherit;cursor:pointer}
+.ib-tab.active{background:#0f0d0a;border-color:#0f0d0a;color:#f5e6b8}
+.vm-card{border:1px solid #e5e7eb;border-radius:11px;background:#fff;padding:12px;margin-bottom:9px}
+.vm-card.unheard{border-color:#D4AF37;background:#fffdf5;border-width:2px}
+.vm-top{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:2px}
+.vm-from{font-size:15px;font-weight:800;color:#0f0d0a}
+.vm-when{font-size:11px;color:#6b7280;white-space:nowrap}
+.vm-meta{font-size:12px;color:#6b7280;margin-bottom:8px}
+.vm-card audio{width:100%;height:36px;margin-bottom:8px}
+.vm-acts{display:flex;gap:6px;flex-wrap:wrap}
+.vm-acts button{flex:1;min-width:88px;padding:9px 6px;border-radius:8px;border:1px solid #e5e7eb;
+  background:#fff;font-size:12px;font-weight:700;font-family:inherit;cursor:pointer;color:#374151}
+.vm-acts button.danger{color:#b91c1c;border-color:#fca5a5}
+.vm-acts button.primary{background:#0f0d0a;border-color:#0f0d0a;color:#f5e6b8}
 body.view-inbox #cards,body.view-inbox #pageNav,body.view-inbox #pipelineView{display:none}
 body.view-inbox #inboxView{display:block}
 body.view-inbox header .callerid{display:none}
@@ -1302,7 +1318,12 @@ main{max-width:100%}
       <div class="pipe-summary" id="inboxSummary">—</div>
       <button class="header-link on-light" id="inboxRefresh">↻ Refresh</button>
     </div>
+    <div class="ib-switch">
+      <button class="ib-tab active" data-ibtab="texts">💬 Texts</button>
+      <button class="ib-tab" data-ibtab="vm">📬 Voicemail <span id="vmCount"></span></button>
+    </div>
     <div class="inbox-list" id="inboxList"></div>
+    <div class="inbox-list hide" id="vmList"></div>
   </div>
 
   <!-- Mail (email) view -->
@@ -1621,9 +1642,33 @@ main{max-width:100%}
         <label>Your phone (Twilio rings YOU first when you place a call)</label>
         <input type="text" id="settingsForwardPhone" placeholder="+15085551234 or 5085551234">
         <div style="font-size:11px;color:#6b7280;margin-top:4px">This is the number Twilio bridges to on THIS device. Saved locally — it only updates a teammate's stored callback number if you confirm the prompt, so logging into someone else's profile on a borrowed phone won't silently overwrite their number.</div>
+        <div id="apiVersionLine" style="font-size:11px;font-weight:700;margin-top:8px;color:#6b7280">Backend: checking…</div>
         <button class="btn-ghost" id="testPhoneBtn" style="width:100%;margin-top:8px">📞 Ring this phone now (test)</button>
         <div id="testPhoneResult" class="hide" style="margin-top:8px;padding:10px 12px;border-radius:8px;font-size:12px;line-height:1.45;overflow-wrap:anywhere"></div>
       </div>
+      <div class="field" style="border-top:1px solid #e5e7eb;padding-top:14px;margin-top:4px">
+        <label>📞 When someone calls your Twilio number</label>
+        <select id="voiceScreen">
+          <option value="1">Screen callers — ask them to press 1 first</option>
+          <option value="0">Connect straight through (no screening)</option>
+        </select>
+        <div style="font-size:11px;color:#6b7280;margin-top:4px">Screening is what stops your phone ringing with nobody there. Robodialers never press a key, so they never reach you — they get the voicemail box instead.</div>
+      </div>
+      <div class="field">
+        <label>Greeting before connecting</label>
+        <textarea id="voiceGreeting" rows="2" placeholder="Thanks for calling Win Win Properties. Press 1 to be connected, or stay on the line to leave a message."></textarea>
+      </div>
+      <div class="field">
+        <label>Voicemail greeting</label>
+        <textarea id="voiceVmGreeting" rows="3" placeholder="You have reached Win Win Properties. Please leave your name, number, and the property address after the tone."></textarea>
+        <div style="font-size:11px;color:#6b7280;margin-top:4px">Played when nobody picks up. Messages land in Inbox → 📬 Voicemail.</div>
+      </div>
+      <div class="field">
+        <label>Ring your phone for (seconds) before voicemail</label>
+        <input type="number" id="voiceRingSeconds" min="10" max="60" placeholder="25">
+        <button class="btn-ghost" id="voiceSettingsSave" style="width:100%;margin-top:8px">Save call handling</button>
+      </div>
+
       <div class="field">
         <label>Company name (used in call scripts)</label>
         <input type="text" id="settingsCompany" placeholder="Win-Win Property Solutions">
@@ -3800,6 +3845,56 @@ async function runPhoneTest(){
   }
 }
 $('testPhoneBtn')?.addEventListener('click', runPhoneTest);
+
+// ── Inbound call handling (screening + voicemail greetings) ────
+async function loadVoiceSettings(){
+  try {
+    const j = await api('get-voice-settings');
+    if($('voiceScreen'))       $('voiceScreen').value = j.screen === false ? '0' : '1';
+    if($('voiceGreeting'))     $('voiceGreeting').value = j.greeting || '';
+    if($('voiceVmGreeting'))   $('voiceVmGreeting').value = j.vmGreeting || '';
+    if($('voiceRingSeconds'))  $('voiceRingSeconds').value = j.ringSeconds || 25;
+  } catch(e){ /* older backend — leave the fields blank */ }
+}
+$('voiceSettingsSave')?.addEventListener('click', async () => {
+  const btn = $('voiceSettingsSave');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  try {
+    await api('save-voice-settings', {method:'POST', body:{
+      screen:      $('voiceScreen').value === '1',
+      greeting:    $('voiceGreeting').value.trim(),
+      vmGreeting:  $('voiceVmGreeting').value.trim(),
+      ringSeconds: parseInt($('voiceRingSeconds').value, 10) || 25,
+    }});
+    toast('Call handling saved — it applies to the next inbound call','ok');
+  } catch(e){ toast('Could not save: '+e.message,'err'); }
+  btn.disabled = false; btn.textContent = 'Save call handling';
+});
+
+// Is the deployed api.js actually the one this page expects? Frontend and
+// backend ship as separate files, so it is easy to update one and not the
+// other — which surfaces later as "Unknown action" on a button that looks
+// like it should work.
+const EXPECTED_API_VERSION = '2026-08-20-b';
+async function checkApiVersion(){
+  const line = $('apiVersionLine');
+  if(!line) return;
+  try {
+    const j = await api('api-version');
+    if(j && j.version === EXPECTED_API_VERSION){
+      line.textContent = 'Backend: ' + j.version + ' ✅ up to date';
+      line.style.color = '#166534';
+    } else {
+      line.textContent = 'Backend: ' + ((j && j.version) || 'unknown') +
+        ' ⚠️ this page expects ' + EXPECTED_API_VERSION + ' — deploy the newer api.js';
+      line.style.color = '#b45309';
+    }
+  } catch(e){
+    line.textContent = 'Backend: OLD BUILD ❌ — api.js on the server is out of date. ' +
+      'Upload the new api.js and redeploy, then reopen Settings.';
+    line.style.color = '#b91c1c';
+  }
+}
 
 function fillScript(text, ctx, forCopy){
   const vals = {
@@ -6103,6 +6198,123 @@ function fmtTime(d){
 }
 
 // ── Inbox view ──────────────────────────────────────────────────
+// ── Voicemail box ─────────────────────────────────────────────
+let voicemails = [];
+let inboxTab = 'texts';
+
+function setInboxTab(tab){
+  inboxTab = tab;
+  document.querySelectorAll('.ib-tab').forEach(b => b.classList.toggle('active', b.dataset.ibtab === tab));
+  $('inboxList').classList.toggle('hide', tab !== 'texts');
+  $('vmList').classList.toggle('hide', tab !== 'vm');
+  if(tab === 'vm') loadVoicemails();
+  else loadInbox();
+}
+document.querySelectorAll('.ib-tab').forEach(b => {
+  b.addEventListener('click', () => setInboxTab(b.dataset.ibtab));
+});
+
+async function loadVoicemails(){
+  const list = $('vmList');
+  list.innerHTML = '<div class="empty">Loading…</div>';
+  try {
+    const j = await api('list-voicemails');
+    voicemails = j.voicemails || [];
+    renderVoicemails();
+  } catch(e){
+    list.innerHTML = '<div class="empty" style="color:#b91c1c">' + escapeHtml(e.message) +
+      '<br><span style="font-size:11px">If this says the table is missing, run the inbound_voicemails migration.</span></div>';
+  }
+}
+
+function renderVoicemails(){
+  const list = $('vmList');
+  const unheard = voicemails.filter(v => !v.heard).length;
+  $('vmCount').textContent = unheard ? '· ' + unheard : '';
+  const badge = $('inboxBadge');
+  if(badge && unheard) badge.textContent = (badge.textContent || '') + (badge.textContent ? ' ' : '') + '📬' + unheard;
+  if(inboxTab === 'vm'){
+    $('inboxSummary').textContent = voicemails.length
+      ? voicemails.length + ' message' + (voicemails.length===1?'':'s') + (unheard ? ' · ' + unheard + ' new' : '')
+      : 'No messages';
+  }
+  list.innerHTML = '';
+  if(!voicemails.length){
+    list.innerHTML = '<div class="inbox-empty">No voicemails yet.<br>' +
+      '<span style="font-size:11px">Callers who miss you will be recorded here.</span></div>';
+    return;
+  }
+  voicemails.forEach(v => {
+    // Match the number back to a lead if we have one, so it isn't just digits.
+    const prop = properties.find(p => (p.phones||[]).some(ph => ph.e164 === v.from_number));
+    const who = prop ? (prop.owners || fmtPhone(v.from_number)) : fmtPhone(v.from_number);
+    const sub = prop && prop.property_address ? prop.property_address : '';
+    const mins = Math.floor((v.duration||0)/60), secs = (v.duration||0)%60;
+    const card = el(`
+      <div class="vm-card${v.heard ? '' : ' unheard'}">
+        <div class="vm-top">
+          <div class="vm-from">${v.heard ? '' : '🔴 '}${escapeHtml(who)}</div>
+          <div class="vm-when">${escapeHtml(vmWhen(v.created_at))}</div>
+        </div>
+        <div class="vm-meta">${escapeHtml(fmtPhone(v.from_number))}${sub ? ' · ' + escapeHtml(sub) : ''} · ${mins}:${String(secs).padStart(2,'0')}</div>
+        <audio controls preload="none" src="${escapeHtml(recordingSrc(v.recording_sid))}"></audio>
+        <div class="vm-acts">
+          <button class="primary" data-vm-call="${escapeHtml(v.from_number)}">📞 Call back</button>
+          <button data-vm-heard="${escapeHtml(v.id)}">${v.heard ? 'Mark unheard' : 'Mark heard'}</button>
+          <button class="danger" data-vm-del="${escapeHtml(v.id)}">🗑 Delete</button>
+        </div>
+      </div>`);
+    list.appendChild(card);
+  });
+}
+
+// Reuse the authenticated recording proxy the call recordings already use.
+function recordingSrc(sid){
+  return backend + '?action=recording&sid=' + encodeURIComponent(sid || '');
+}
+
+function vmWhen(iso){
+  if(!iso) return '';
+  const d = new Date(iso), now = new Date();
+  const mins = Math.round((now - d)/60000);
+  if(mins < 1)  return 'just now';
+  if(mins < 60) return mins + 'm ago';
+  const hrs = Math.round(mins/60);
+  if(hrs < 24) return hrs + 'h ago';
+  const days = Math.round(hrs/24);
+  if(days < 7) return days + 'd ago';
+  return d.toLocaleDateString();
+}
+
+$('vmList').addEventListener('click', async e => {
+  const call = e.target.closest('[data-vm-call]');
+  if(call){ placeManualCall(call.dataset.vmCall, 'Voicemail callback'); return; }
+
+  const heard = e.target.closest('[data-vm-heard]');
+  if(heard){
+    const v = voicemails.find(x => String(x.id) === heard.dataset.vmHeard);
+    if(!v) return;
+    const next = !v.heard;
+    v.heard = next;
+    renderVoicemails();
+    try { await api('mark-voicemail-heard', {method:'POST', body:{id:v.id, heard:next}}); }
+    catch(err){ v.heard = !next; renderVoicemails(); toast('Could not save: '+err.message,'err'); }
+    return;
+  }
+
+  const del = e.target.closest('[data-vm-del]');
+  if(del){
+    if(!confirm('Delete this voicemail? The recording is removed from Twilio too.')) return;
+    const id = del.dataset.vmDel;
+    try {
+      await api('delete-voicemail', {method:'POST', body:{id}});
+      voicemails = voicemails.filter(x => String(x.id) !== String(id));
+      renderVoicemails();
+      toast('Deleted','ok');
+    } catch(err){ toast('Could not delete: '+err.message,'err'); }
+  }
+});
+
 async function loadInbox(){
   $('inboxList').innerHTML = '<div class="empty">Loading…</div>';
   try {
@@ -6983,6 +7195,8 @@ $('smsConfigSave')?.addEventListener('click', async () => {
 
 // When settings modal opens, refresh SMS config
 document.querySelector('[data-open="settingsModal"]')?.addEventListener('click', () => {
+  checkApiVersion();
+  loadVoiceSettings();
   setTimeout(() => loadSmsConfig(), 100);
 });
 
