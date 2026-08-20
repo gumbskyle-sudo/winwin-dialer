@@ -1,4 +1,3 @@
-
 /* Real Estate Dialer — single backend
  * ─────────────────────────────────────
  * Required env vars (Netlify → Site → Environment variables):
@@ -1605,10 +1604,37 @@ exports.handler = async (event) => {
           sid: j.sid, status: j.status, duration: dur,
           startTime: j.start_time, endTime: j.end_time,
           from: j.from, to: j.to,
+          // The reason behind a busy/failed/no-answer, straight from Twilio
+          errorCode:    j.error_code || null,
+          errorMessage: j.error_message || null,
           answeredBy,
           isMachine: answeredBy.startsWith('machine') || answeredBy === 'fax',
           isHuman:   answeredBy === 'human',
         });
+      }
+
+      // Rings one phone with a short message and nothing else. Used to
+      // prove out a caller's own number: if this fails, no lead call from
+      // that profile can possibly work.
+      case 'test-phone': {
+        if (!body.phone) return err('phone required');
+        if (!body.from)  return err('from required (a Twilio number you own)');
+        const twiml =
+          `<?xml version="1.0" encoding="UTF-8"?>` +
+          `<Response><Say voice="Polly.Ruth-Generative">` +
+          `This is a test call from your Win Win dialer. Your phone number is set up correctly. Goodbye.` +
+          `</Say><Hangup/></Response>`;
+        try {
+          const j = await tw(`/Accounts/${twilioSid()}/Calls.json`, 'POST', {
+            From: body.from,
+            To:   body.phone,
+            Twiml: twiml,
+            Timeout: 25,
+          });
+          return ok({ sid: j.sid, status: j.status, to: j.to, from: j.from });
+        } catch (e) {
+          return err('Twilio refused to place the call: ' + e.message);
+        }
       }
 
       case 'end-call': {
