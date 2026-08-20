@@ -1047,7 +1047,7 @@ async function cleanupExpiredRecordings() {
 // Bumped whenever this file changes in a way the frontend depends on.
 // The Settings screen reads it, so a half-finished deploy is visible
 // instead of showing up later as a mystery "Unknown action" error.
-const API_VERSION = '2026-08-20-c';
+const API_VERSION = '2026-08-20-d';
 
 // ── Main handler ──────────────────────────────────────────────
 exports.handler = async (event) => {
@@ -2659,6 +2659,27 @@ exports.handler = async (event) => {
           `&select=*&order=created_at.asc&limit=300`
         );
         return ok({ messages: json || [] });
+      }
+
+      // Remove one message from the app's history. Twilio keeps its own
+      // copy in the console; this only clears the dialer's Inbox.
+      case 'delete-message': {
+        if (!body.id) return err('id required');
+        await supa(`/messages?id=eq.${encodeURIComponent(body.id)}`, 'DELETE', null,
+          { Prefer: 'return=minimal' });
+        return ok({ deleted: true });
+      }
+
+      // Clear an entire conversation with one number.
+      case 'delete-thread': {
+        const num = body.number;
+        if (!num) return err('number required');
+        const enc = encodeURIComponent(num);
+        await supa(
+          `/messages?or=(from_number.eq.${enc},to_number.eq.${enc})`, 'DELETE', null,
+          { Prefer: 'return=minimal' }
+        );
+        return ok({ deleted: true });
       }
 
       // Send a manual one-off SMS. Body: {dealId, propertyId, to, body}
