@@ -863,8 +863,14 @@ body:not(.view-d4d) .d4d-sheet{display:none !important}
   margin-bottom:3px;overflow-wrap:anywhere;white-space:pre-wrap}
 .st-in{background:#fff;border:1px solid #e5e7eb;border-bottom-left-radius:5px;margin-right:auto}
 .st-out{background:#0f0d0a;color:#f5e6b8;border-bottom-right-radius:5px;margin-left:auto}
+.st-msg{cursor:pointer}
 .st-stamp{font-size:10px;color:#9ca3af;margin-bottom:10px}
 .st-stamp.out{text-align:right}
+.st-del{display:none;margin:-2px 0 10px;font-size:11px;font-weight:700;color:#b91c1c;
+  background:#fef2f2;border:1px solid #fca5a5;border-radius:8px;padding:6px 10px;
+  font-family:inherit;cursor:pointer}
+.st-del.out{margin-left:auto}
+.st-del.show{display:block}
 .st-compose{flex:0 0 auto;display:flex;gap:8px;padding:10px 12px;background:#fff;
   border-top:1px solid #e5e7eb;padding-bottom:calc(10px + env(safe-area-inset-bottom))}
 .st-compose textarea{flex:1;resize:none;max-height:110px;border:1px solid #d1d5db;border-radius:18px;
@@ -1847,6 +1853,7 @@ main{max-width:100%}
       <div class="st-sub" id="stSub"></div>
     </div>
     <button class="st-call" id="stCall" title="Call this number">📞</button>
+    <button class="st-call" id="stWipe" title="Delete this conversation">🗑</button>
   </div>
   <div class="st-body" id="stBody"></div>
   <div class="st-compose">
@@ -3921,7 +3928,7 @@ $('voiceSettingsSave')?.addEventListener('click', async () => {
 // backend ship as separate files, so it is easy to update one and not the
 // other — which surfaces later as "Unknown action" on a button that looks
 // like it should work.
-const EXPECTED_API_VERSION = '2026-08-20-c';
+const EXPECTED_API_VERSION = '2026-08-20-d';
 async function checkApiVersion(){
   const line = $('apiVersionLine');
   if(!line) return;
@@ -6444,11 +6451,28 @@ function renderConvThread(msgs){
       body.appendChild(el(`<div class="st-day">${escapeHtml(day)}</div>`));
     }
     const out = m.direction === 'outbound';
-    body.appendChild(el(`<div class="st-msg ${out ? 'st-out' : 'st-in'}">${escapeHtml(m.body || '')}</div>`));
+    // Tapping a bubble reveals its delete chip — deliberately two taps, so a
+    // stray thumb while scrolling can't wipe a message.
+    const bub = el(`<div class="st-msg ${out ? 'st-out' : 'st-in'}">${escapeHtml(m.body || '')}</div>`);
     const time = d.toLocaleTimeString(undefined, {hour:'numeric', minute:'2-digit'});
     const st = out && m.status && m.status !== 'sent' && m.status !== 'delivered'
       ? ' · ' + m.status : '';
-    body.appendChild(el(`<div class="st-stamp${out ? ' out' : ''}">${escapeHtml(time + st)}</div>`));
+    const stamp = el(`<div class="st-stamp${out ? ' out' : ''}">${escapeHtml(time + st)}</div>`);
+    const del = el(`<button class="st-del${out ? ' out' : ''}">🗑 Delete this message</button>`);
+    bub.addEventListener('click', () => del.classList.toggle('show'));
+    del.addEventListener('click', async () => {
+      del.disabled = true; del.textContent = 'Deleting…';
+      try {
+        await api('delete-message', {method:'POST', body:{id:m.id}});
+        bub.remove(); stamp.remove(); del.remove();
+      } catch(e){
+        del.disabled = false; del.textContent = '🗑 Delete this message';
+        toast('Could not delete: ' + e.message, 'err');
+      }
+    });
+    body.appendChild(bub);
+    body.appendChild(stamp);
+    body.appendChild(del);
   });
   body.scrollTop = body.scrollHeight;
 }
@@ -6457,6 +6481,21 @@ $('stBack').addEventListener('click', () => {
   $('convPanel').classList.remove('open');
   stNumber = null;
   loadInbox();
+});
+$('stWipe').addEventListener('click', async () => {
+  if(!stNumber) return;
+  const who = $('stName').textContent || fmtPhone(stNumber);
+  if(!confirm('Delete the whole conversation with ' + who + '?\n\nThis clears it from the dialer only — Twilio keeps its own log.')) return;
+  const btn = $('stWipe');
+  btn.disabled = true;
+  try {
+    await api('delete-thread', {method:'POST', body:{number: stNumber}});
+    $('convPanel').classList.remove('open');
+    stNumber = null;
+    toast('Conversation deleted','ok');
+    loadInbox();
+  } catch(e){ toast('Could not delete: ' + e.message, 'err'); }
+  btn.disabled = false;
 });
 $('stCall').addEventListener('click', () => {
   if(stNumber) placeManualCall(stNumber, $('stName').textContent || 'Inbox reply');
