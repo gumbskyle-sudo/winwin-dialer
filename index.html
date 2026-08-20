@@ -1621,6 +1621,8 @@ main{max-width:100%}
         <label>Your phone (Twilio rings YOU first when you place a call)</label>
         <input type="text" id="settingsForwardPhone" placeholder="+15085551234 or 5085551234">
         <div style="font-size:11px;color:#6b7280;margin-top:4px">This is the number Twilio bridges to on THIS device. Saved locally — it only updates a teammate's stored callback number if you confirm the prompt, so logging into someone else's profile on a borrowed phone won't silently overwrite their number.</div>
+        <button class="btn-ghost" id="testPhoneBtn" style="width:100%;margin-top:8px">📞 Ring this phone now (test)</button>
+        <div id="testPhoneResult" class="hide" style="margin-top:8px;padding:10px 12px;border-radius:8px;font-size:12px;line-height:1.45;overflow-wrap:anywhere"></div>
       </div>
       <div class="field">
         <label>Company name (used in call scripts)</label>
@@ -2911,6 +2913,10 @@ function pdPollForCompletion(sid, propertyId){
         pdSetState('Ringing', 'ringing');
       }
 
+      if(['busy','failed','canceled'].includes(r.status)){
+        const why = explainCallEnd(r);
+        if(why) toast(r.status.toUpperCase() + ' — ' + why, 'err');
+      }
       const done = ['completed','failed','busy','no-answer','canceled'].includes(r.status);
       if(done){
         // A voicemail drop in flight has to finish playing before we move on
@@ -3713,6 +3719,88 @@ function firstNameOnly(owners){
   return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
 }
 // Fill placeholders; unknowns render as a visible red blank rather than silently vanishing
+// Twilio hands back a numeric code on a busy/failed leg. On its own
+// "busy" is useless — these are the causes that actually come up.
+const TWILIO_CALL_HELP = {
+  13224: 'Twilio will not dial that number — check it is a real, dialable US number in +1XXXXXXXXXX form.',
+  13225: 'That number is blocked for this account (Voice geographic permissions).',
+  21215: 'Geographic permissions: this Twilio account is not allowed to call that country. Turn the country on under Voice → Geo Permissions.',
+  21210: 'The From number is not a Twilio number you own, and is not a Verified Caller ID.',
+  21211: 'The To number is not a valid phone number.',
+  21214: 'The To number is not verified. On a TRIAL account, Twilio only calls verified numbers — upgrade the account or verify this number.',
+  21219: 'The To number is not verified — trial accounts can only reach verified numbers.',
+  21220: 'The call was rejected before it connected.',
+  32213: 'The carrier rejected the call.',
+};
+function explainCallEnd(r){
+  const st = String((r && r.status) || '').toLowerCase();
+  const code = r && r.errorCode ? parseInt(r.errorCode, 10) : 0;
+  const bits = [];
+  if(code && TWILIO_CALL_HELP[code]) bits.push(TWILIO_CALL_HELP[code]);
+  else if(code) bits.push(String(r.errorMessage || ('Twilio error ' + code)));
+  else if(st === 'busy') bits.push(
+    'The carrier returned busy without ringing the handset. That is almost always ' +
+    'spam filtering on the caller ID, or the phone is already on a call — not a bug in the app. ' +
+    'Try a different Twilio caller ID, and check the number is not still tied up in an earlier session.'
+  );
+  else if(st === 'no-answer') bits.push('It rang out. Nobody picked up before the timeout.');
+  else if(st === 'canceled') bits.push('The call was hung up before it was answered.');
+  else if(st === 'failed') bits.push('Twilio could not complete the call.');
+  if(code) bits.push('Twilio code ' + code + '.');
+  return bits.join(' ');
+}
+
+// One-shot ring test on the number in Settings.
+async function runPhoneTest(){
+  const btn = $('testPhoneBtn');
+  const box = $('testPhoneResult');
+  const show = (msg, good) => {
+    box.textContent = msg;
+    box.style.background = good ? '#f0fdf4' : '#fef2f2';
+    box.style.border = '1px solid ' + (good ? '#86efac' : '#fca5a5');
+    box.style.color = good ? '#166534' : '#991b1b';
+    box.classList.remove('hide');
+  };
+  const phone = toE164($('settingsForwardPhone').value.trim());
+  if(!phone || phone.length < 12){ show('Enter a valid US number first.', false); return; }
+  if(!activeCallerId){ show('Pick a Twilio caller ID at the top of the app first.', false); return; }
+
+  btn.disabled = true; btn.textContent = 'Calling…';
+  show('Placing the call from ' + fmtPhone(activeCallerId) + ' to ' + fmtPhone(phone) + '…', true);
+  try {
+    const j = await api('test-phone', {method:'POST', body:{ phone, from: activeCallerId }});
+    // Watch it to the end so we can report the real outcome, not just "queued".
+    let tries = 0;
+    const poll = async () => {
+      tries++;
+      let r = null;
+      try { r = await api('call-status&sid=' + encodeURIComponent(j.sid)); } catch(e){}
+      const st = r ? String(r.status || '') : '';
+      if(['completed','answered','in-progress'].includes(st) && (r.duration > 0 || st === 'in-progress')){
+        show('✅ Answered. This number works — ' + fmtPhone(phone) + ' is reachable from ' + fmtPhone(activeCallerId) + '.', true);
+        btn.disabled = false; btn.textContent = '📞 Ring this phone now (test)';
+        return;
+      }
+      if(['busy','failed','no-answer','canceled','completed'].includes(st)){
+        show('❌ Call ended as "' + st + '". ' + explainCallEnd(r), false);
+        btn.disabled = false; btn.textContent = '📞 Ring this phone now (test)';
+        return;
+      }
+      if(tries > 30){
+        show('Gave up watching the call. Last status: ' + (st || 'unknown') + '.', false);
+        btn.disabled = false; btn.textContent = '📞 Ring this phone now (test)';
+        return;
+      }
+      setTimeout(poll, 2000);
+    };
+    setTimeout(poll, 2500);
+  } catch(e){
+    show('❌ ' + e.message, false);
+    btn.disabled = false; btn.textContent = '📞 Ring this phone now (test)';
+  }
+}
+$('testPhoneBtn')?.addEventListener('click', runPhoneTest);
+
 function fillScript(text, ctx, forCopy){
   const vals = {
     FirstName:      ctx.firstName || '',
