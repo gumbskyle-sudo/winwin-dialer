@@ -846,8 +846,8 @@ body:not(.view-d4d) .d4d-sheet{display:none !important}
 .drip-start-btn .sub{font-size:10px;color:#9ca3af;font-weight:400;display:block;margin-top:1px}
 
 /* Inbox view */
-#smsThread{position:fixed;inset:0;z-index:75;background:#f5f5f4;display:none;flex-direction:column}
-#smsThread.open{display:flex}
+#convPanel{position:fixed;inset:0;z-index:75;background:#f5f5f4;display:none;flex-direction:column}
+#convPanel.open{display:flex}
 .st-head{flex:0 0 auto;display:flex;align-items:center;gap:10px;padding:12px 14px;
   background:#0f0d0a;color:#fff;box-shadow:0 2px 8px rgba(0,0,0,.2)}
 .st-back{background:none;border:none;color:#f5e6b8;font-size:14px;font-weight:700;
@@ -1839,7 +1839,7 @@ main{max-width:100%}
 </div>
 
 <!-- SMS conversation (full-screen overlay) -->
-<div id="smsThread">
+<div id="convPanel">
   <div class="st-head">
     <button class="st-back" id="stBack">← Inbox</button>
     <div class="st-who">
@@ -6393,7 +6393,7 @@ function renderInbox(threads){
         ${t.count > 1 ? `<div class="ct" style="margin-top:4px">${t.count}</div>` : ''}
       </div>
     </div>`);
-    row.addEventListener('click', () => openThread(t));
+    row.addEventListener('click', () => openConv(t));
     list.appendChild(row);
   });
 }
@@ -6405,7 +6405,7 @@ $('inboxRefresh')?.addEventListener('click', () => loadInbox());
 let stNumber = null;
 let stThread = null;
 
-async function openThread(t){
+async function openConv(t){
   stNumber = t.from;
   stThread = t;
   // Match the number to a lead we already have loaded, so the header shows
@@ -6414,21 +6414,21 @@ async function openThread(t){
   $('stName').textContent = t.owners || (prop && prop.owners) || fmtPhone(t.from);
   $('stSub').textContent = [fmtPhone(t.from), t.address || (prop && prop.property_address) || '']
     .filter(Boolean).join(' · ');
-  $('smsThread').classList.add('open');
+  $('convPanel').classList.add('open');
   $('stBody').innerHTML = '<div class="empty">Loading…</div>';
-  await loadThread();
+  await loadConv();
 }
 
-async function loadThread(){
+async function loadConv(){
   try {
     const j = await api('list-thread&number=' + encodeURIComponent(stNumber));
-    renderThread(j.messages || []);
+    renderConvThread(j.messages || []);
   } catch(e){
     $('stBody').innerHTML = '<div class="empty" style="color:#b91c1c">' + escapeHtml(e.message) + '</div>';
   }
 }
 
-function renderThread(msgs){
+function renderConvThread(msgs){
   const body = $('stBody');
   body.innerHTML = '';
   if(!msgs.length){
@@ -6454,7 +6454,7 @@ function renderThread(msgs){
 }
 
 $('stBack').addEventListener('click', () => {
-  $('smsThread').classList.remove('open');
+  $('convPanel').classList.remove('open');
   stNumber = null;
   loadInbox();
 });
@@ -6480,7 +6480,7 @@ $('stSend').addEventListener('click', async () => {
     }});
     $('stInput').value = '';
     $('stInput').style.height = 'auto';
-    await loadThread();
+    await loadConv();
   } catch(e){
     toast('Could not send: ' + e.message, 'err');
   }
