@@ -2710,8 +2710,9 @@ $('pdStartBtn').addEventListener('click', () => {
   // Auto-voicemail toggle (defaults on)
   if($('pdAutoVm')) $('pdAutoVm').value = (localStorage.getItem(LS.vmAuto) === '0') ? '0' : '1';
 
-  // Pre-fill agent phone from settings
-  $('pdAgentPhone').value = forwardPhone || '';
+  // Pre-fill with the signed-in caller's own number
+  const me = allProfiles.find(pr => String(pr.id) === String(activeProfileId));
+  $('pdAgentPhone').value = (me && me.phone) || forwardPhone || '';
 
   // Sync state filter with main list
   if($('pdStateFilter')) $('pdStateFilter').value = stateFilter;
@@ -4335,7 +4336,13 @@ $('settingsSave').addEventListener('click', async () => {
     try {
       const { json } = await api('list-profiles');
       const prof = (json.profiles || []).find(p => p.id === activeProfileId);
-      if(prof && prof.phone !== forwardPhone){
+      if(prof && !prof.phone){
+        // Nothing on file for them yet — just save it, no confirmation needed.
+        try {
+          await api('update-profile-phone', {method:'POST', body:{ profileId: activeProfileId, phone: forwardPhone }});
+          prof.phone = forwardPhone;
+        } catch(e){ /* non-fatal */ }
+      } else if(prof && prof.phone !== forwardPhone){
         const ok = confirm(
           `This device's number (${forwardPhone}) doesn't match what's on file for ${activeProfileName || 'this profile'} (${prof.phone || 'none set'}).\n\nUpdate ${activeProfileName || 'this profile'}'s callback number to ${forwardPhone}?`
         );
@@ -4989,7 +4996,12 @@ async function showProfilePicker(){
         : '<span style="font-size:10px;color:#9ca3af;font-weight:600"> · no password</span>';
       const inactive = (p.is_active === false)
         ? '<span style="font-size:10px;color:#b91c1c;font-weight:600"> · off</span>' : '';
-      const b = el(`<button type="button" class="profile-pick" style="flex:1">${escapeHtml(p.name)}${lock}${inactive}</button>`);
+      // The number their calls ring on. Missing here means the dialer has
+      // nothing to call for them.
+      const ph = p.phone
+        ? `<div style="font-size:10px;color:#6b7280;font-weight:600;margin-top:2px">📱 ${escapeHtml(fmtPhone(p.phone))}</div>`
+        : `<div style="font-size:10px;color:#b91c1c;font-weight:700;margin-top:2px">📱 No phone set — tap to add</div>`;
+      const b = el(`<button type="button" class="profile-pick" style="flex:1">${escapeHtml(p.name)}${lock}${inactive}${ph}</button>`);
       b.addEventListener('click', () => pickProfile(p));
       row.appendChild(b);
       if(admin){
@@ -5029,11 +5041,55 @@ async function setCallerPassword(p){
     toast('Could not set password: '+err.message,'err');
   }
 }
+// Ask a caller for their own number and store it on their profile.
+async function promptProfilePhone(p){
+  const raw = prompt(
+    `Which phone should ring when ${p.name} makes a call?\n\n` +
+    `The dialer calls this number first, then bridges the seller in. ` +
+    `It must be ${p.name}'s own phone, not the office line.`,
+    ''
+  );
+  if(raw === null) return;
+  const e164 = toE164(String(raw).trim());
+  if(!e164 || e164.length < 12){ toast('That does not look like a valid US number','err'); return; }
+  try {
+    await api('update-profile-phone', {method:'POST', body:{ profileId:p.id, phone:e164 }});
+    p.phone = e164;
+    applyProfilePhone(e164);
+    toast(`${p.name} will ring at ${fmtPhone(e164)}`,'ok');
+  } catch(e){
+    toast('Could not save that number: '+e.message,'err');
+  }
+}
+
+// Point every dial-out on this device at one number.
+function applyProfilePhone(phone){
+  forwardPhone = phone || '';
+  if(phone) localStorage.setItem(LS.forward, phone);
+  else localStorage.removeItem(LS.forward);
+  const sf = $('settingsForwardPhone'); if(sf) sf.value = phone || '';
+  const pa = $('pdAgentPhone');         if(pa) pa.value = phone || '';
+  const dot = $('cidDot');
+  if(dot) dot.className = (activeCallerId && forwardPhone) ? 'dot live' : 'dot warn';
+}
+
 function pickProfile(p){
   activeProfileId = p.id;
   activeProfileName = p.name;
   localStorage.setItem(LS.profileId, p.id);
   localStorage.setItem(LS.profileName, p.name);
+
+  // Each caller rings their OWN phone. That number lives on the profile in
+  // the database, but signing in never loaded it — so whoever signed in
+  // second kept dialing the number the first person had typed into this
+  // device, and their own phone never rang.
+  if(p.phone){
+    applyProfilePhone(p.phone);
+  } else {
+    applyProfilePhone('');
+    setTimeout(() => promptProfilePhone(p), 350);
+  }
+
   updateProfileBadge();
   $('profilePicker').classList.remove('open');
   toast('Hi, '+p.name+' 👋','ok');
