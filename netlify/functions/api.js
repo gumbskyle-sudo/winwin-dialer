@@ -1047,7 +1047,7 @@ async function cleanupExpiredRecordings() {
 // Bumped whenever this file changes in a way the frontend depends on.
 // The Settings screen reads it, so a half-finished deploy is visible
 // instead of showing up later as a mystery "Unknown action" error.
-const API_VERSION = '2026-08-20-b';
+const API_VERSION = '2026-08-20-c';
 
 // ── Main handler ──────────────────────────────────────────────
 exports.handler = async (event) => {
@@ -2646,6 +2646,19 @@ exports.handler = async (event) => {
           } catch {}
         }
         return ok({ threads });
+      }
+
+      // Every message to or from one number, oldest first — the
+      // conversation behind an Inbox row.
+      case 'list-thread': {
+        const num = qs.number || body.number;
+        if (!num) return err('number required');
+        const enc = encodeURIComponent(num);
+        const { json } = await supa(
+          `/messages?or=(from_number.eq.${enc},to_number.eq.${enc})` +
+          `&select=*&order=created_at.asc&limit=300`
+        );
+        return ok({ messages: json || [] });
       }
 
       // Send a manual one-off SMS. Body: {dealId, propertyId, to, body}
