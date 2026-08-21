@@ -1,3 +1,4 @@
+
 /* Real Estate Dialer — single backend
  * ─────────────────────────────────────
  * Required env vars (Netlify → Site → Environment variables):
@@ -1047,7 +1048,7 @@ async function cleanupExpiredRecordings() {
 // Bumped whenever this file changes in a way the frontend depends on.
 // The Settings screen reads it, so a half-finished deploy is visible
 // instead of showing up later as a mystery "Unknown action" error.
-const API_VERSION = '2026-08-20-d';
+const API_VERSION = '2026-08-21-c';
 
 // ── Main handler ──────────────────────────────────────────────
 exports.handler = async (event) => {
@@ -1123,7 +1124,7 @@ exports.handler = async (event) => {
       case 'list-properties': {
         // Supabase default limit is 1000; raise it for larger lists.
         const LIMIT = 50000;
-        const { json: props }  = await supa(`/properties?select=id,owners,owner_last_name,property_address,mailing_address,email,imported_at,postcard_sent_at,postcard_id&order=imported_at.asc,id.asc&limit=${LIMIT}`);
+        const { json: props }  = await supa(`/properties?select=id,owners,owner_last_name,property_address,mailing_address,email,list_name,imported_at,postcard_sent_at,postcard_id&order=imported_at.asc,id.asc&limit=${LIMIT}`);
         const { json: phones } = await supa(`/phones?select=property_id,e164,display,type&order=property_id.asc,id.asc&limit=${LIMIT}`);
         const { json: leads }  = await supa(`/leads?select=property_id,called,lead_status,notes,va_notes,recording_url,highlight,assigned_to,sms_consent,sms_cell&limit=${LIMIT}`);
         const phonesBy = {};
@@ -1196,6 +1197,7 @@ exports.handler = async (event) => {
             if (!existing.va_notes && raw.va_notes) existing.va_notes = raw.va_notes;
             if (!existing.recording_url && raw.recording_url) existing.recording_url = raw.recording_url;
             if (!existing.highlight && raw.highlight) existing.highlight = raw.highlight;
+            if (!existing.list_name && raw.list_name) existing.list_name = raw.list_name;
             dupesCollapsed++;
           } else {
             byId.set(id, {
@@ -1208,6 +1210,7 @@ exports.handler = async (event) => {
               recording_url: raw.recording_url || '',
               va_lead: !!raw.va_lead,
               highlight: raw.highlight || '',
+              list_name: raw.list_name || '',
               phones: Array.isArray(raw.phones) ? [...raw.phones] : [],
             });
             if (addrKey) seenAddrInBatch.set(addrKey, id);
@@ -1292,6 +1295,7 @@ exports.handler = async (event) => {
           property_address: p.property_address,
           mailing_address: p.mailing_address,
           email: p.email || '',
+          list_name: p.list_name || '',
         }));
         for (let i = 0; i < propRows.length; i += 500) {
           await supa('/properties?on_conflict=id', 'POST', propRows.slice(i, i + 500), { Prefer: 'resolution=merge-duplicates,return=minimal' });
@@ -1737,6 +1741,49 @@ exports.handler = async (event) => {
         if (body.ringSeconds)                  await setAppConfig('voice_ring_seconds', String(parseInt(body.ringSeconds, 10) || 25));
         if (typeof body.forwardTo === 'string') await setAppConfig('default_voice_forward_number', body.forwardTo);
         return ok({ saved: true });
+      }
+
+      // ── Removing leads ──────────────────────────────────────
+      // Properties cascade to phones and leads, so one delete clears
+      // the lead entirely.
+      case 'delete-property': {
+        if (!body.id) return err('id required');
+        await supa(`/properties?id=eq.${encodeURIComponent(body.id)}`, 'DELETE', null,
+          { Prefer: 'return=minimal' });
+        return ok({ deleted: 1 });
+      }
+
+      case 'delete-properties': {
+        const ids = Array.isArray(body.ids) ? body.ids.filter(Boolean).map(String) : [];
+        if (!ids.length) return err('ids required');
+        if (ids.length > 5000) return err('Too many at once — keep it under 5000');
+        let done = 0;
+        for (let i = 0; i < ids.length; i += 200) {
+          const chunk = ids.slice(i, i + 200);
+          const inList = chunk.map(id => `"${id.replace(/"/g, '\\"')}"`).join(',');
+          await supa(`/properties?id=in.(${encodeURIComponent(inList)})`, 'DELETE', null,
+            { Prefer: 'return=minimal' });
+          done += chunk.length;
+        }
+        return ok({ deleted: done });
+      }
+
+      // ── Named lists ─────────────────────────────────────────
+      // Label a batch of leads so they can be dialed as a set. Also how
+      // leads imported before list_name existed get named.
+      case 'set-list-name': {
+        const ids = Array.isArray(body.ids) ? body.ids.filter(Boolean).map(String) : [];
+        if (!ids.length) return err('ids required');
+        const name = String(body.listName || '').trim();
+        let done = 0;
+        for (let i = 0; i < ids.length; i += 200) {
+          const chunk = ids.slice(i, i + 200);
+          const inList = chunk.map(id => `"${id.replace(/"/g, '\\"')}"`).join(',');
+          await supa(`/properties?id=in.(${encodeURIComponent(inList)})`, 'PATCH',
+            { list_name: name }, { Prefer: 'return=minimal' });
+          done += chunk.length;
+        }
+        return ok({ updated: done, listName: name });
       }
 
       // Which build of api.js is actually live.
