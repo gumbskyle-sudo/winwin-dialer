@@ -652,12 +652,12 @@ body.view-pipeline header .callerid{display:none}
 .hl-dot{width:26px;height:26px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 0 1px #d1d5db;cursor:pointer;padding:0;display:flex;align-items:center;justify-content:center;font-size:13px;color:#9ca3af;line-height:1;-webkit-tap-highlight-color:transparent}
 .hl-dot.active{box-shadow:0 0 0 2px #111827;transform:scale(1.12)}
 .hl-dot.hl-clear{background:#fff}
-.hide-color-row{display:flex;align-items:center;gap:7px;flex-wrap:wrap;padding:6px 14px 2px}
-.hide-color-lbl{font-size:11px;color:#6b7280;font-weight:600;margin-right:2px}
-.hc-dot{width:22px;height:22px;border-radius:50%;border:none;background:var(--hc);cursor:pointer;padding:0;position:relative;box-shadow:0 0 0 1.5px #d1d5db;-webkit-tap-highlight-color:transparent;flex-shrink:0}
-.hc-dot.active{opacity:.3;box-shadow:0 0 0 2px #0f0d0a}
-.hc-dot.active::after{content:'✕';position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#0f0d0a}
-.state-filter-row{display:flex;align-items:center;gap:7px;padding:6px 14px 2px}
+.filter-lbl{font-size:11px;color:#6b7280;font-weight:600;margin-right:2px}
+.lead-del-btn{width:100%;margin-top:6px;padding:8px;border:1px solid #fca5a5;border-radius:8px;
+  background:#fff;color:#b91c1c;font-size:12px;font-weight:700;font-family:inherit;cursor:pointer}
+.lead-del-btn:active{background:#fef2f2}
+.state-filter-row{display:flex;align-items:center;gap:7px;flex-wrap:wrap;padding:6px 14px 2px}
+.state-filter-row select{max-width:46vw}
 .state-filter-row select{padding:5px 8px;border:1px solid #d1d5db;border-radius:7px;font-size:12px;background:#fff;color:#0f0d0a}
 .assign-sel{flex:1;padding:7px 10px;border:1.5px solid #d1d5db;border-radius:7px;font-size:13px;background:#fff;color:#0f0d0a}
 .postcard-row{display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap}
@@ -1059,8 +1059,8 @@ body:not(.view-dialer) #cards,
 body:not(.view-dialer) #pageNav,
 body:not(.view-dialer) .search-bar-wrap,
 body:not(.view-dialer) .filter-row,
-body:not(.view-dialer) .hide-color-row,
 body:not(.view-dialer) .state-filter-row,
+body:not(.view-dialer) #listToolsModal,
 body:not(.view-dialer) #pdStartWrap,
 body:not(.view-dialer) #pdSetupScreen{display:none!important}
 body:not(.view-dialer) header .callerid{display:none}
@@ -1143,18 +1143,12 @@ main{max-width:100%}
     <button class="filter-chip" id="filterWebLeads">🌐 Website <span id="webLeadCount"></span></button>
     <button class="filter-chip filter-clear hide" id="filterClear">✕ Clear filter</button>
   </div>
-  <div class="hide-color-row" id="hideColorRow">
-    <span class="hide-color-lbl">Hide colors:</span>
-    <button type="button" class="hc-dot" data-hc="red" style="--hc:#ef4444" title="Hide red"></button>
-    <button type="button" class="hc-dot" data-hc="orange" style="--hc:#f97316" title="Hide orange"></button>
-    <button type="button" class="hc-dot" data-hc="yellow" style="--hc:#f59e0b" title="Hide yellow"></button>
-    <button type="button" class="hc-dot" data-hc="green" style="--hc:#10b981" title="Hide green"></button>
-    <button type="button" class="hc-dot" data-hc="blue" style="--hc:#3b82f6" title="Hide blue"></button>
-    <button type="button" class="hc-dot" data-hc="purple" style="--hc:#8b5cf6" title="Hide purple"></button>
-  </div>
   <div class="state-filter-row" id="stateFilterRow">
-    <span class="hide-color-lbl">State:</span>
+    <span class="filter-lbl">List:</span>
+    <select id="listFilterSel"><option value="">All lists</option></select>
+    <span class="filter-lbl">State:</span>
     <select id="stateFilterSel"></select>
+    <button type="button" id="listToolsBtn" class="postcard-btn" style="padding:5px 9px">⚙ Manage</button>
   </div>
   <div id="powerDialBar" class="hide">
     <div class="pd-session">
@@ -1205,16 +1199,8 @@ main{max-width:100%}
     <div style="font-size:16px;font-weight:700;color:#0f0d0a;margin-bottom:16px">⚡ Power Dial Setup</div>
 
     <div class="pd-setup-field">
-      <label>Which leads to call</label>
-      <select id="pdColorFilter">
-        <option value="">All uncalled leads</option>
-        <option value="red">🔴 Red list only</option>
-        <option value="orange">🟠 Orange list only</option>
-        <option value="yellow">🟡 Yellow list only</option>
-        <option value="green">🟢 Green list only</option>
-        <option value="blue">🔵 Blue list only</option>
-        <option value="purple">🟣 Purple list only</option>
-      </select>
+      <label>Which list to call</label>
+      <select id="pdListFilter"><option value="">Every list</option></select>
     </div>
 
     <div class="pd-setup-field">
@@ -1298,6 +1284,36 @@ main{max-width:100%}
       <button class="header-link on-light" id="pipeDeadBtn">💀 Dead <span id="pipeDeadCount"></span></button>
     </div>
     <div class="pipe-board" id="pipeBoard"></div>
+  </div>
+
+  <!-- List / bulk lead tools -->
+  <div class="modal" id="listToolsModal">
+    <div class="modal-box">
+      <div class="modal-head">
+        <h3>Manage these leads</h3>
+        <button data-close="listToolsModal">✕</button>
+      </div>
+      <div class="modal-body">
+        <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:9px;padding:11px;margin-bottom:14px">
+          <div style="font-size:13px;font-weight:700;color:#0f0d0a" id="ltCount">—</div>
+          <div style="font-size:11px;color:#6b7280;margin-top:3px">Everything below applies to the leads currently showing, after your search, state, list and colour filters.</div>
+        </div>
+
+        <div class="field">
+          <label>Put these leads on a list</label>
+          <input type="text" id="ltListName" placeholder="e.g. Tulsa Absentee — Aug 2026" list="ltListSuggestions">
+          <datalist id="ltListSuggestions"></datalist>
+          <button class="btn-ghost" id="ltSetList" style="width:100%;margin-top:8px">🏷 Save to this list</button>
+          <div style="font-size:11px;color:#6b7280;margin-top:5px">Leave it blank and save to clear the list off them. This is also how leads imported before lists existed get named.</div>
+        </div>
+
+        <div class="field" style="border-top:1px solid #e5e7eb;padding-top:14px;margin-top:6px">
+          <label style="color:#b91c1c">Delete these leads permanently</label>
+          <div style="font-size:11px;color:#6b7280;margin-bottom:8px">Removes the leads, their phone numbers, notes and call history. Recordings stay in Twilio. This cannot be undone.</div>
+          <button class="btn-ghost" id="ltDelete" style="width:100%;color:#b91c1c;border-color:#fca5a5">🗑 Delete <span id="ltDelCount"></span></button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- Dead reason picker -->
@@ -1936,7 +1952,7 @@ const LS = {
   pwd:'cb_pwd', backend:'cb_backend',
   forward:'cb_forward', active:'cb_active',
   profileId:'cb_profile_id', profileName:'cb_profile_name',
-  hideOthers:'cb_hide_others', hiddenColors:'cb_hidden_colors',
+  hideOthers:'cb_hide_others', listFilter:'cb_list_filter',
   vmMessage:'cb_vm_message', vmMode:'cb_vm_mode', vmVoice:'cb_vm_voice', stateFilter:'cb_state_filter',
   vmAuto:'cb_vm_auto',
   company:'cb_company', website:'cb_website',
@@ -1946,7 +1962,7 @@ const DEFAULT_WEBSITE = 'winwinproperties.net';
 const companyName = () => localStorage.getItem(LS.company) || DEFAULT_COMPANY;
 const companySite = () => localStorage.getItem(LS.website) || DEFAULT_WEBSITE;
 // Bump this on every deploy so you can see which build is actually live
-const BUILD_ID = 'build 2026-08-20-d';
+const BUILD_ID = 'build 2026-08-21-b';
 const DEFAULT_VM_MESSAGE = "Hi {FirstName}, we are calling from Win Win Properties to give you a quick offer on your property at {Address}. Give us a call back at {CallbackNumber}, or find us online at win win properties dot net. That's W W W dot winwinproperties dot net. Thanks, and have a great day.";
 let backend  = localStorage.getItem(LS.backend) || '/api';
 let password = localStorage.getItem(LS.pwd) || '';
@@ -2117,7 +2133,8 @@ const HL_COLORS = {
   blue:   { border:'#3b82f6', bg:'#eff6ff' },
   purple: { border:'#8b5cf6', bg:'#f5f3ff' },
 };
-let hiddenColors = new Set(JSON.parse(localStorage.getItem(LS.hiddenColors) || '[]'));
+let listFilter   = localStorage.getItem('cb_list_filter') || '';
+let pdListFilter = '';
 
 // ── State filter (parsed from the free-text property address) ───
 const US_STATES = [
@@ -2180,13 +2197,56 @@ function getFilteredProperties(){
       return a == null || a === '' || String(a) === String(activeProfileId);
     });
   }
-  if(hiddenColors.size){
-    list = list.filter(p => !hiddenColors.has((p.lead||{}).highlight || ''));
-  }
   if(stateFilter){
     list = list.filter(p => extractState(p.property_address) === stateFilter);
   }
+  if(listFilter){
+    list = listFilter === '__none__'
+      ? list.filter(p => !(p.list_name || '').trim())
+      : list.filter(p => (p.list_name || '') === listFilter);
+  }
   return list;
+}
+
+// ── Named lists ───────────────────────────────────────────────
+// Every distinct list name currently in the data, for the filter and
+// the power dialer.
+function allListNames(){
+  const seen = new Map();
+  properties.forEach(p => {
+    const n = (p.list_name || '').trim();
+    if(n) seen.set(n, (seen.get(n) || 0) + 1);
+  });
+  return [...seen.entries()].sort((a,b) => a[0].localeCompare(b[0]));
+}
+
+function populateListSelects(){
+  const names = allListNames();
+  const unlabeled = properties.filter(p => !(p.list_name || '').trim()).length;
+  const opts = '<option value="">All lists</option>' +
+    names.map(([n,c]) => `<option value="${escapeHtml(n)}">${escapeHtml(n)} (${c})</option>`).join('') +
+    (unlabeled ? `<option value="__none__">— No list (${unlabeled})</option>` : '');
+
+  const sel = $('listFilterSel');
+  if(sel){ sel.innerHTML = opts; sel.value = listFilter; }
+
+  const pdSel = $('pdListFilter');
+  if(pdSel){
+    pdSel.innerHTML = '<option value="">Every list</option>' +
+      names.map(([n,c]) => `<option value="${escapeHtml(n)}">${escapeHtml(n)} (${c})</option>`).join('') +
+      (unlabeled ? `<option value="__none__">— No list (${unlabeled})</option>` : '');
+    pdSel.value = pdListFilter;
+  }
+
+  const dl = $('ltListSuggestions');
+  if(dl) dl.innerHTML = names.map(([n]) => `<option value="${escapeHtml(n)}"></option>`).join('');
+}
+
+function setListFilter(v){
+  listFilter = v || '';
+  localStorage.setItem(LS.listFilter, listFilter);
+  page = 1;
+  renderPage();
 }
 let activeCall = null;
 const noteSaveTimers = {};
@@ -2646,6 +2706,7 @@ function renderPage(){
             </div>
           </div>
         <button class="mark-btn${called?' is-called':''}" data-mark data-id="${escapeHtml(p.id)}">${called?'✓ Called — tap to undo':'Mark as called'}</button>
+        <button class="lead-del-btn" data-del-lead data-id="${escapeHtml(p.id)}" data-who="${escapeHtml(p.owners||p.property_address||'this lead')}">🗑 Remove this lead</button>
         <div class="call-info">
           <select class="status-sel" data-status data-id="${escapeHtml(p.id)}">${statusOptions}</select>
           <textarea class="notes-ta" data-notes data-id="${escapeHtml(p.id)}" rows="3" placeholder="Call notes — tap to type…">${escapeHtml(lead.notes||'')}</textarea>
@@ -2692,17 +2753,6 @@ $('hideOthersAssigned').addEventListener('change', e => {
   page = 1;
   renderPage();
 });
-$('hideColorRow')?.addEventListener('click', e => {
-  const dot = e.target.closest('.hc-dot');
-  if(!dot) return;
-  const c = dot.dataset.hc;
-  if(hiddenColors.has(c)) hiddenColors.delete(c); else hiddenColors.add(c);
-  localStorage.setItem(LS.hiddenColors, JSON.stringify([...hiddenColors]));
-  dot.classList.toggle('active', hiddenColors.has(c));
-  page = 1;
-  renderPage();
-});
-
 // ── State filter (shared by main list + power dialer) ───────────
 function populateStateSelect(sel, includeAllLabel){
   if(!sel) return;
@@ -2722,12 +2772,84 @@ function setStateFilter(code){
 populateStateSelect($('stateFilterSel'), 'All states');
 populateStateSelect($('pdStateFilter'), 'All states');
 $('stateFilterSel')?.addEventListener('change', e => setStateFilter(e.target.value));
+$('listFilterSel')?.addEventListener('change', e => setListFilter(e.target.value));
+$('pdListFilter')?.addEventListener('change', e => { pdListFilter = e.target.value; pdUpdateCount(); });
+
+// ── Bulk tools ────────────────────────────────────────────────
+$('listToolsBtn')?.addEventListener('click', () => {
+  const n = getFilteredProperties().length;
+  $('ltCount').textContent = n + ' lead' + (n===1?'':'s') + ' selected by your current filters';
+  $('ltDelCount').textContent = 'all ' + n;
+  $('ltListName').value = listFilter && listFilter !== '__none__' ? listFilter : '';
+  populateListSelects();
+  openModal('listToolsModal');
+});
+
+$('ltSetList')?.addEventListener('click', async () => {
+  const ids = getFilteredProperties().map(p => p.id);
+  if(!ids.length){ toast('No leads selected','err'); return; }
+  const name = $('ltListName').value.trim();
+  const btn = $('ltSetList');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  try {
+    await api('set-list-name', {method:'POST', body:{ ids, listName: name }});
+    // Update in place so the dropdown refreshes without a full reload
+    const idSet = new Set(ids.map(String));
+    properties.forEach(p => { if(idSet.has(String(p.id))) p.list_name = name; });
+    populateListSelects();
+    renderPage();
+    $('listToolsModal').classList.remove('open');
+    toast(name ? ids.length + ' leads saved to "' + name + '"' : 'List cleared off ' + ids.length + ' leads', 'ok');
+  } catch(e){ toast('Could not save: ' + e.message, 'err'); }
+  btn.disabled = false; btn.textContent = '🏷 Save to this list';
+});
+
+$('ltDelete')?.addEventListener('click', async () => {
+  const ids = getFilteredProperties().map(p => p.id);
+  if(!ids.length){ toast('No leads selected','err'); return; }
+  if(!confirm('Delete ' + ids.length + ' lead' + (ids.length===1?'':'s') + ' permanently?\n\nPhone numbers, notes and call history go with them. This cannot be undone.')) return;
+  // Second confirmation for anything big — this is unrecoverable.
+  if(ids.length > 25 && !confirm('That is ' + ids.length + ' leads. Are you certain?')) return;
+  const btn = $('ltDelete');
+  btn.disabled = true; btn.textContent = 'Deleting…';
+  try {
+    const r = await api('delete-properties', {method:'POST', body:{ ids }});
+    const idSet = new Set(ids.map(String));
+    properties = properties.filter(p => !idSet.has(String(p.id)));
+    populateListSelects();
+    page = 1;
+    renderPage();
+    refreshCounter();
+    $('listToolsModal').classList.remove('open');
+    toast((r.deleted || ids.length) + ' leads deleted','ok');
+  } catch(e){ toast('Could not delete: ' + e.message, 'err'); }
+  btn.disabled = false; btn.textContent = '🗑 Delete';
+});
+
+// Single lead removal from its own card
+$('cards')?.addEventListener('click', async e => {
+  const btn = e.target.closest('[data-del-lead]');
+  if(!btn) return;
+  const id = btn.dataset.id;
+  if(!confirm('Remove ' + btn.dataset.who + '?\n\nTheir phone numbers, notes and call history go too. This cannot be undone.')) return;
+  btn.disabled = true; btn.textContent = 'Removing…';
+  try {
+    await api('delete-property', {method:'POST', body:{ id }});
+    properties = properties.filter(p => String(p.id) !== String(id));
+    populateListSelects();
+    renderPage();
+    refreshCounter();
+    toast('Lead removed','ok');
+  } catch(err){
+    btn.disabled = false; btn.textContent = '🗑 Remove this lead';
+    toast('Could not remove: ' + err.message, 'err');
+  }
+});
 $('pdStateFilter')?.addEventListener('change', e => setStateFilter(e.target.value));
 
 // ── Power Dialer ─────────────────────────────────────────────────
 let pdActive    = false;
 let pdIndex     = 0;
-let pdColorFilter = '';
 let pdStageFilter = '';
 let pdActiveSid = null;
 let pdPollTimer = null;
@@ -2780,7 +2902,11 @@ function pdGetList(){
   } else {
     list = list.filter(p => !(p.lead||{}).called);
   }
-  if(pdColorFilter) list = list.filter(p => (p.lead||{}).highlight === pdColorFilter);
+  if(pdListFilter){
+    list = pdListFilter === '__none__'
+      ? list.filter(p => !(p.list_name || '').trim())
+      : list.filter(p => (p.list_name || '') === pdListFilter);
+  }
   return list;
 }
 
@@ -2800,6 +2926,8 @@ $('pdStartBtn').addEventListener('click', () => {
   csel.innerHTML = ownedNumbers.map(n =>
     `<option value="${escapeHtml(n.phoneNumber)}"${n.phoneNumber===activeCallerId?' selected':''}>${escapeHtml(fmtPhone(n.phoneNumber))}</option>`
   ).join('');
+
+  populateListSelects();
 
   // Populate script dropdown
   const ssel = $('pdScriptSel');
@@ -2822,13 +2950,12 @@ $('pdStartBtn').addEventListener('click', () => {
 });
 
 function pdUpdateCount(){
-  pdColorFilter = $('pdColorFilter')?.value || '';
   pdStageFilter = $('pdStageFilter')?.value || '';
+  pdListFilter  = $('pdListFilter')?.value  || '';
   const list = pdGetList();
   $('pdSetupCount').textContent = `${list.length} lead${list.length===1?'':'s'} will be dialed`;
 }
 
-$('pdColorFilter')?.addEventListener('change', pdUpdateCount);
 $('pdStageFilter')?.addEventListener('change', pdUpdateCount);
 
 $('pdSetupCancel').addEventListener('click', () => {
@@ -2843,8 +2970,8 @@ $('pdSetupStart').addEventListener('click', async () => {
   if(!agentPhone || agentPhone.length < 12){ toast('Enter your phone number','err'); return; }
   if(!callerId){ toast('Select a caller ID number','err'); return; }
 
-  pdColorFilter = $('pdColorFilter').value;
   pdStageFilter = $('pdStageFilter')?.value || '';
+  pdListFilter  = $('pdListFilter')?.value  || '';
   const list = pdGetList();
   if(!list.length){ toast('No leads match your selection','err'); return; }
 
@@ -3928,7 +4055,7 @@ $('voiceSettingsSave')?.addEventListener('click', async () => {
 // backend ship as separate files, so it is easy to update one and not the
 // other — which surfaces later as "Unknown action" on a button that looks
 // like it should work.
-const EXPECTED_API_VERSION = '2026-08-20-d';
+const EXPECTED_API_VERSION = '2026-08-21-b';
 async function checkApiVersion(){
   const line = $('apiVersionLine');
   if(!line) return;
@@ -7933,7 +8060,7 @@ async function boot(){
   }
   refreshCallerStrip();
   $('hideOthersAssigned').checked = hideOthersAssigned;
-  document.querySelectorAll('.hc-dot').forEach(d => d.classList.toggle('active', hiddenColors.has(d.dataset.hc)));
+  populateListSelects();
   await Promise.all([
     loadProperties(),
     loadOwnedNumbers().catch(()=>{}),
