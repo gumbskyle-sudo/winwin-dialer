@@ -1308,6 +1308,12 @@ main{max-width:100%}
         </div>
 
         <div class="field" style="border-top:1px solid #e5e7eb;padding-top:14px;margin-top:6px">
+          <label>Leads with no list yet</label>
+          <div style="font-size:11px;color:#6b7280;margin-bottom:8px">Anything imported before lists existed. This sorts them into lists by the day they were uploaded, so each old upload becomes its own list.</div>
+          <button class="btn-ghost" id="ltBackfill" style="width:100%">🗂 Sort old leads into lists by upload date</button>
+        </div>
+
+        <div class="field" style="border-top:1px solid #e5e7eb;padding-top:14px;margin-top:6px">
           <label style="color:#b91c1c">Delete these leads permanently</label>
           <div style="font-size:11px;color:#6b7280;margin-bottom:8px">Removes the leads, their phone numbers, notes and call history. Recordings stay in Twilio. This cannot be undone.</div>
           <button class="btn-ghost" id="ltDelete" style="width:100%;color:#b91c1c;border-color:#fca5a5">🗑 Delete <span id="ltDelCount"></span></button>
@@ -1652,7 +1658,7 @@ main{max-width:100%}
         <div style="margin-bottom:10px">
           <div style="font-size:12px;font-weight:600;color:#374151;margin-bottom:6px">🏷️ List name (optional)</div>
           <input type="text" id="uploadListNameManual" placeholder="e.g. WPB Lux — Aug 2026" style="width:100%;padding:9px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;background:#fff">
-          <div style="font-size:11px;color:#6b7280;margin-top:4px">Used when the file has no list-name column. Lets you filter these leads later.</div>
+          <div style="font-size:11px;color:#6b7280;margin-top:4px">Leave this blank and the list is named after the file you uploaded. Every upload becomes its own list you can dial on its own.</div>
         </div>
         <div id="uploadStats" style="font-size:12px;color:#6b7280;margin-bottom:10px"></div>
         <div style="margin-bottom:12px">
@@ -1962,7 +1968,7 @@ const DEFAULT_WEBSITE = 'winwinproperties.net';
 const companyName = () => localStorage.getItem(LS.company) || DEFAULT_COMPANY;
 const companySite = () => localStorage.getItem(LS.website) || DEFAULT_WEBSITE;
 // Bump this on every deploy so you can see which build is actually live
-const BUILD_ID = 'build 2026-08-21-b';
+const BUILD_ID = 'build 2026-08-21-c';
 const DEFAULT_VM_MESSAGE = "Hi {FirstName}, we are calling from Win Win Properties to give you a quick offer on your property at {Address}. Give us a call back at {CallbackNumber}, or find us online at win win properties dot net. That's W W W dot winwinproperties dot net. Thanks, and have a great day.";
 let backend  = localStorage.getItem(LS.backend) || '/api';
 let password = localStorage.getItem(LS.pwd) || '';
@@ -2802,6 +2808,42 @@ $('ltSetList')?.addEventListener('click', async () => {
     toast(name ? ids.length + ' leads saved to "' + name + '"' : 'List cleared off ' + ids.length + ' leads', 'ok');
   } catch(e){ toast('Could not save: ' + e.message, 'err'); }
   btn.disabled = false; btn.textContent = '🏷 Save to this list';
+});
+
+// Group every unlisted lead by its import date and name each group after
+// that date. Turns historic uploads into dialable lists without guesswork.
+$('ltBackfill')?.addEventListener('click', async () => {
+  const unlisted = properties.filter(p => !(p.list_name || '').trim());
+  if(!unlisted.length){ toast('Every lead already belongs to a list','ok'); return; }
+
+  const groups = new Map();
+  unlisted.forEach(p => {
+    const d = p.imported_at ? new Date(p.imported_at) : null;
+    const key = d && !isNaN(d)
+      ? d.toLocaleDateString(undefined, {month:'short', day:'numeric', year:'numeric'})
+      : 'Unknown date';
+    if(!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(p.id);
+  });
+
+  if(!confirm('Sort ' + unlisted.length + ' leads into ' + groups.size + ' list' +
+     (groups.size===1?'':'s') + ' by upload date?\n\nYou can rename any of them afterwards.')) return;
+
+  const btn = $('ltBackfill');
+  btn.disabled = true; btn.textContent = 'Sorting…';
+  try {
+    for(const [day, ids] of groups){
+      const name = 'Upload — ' + day;
+      await api('set-list-name', {method:'POST', body:{ ids, listName: name }});
+      const idSet = new Set(ids.map(String));
+      properties.forEach(p => { if(idSet.has(String(p.id))) p.list_name = name; });
+    }
+    populateListSelects();
+    renderPage();
+    $('listToolsModal').classList.remove('open');
+    toast(unlisted.length + ' leads sorted into ' + groups.size + ' lists','ok');
+  } catch(e){ toast('Could not sort: ' + e.message, 'err'); }
+  btn.disabled = false; btn.textContent = '🗂 Sort old leads into lists by upload date';
 });
 
 $('ltDelete')?.addEventListener('click', async () => {
@@ -4055,7 +4097,7 @@ $('voiceSettingsSave')?.addEventListener('click', async () => {
 // backend ship as separate files, so it is easy to update one and not the
 // other — which surfaces later as "Unknown action" on a button that looks
 // like it should work.
-const EXPECTED_API_VERSION = '2026-08-21-b';
+const EXPECTED_API_VERSION = '2026-08-21-c';
 async function checkApiVersion(){
   const line = $('apiVersionLine');
   if(!line) return;
@@ -5065,6 +5107,8 @@ function applyTemplate(templateKey){
 
 function showCsvPreview(){
   $('uploadFileName').textContent = csvParsed.fileName + ' · ' + csvParsed.rows.length + ' rows';
+  const ln = $('uploadListNameManual');
+  if(ln) ln.placeholder = csvParsed.fileName.replace(/\.(csv|txt|tsv)$/i, '').replace(/[_]+/g, ' ').trim();
   applyTemplate(currentUploadTemplate);
 }
 function updateUploadStats(){
@@ -5185,7 +5229,14 @@ $('uploadGo').addEventListener('click', async () => {
   const typeCols    = Array.from(document.querySelectorAll('.map-phone-type')).map(s => s.value);
   const dncCols     = Array.from(document.querySelectorAll('.map-phone-dnc')).map(s => s.value);
   const scrubDnc    = $('scrubDnc') ? $('scrubDnc').checked : false;
-  const manualList  = ($('uploadListNameManual')?.value || '').trim();
+  // Each upload becomes a list automatically, named after the file it came
+  // from. The manual box just overrides that name if you want something else.
+  const autoList = (csvParsed?.fileName || '')
+    .replace(/\.(csv|txt|tsv)$/i, '')
+    .replace(/[_]+/g, ' ')
+    .trim()
+    .slice(0, 80);
+  const manualList  = ($('uploadListNameManual')?.value || '').trim() || autoList;
   // Stamp the format onto every lead so the dialer card knows which view to render
   const baseKey = currentUploadTemplate === '__extended__'
     ? (UPLOAD_TEMPLATES['__extended__']?.__base || 'custom') : currentUploadTemplate;
