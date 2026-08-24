@@ -653,6 +653,12 @@ body.view-pipeline header .callerid{display:none}
 .hl-dot.active{box-shadow:0 0 0 2px #111827;transform:scale(1.12)}
 .hl-dot.hl-clear{background:#fff}
 .filter-lbl{font-size:11px;color:#6b7280;font-weight:600;margin-right:2px}
+.social-chips{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.social-chip{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;
+  border-radius:50%;color:#fff;font-size:14px;font-weight:800;text-decoration:none;line-height:1;
+  flex-shrink:0;-webkit-tap-highlight-color:transparent}
+.social-chip:active{opacity:.75}
+.buyer-row .social-chips{margin-top:6px}
 .lead-buyer-btn{width:100%;margin-top:6px;padding:8px;border:1px solid #D4AF37;border-radius:8px;
   background:#fffdf5;color:#96751A;font-size:12px;font-weight:700;font-family:inherit;cursor:pointer}
 .lead-buyer-btn:active{background:#fdf6e3}
@@ -1971,7 +1977,7 @@ const DEFAULT_WEBSITE = 'winwinproperties.net';
 const companyName = () => localStorage.getItem(LS.company) || DEFAULT_COMPANY;
 const companySite = () => localStorage.getItem(LS.website) || DEFAULT_WEBSITE;
 // Bump this on every deploy so you can see which build is actually live
-const BUILD_ID = 'build 2026-08-21-d';
+const BUILD_ID = 'build 2026-08-22-a';
 const DEFAULT_VM_MESSAGE = "Hi {FirstName}, we are calling from Win Win Properties to give you a quick offer on your property at {Address}. Give us a call back at {CallbackNumber}, or find us online at win win properties dot net. That's W W W dot winwinproperties dot net. Thanks, and have a great day.";
 let backend  = localStorage.getItem(LS.backend) || '/api';
 let password = localStorage.getItem(LS.pwd) || '';
@@ -4140,7 +4146,7 @@ $('voiceSettingsSave')?.addEventListener('click', async () => {
 // backend ship as separate files, so it is easy to update one and not the
 // other — which surfaces later as "Unknown action" on a button that looks
 // like it should work.
-const EXPECTED_API_VERSION = '2026-08-21-d';
+const EXPECTED_API_VERSION = '2026-08-22-a';
 async function checkApiVersion(){
   const line = $('apiVersionLine');
   if(!line) return;
@@ -7661,6 +7667,7 @@ function renderBuyers(){
           ${b.funding_proof_on_file?`<span class="pill" style="background:#dcfce7;color:#166534">✓ POF on file</span>`:''}
         </div>
       </div>
+      <div class="buyer-links"></div>
       <div class="buyer-stats">
         <span class="big">${b.deals_sent || 0}</span>
         sent
@@ -7669,6 +7676,14 @@ function renderBuyers(){
         <button data-send-one="${b.id}" title="Send a deal to this buyer">📧 Send deal</button>
       </div>
     </div>`);
+    // Links live outside [data-edit] so tapping a logo opens the site
+    // instead of the edit form.
+    const links = row.querySelector('.buyer-links');
+    const chips = socialChipsHtml(b.social_links, b.website);
+    if(chips){
+      links.innerHTML = `<div class="social-chips">${chips}</div>`;
+      links.addEventListener('click', e => e.stopPropagation());
+    }
     row.querySelector('[data-edit]').addEventListener('click', () => openBuyerForm(b));
     row.querySelector('[data-select]').addEventListener('change', e => {
       e.stopPropagation();
@@ -7704,6 +7719,51 @@ $('buyersBlastSelected').addEventListener('click', () => {
 
 $('buyersAddNew').addEventListener('click', () => openBuyerForm(null));
 
+// A pasted link is usually missing its scheme. Add one, and reject
+// anything that still doesn't parse — no dead chips on the buyer row.
+function normalizeUrl(raw){
+  let u = String(raw || '').trim();
+  if(!u) return '';
+  if(!/^https?:\/\//i.test(u)) u = 'https://' + u.replace(/^\/+/, '');
+  try {
+    const parsed = new URL(u);
+    if(!parsed.hostname.includes('.')) return '';
+    return parsed.href;
+  } catch { return ''; }
+}
+
+// Brand-coloured badges, matched on hostname.
+const SOCIAL_BRANDS = [
+  {key:'linkedin',  test:/(^|\.)linkedin\.com$/i,               label:'in', bg:'#0A66C2', name:'LinkedIn'},
+  {key:'facebook',  test:/(^|\.)(facebook\.com|fb\.com)$/i,      label:'f',  bg:'#1877F2', name:'Facebook'},
+  {key:'instagram', test:/(^|\.)instagram\.com$/i,              label:'◎',  bg:'#C13584', name:'Instagram'},
+  {key:'x',         test:/(^|\.)(twitter\.com|x\.com)$/i,        label:'𝕏',  bg:'#0f0d0a', name:'X'},
+  {key:'youtube',   test:/(^|\.)(youtube\.com|youtu\.be)$/i,     label:'▶',  bg:'#FF0000', name:'YouTube'},
+  {key:'tiktok',    test:/(^|\.)tiktok\.com$/i,                 label:'♪',  bg:'#010101', name:'TikTok'},
+  {key:'zillow',    test:/(^|\.)zillow\.com$/i,                 label:'Z',  bg:'#006AFF', name:'Zillow'},
+  {key:'biggerp',   test:/(^|\.)biggerpockets\.com$/i,          label:'BP', bg:'#1F6F3D', name:'BiggerPockets'},
+];
+
+function socialChipsHtml(socialText, website){
+  const chips = [];
+  const site = normalizeUrl(website);
+  if(site){
+    chips.push(`<a class="social-chip" href="${escapeHtml(site)}" target="_blank" rel="noopener"
+      style="background:#96751A" title="${escapeHtml(site)}">🌐</a>`);
+  }
+  String(socialText || '').split('\n').forEach(line => {
+    const url = normalizeUrl(line);
+    if(!url) return;
+    let host = '';
+    try { host = new URL(url).hostname.replace(/^www\./i, ''); } catch { return; }
+    const brand = SOCIAL_BRANDS.find(b => b.test.test(host));
+    chips.push(`<a class="social-chip" href="${escapeHtml(url)}" target="_blank" rel="noopener"
+      style="background:${brand ? brand.bg : '#6b7280'}"
+      title="${escapeHtml(brand ? brand.name + ' — ' + url : url)}">${escapeHtml(brand ? brand.label : '🔗')}</a>`);
+  });
+  return chips.join('');
+}
+
 function openBuyerForm(buyer, prefill){
   // prefill = the values came off a lead card, so this is still a NEW buyer
   // even though the form arrives with fields already filled in.
@@ -7735,6 +7795,13 @@ function openBuyerForm(buyer, prefill){
         </select>
       </div>
       <div class="full"><label>Preferred areas (zips, neighborhoods)</label><input type="text" id="bfAreas" value="${escapeHtml(b.preferred_areas||'')}" placeholder="30315, 30318, East Atlanta, West End"></div>
+      <div class="full"><label>Website</label><input type="url" id="bfWebsite" value="${escapeHtml(b.website||'')}" placeholder="acmebuilders.com"></div>
+      <div class="full">
+        <label>Social media links (one per line)</label>
+        <textarea id="bfSocials" rows="3" placeholder="linkedin.com/in/janedoe&#10;instagram.com/acmebuilders&#10;facebook.com/acmebuilders">${escapeHtml(b.social_links||'')}</textarea>
+        <div id="bfSocialPreview" class="social-chips" style="margin-top:7px"></div>
+        <div style="font-size:11px;color:#6b7280;margin-top:4px">Paste any profile links. Recognised ones turn into tappable logos on the buyer's row. https:// is added for you.</div>
+      </div>
       <div><label>Rating (0-5 ★)</label>
         <select id="bfRating">
           ${[0,1,2,3,4,5].map(n => `<option value="${n}"${b.rating===n?' selected':''}>${n} ${'★'.repeat(n)}${'☆'.repeat(5-n)}</option>`).join('')}
@@ -7767,6 +7834,14 @@ function openBuyerForm(buyer, prefill){
     (first || $('bfName')).focus();
   }, 50);
 
+  const renderSocialPreview = () => {
+    const html = socialChipsHtml($('bfSocials').value, $('bfWebsite').value);
+    $('bfSocialPreview').innerHTML = html || '<span style="font-size:11px;color:#9ca3af">No links yet</span>';
+  };
+  $('bfSocials').addEventListener('input', renderSocialPreview);
+  $('bfWebsite').addEventListener('input', renderSocialPreview);
+  renderSocialPreview();
+
   $('bfCancel').addEventListener('click', () => { holder.innerHTML = ''; editingBuyerId = null; });
   $('bfSave').addEventListener('click', saveBuyer);
   if(isEdit){
@@ -7792,6 +7867,8 @@ async function saveBuyer(){
     phone: $('bfPhone').value.trim(),
     city: $('bfCity').value.trim(),
     state: $('bfState').value.trim().toUpperCase(),
+    website: normalizeUrl($('bfWebsite').value.trim()),
+    socialLinks: $('bfSocials').value.split('\n').map(x => normalizeUrl(x.trim())).filter(Boolean).join('\n'),
     buyBox: $('bfBuyBox').value.trim(),
     minPrice: $('bfMinPrice').value,
     maxPrice: $('bfMaxPrice').value,
