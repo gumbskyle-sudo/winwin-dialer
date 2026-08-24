@@ -173,18 +173,6 @@ body.hide-called .card.called{display:none}
 .pd-now-state.live{background:#065f46;color:#d1fae5}
 .pd-now-state.vm{background:#b91c1c;color:#fff}
 .pd-now-state.ringing{background:#78350f;color:#fde68a}
-.pd-lines{display:grid;gap:6px;margin-top:9px}
-.pd-line{display:grid;grid-template-columns:28px 1fr auto;gap:8px;align-items:center;background:#292524;border:1px solid #44403c;border-radius:8px;padding:8px 9px;color:#e7e5e4}
-.pd-line-num{width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:#44403c;font-size:11px;font-weight:800}
-.pd-line-main{min-width:0}
-.pd-line-name{font-size:12px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.pd-line-phone{font-size:10px;color:#a8a29e;font-family:ui-monospace,monospace}
-.pd-line-state{font-size:10px;font-weight:800;padding:3px 7px;border-radius:99px;background:#44403c;color:#e7e5e4;white-space:nowrap}
-.pd-line-state.ringing{background:#78350f;color:#fde68a}
-.pd-line-state.live{background:#065f46;color:#d1fae5}
-.pd-line-state.vm{background:#7f1d1d;color:#fee2e2}
-.pd-line-state.done{background:#374151;color:#d1d5db}
-.pd-line.winner{border-color:#D4AF37;box-shadow:0 0 0 2px rgba(212,175,55,.18)}
 
 /* Paused */
 .pd-paused-note{margin-top:8px;padding:7px 10px;background:#78350f;color:#fde68a;border-radius:7px;font-size:12px;font-weight:600;text-align:center}
@@ -665,6 +653,9 @@ body.view-pipeline header .callerid{display:none}
 .hl-dot.active{box-shadow:0 0 0 2px #111827;transform:scale(1.12)}
 .hl-dot.hl-clear{background:#fff}
 .filter-lbl{font-size:11px;color:#6b7280;font-weight:600;margin-right:2px}
+.lead-buyer-btn{width:100%;margin-top:6px;padding:8px;border:1px solid #D4AF37;border-radius:8px;
+  background:#fffdf5;color:#96751A;font-size:12px;font-weight:700;font-family:inherit;cursor:pointer}
+.lead-buyer-btn:active{background:#fdf6e3}
 .lead-del-btn{width:100%;margin-top:6px;padding:8px;border:1px solid #fca5a5;border-radius:8px;
   background:#fff;color:#b91c1c;font-size:12px;font-weight:700;font-family:inherit;cursor:pointer}
 .lead-del-btn:active{background:#fef2f2}
@@ -1183,7 +1174,6 @@ main{max-width:100%}
         <span class="pd-now-phone" id="pdNowPhone"></span>
         <span class="pd-now-state" id="pdNowState">Dialing…</span>
       </div>
-      <div id="pdBatchLines" class="pd-lines hide"></div>
     </div>
     <div id="pdPausedNote" class="pd-paused-note hide">
       Paused — finishing this lead, then holding. Your line stays open.
@@ -1241,16 +1231,6 @@ main{max-width:100%}
       <label>Script for this session</label>
       <select id="pdScriptSel"></select>
       <div style="font-size:11px;color:#6b7280;margin-top:4px">Opens automatically on every connect, pre-filled with that lead's name and property. You can still switch scripts mid-call.</div>
-    </div>
-
-    <div class="pd-setup-field">
-      <label>Dialing mode</label>
-      <select id="pdLineCount">
-        <option value="1">1 line — Standard power dial</option>
-        <option value="2">2 lines — Double dial</option>
-        <option value="3" selected>3 lines — Triple dial</option>
-      </select>
-      <div style="font-size:11px;color:#6b7280;margin-top:4px">Double/triple mode rings leads simultaneously. The first confirmed human is connected to you; the other ringing calls are canceled.</div>
     </div>
 
     <div class="pd-setup-field">
@@ -1991,7 +1971,7 @@ const DEFAULT_WEBSITE = 'winwinproperties.net';
 const companyName = () => localStorage.getItem(LS.company) || DEFAULT_COMPANY;
 const companySite = () => localStorage.getItem(LS.website) || DEFAULT_WEBSITE;
 // Bump this on every deploy so you can see which build is actually live
-const BUILD_ID = 'build 2026-08-21-triple-dial';
+const BUILD_ID = 'build 2026-08-21-d';
 const DEFAULT_VM_MESSAGE = "Hi {FirstName}, we are calling from Win Win Properties to give you a quick offer on your property at {Address}. Give us a call back at {CallbackNumber}, or find us online at win win properties dot net. That's W W W dot winwinproperties dot net. Thanks, and have a great day.";
 let backend  = localStorage.getItem(LS.backend) || '/api';
 let password = localStorage.getItem(LS.pwd) || '';
@@ -2735,6 +2715,7 @@ function renderPage(){
             </div>
           </div>
         <button class="mark-btn${called?' is-called':''}" data-mark data-id="${escapeHtml(p.id)}">${called?'✓ Called — tap to undo':'Mark as called'}</button>
+        <button class="lead-buyer-btn" data-add-buyer data-id="${escapeHtml(p.id)}">🤝 Add to buyers</button>
         <button class="lead-del-btn" data-del-lead data-id="${escapeHtml(p.id)}" data-who="${escapeHtml(p.owners||p.property_address||'this lead')}">🗑 Remove this lead</button>
         <div class="call-info">
           <select class="status-sel" data-status data-id="${escapeHtml(p.id)}">${statusOptions}</select>
@@ -2891,6 +2872,45 @@ $('ltDelete')?.addEventListener('click', async () => {
   btn.disabled = false; btn.textContent = '🗑 Delete';
 });
 
+// ── Lead → buyer ──────────────────────────────────────────────
+// Someone on a cold call turns out to be an investor. Carry what we
+// already know across to the Buyers screen instead of retyping it.
+$('cards')?.addEventListener('click', e => {
+  const btn = e.target.closest('[data-add-buyer]');
+  if(!btn) return;
+  const p = properties.find(x => String(x.id) === String(btn.dataset.id));
+  if(!p){ toast('Could not find that lead','err'); return; }
+
+  const addr = p.property_address || '';
+  // "123 MAIN ST, DES MOINES, IA 50317" → city is the piece before the state
+  const parts = addr.split(',').map(x => x.trim()).filter(Boolean);
+  const state = extractState(addr);
+  let city = '';
+  if(parts.length >= 2){
+    const cand = parts[parts.length - 2];
+    city = /^[A-Za-z]{2}\b/.test(cand) && cand.length <= 3 ? (parts[parts.length - 3] || '') : cand;
+    if(state && new RegExp('^' + state + '\\b', 'i').test(city)) city = parts[parts.length - 3] || '';
+  }
+  const phone = (p.phones && p.phones[0] && p.phones[0].e164) || '';
+  const lead = p.lead || {};
+  const noteBits = [
+    addr ? 'Came in as a seller lead on ' + addr : '',
+    lead.notes ? String(lead.notes).trim() : '',
+  ].filter(Boolean);
+
+  switchView('buyers');
+  openBuyerForm({
+    name: p.owners || '',
+    phone: phone ? fmtPhone(phone) : '',
+    email: p.email || '',
+    city, state,
+    notes: noteBits.join('\n\n'),
+    active: true,
+    rating: 0,
+  }, true);
+  setTimeout(() => $('buyerFormHolder')?.scrollIntoView({behavior:'smooth', block:'start'}), 120);
+});
+
 // Single lead removal from its own card
 $('cards')?.addEventListener('click', async e => {
   const btn = e.target.closest('[data-del-lead]');
@@ -2939,13 +2959,6 @@ let pdPaused    = false;
 let pdAutoVm    = localStorage.getItem('cb_vm_auto') !== '0';
 let pdVmDropped = false;   // one drop per lead, never two
 let pdVmDropping = false;
-// Multi-line power dialing state. Single-line mode keeps the original path.
-let pdLineCount = parseInt(localStorage.getItem('cb_pd_lines') || '3', 10) || 3;
-let pdBatchCalls = [];
-let pdBatchIds = [];
-let pdBatchPollTimer = null;
-let pdBatchWinnerSid = null;
-let pdBatchVmBusy = new Set();
 
 // ── Now-dialing panel ─────────────────────────────────────────
 function pdShowNow(p, phone){
@@ -3007,9 +3020,6 @@ $('pdStartBtn').addEventListener('click', () => {
     `<option value="${escapeHtml(k)}"${k===activeScriptKey?' selected':''}>${escapeHtml(v.name)}</option>`
   ).join('');
 
-  // Multi-line selector (defaults to triple dial)
-  if($('pdLineCount')) $('pdLineCount').value = String(Math.max(1, Math.min(3, pdLineCount)));
-
   // Auto-voicemail toggle (defaults on)
   if($('pdAutoVm')) $('pdAutoVm').value = (localStorage.getItem(LS.vmAuto) === '0') ? '0' : '1';
 
@@ -3028,12 +3038,10 @@ function pdUpdateCount(){
   pdStageFilter = $('pdStageFilter')?.value || '';
   pdListFilter  = $('pdListFilter')?.value  || '';
   const list = pdGetList();
-  const lines = parseInt($('pdLineCount')?.value || pdLineCount || '1', 10) || 1;
-  $('pdSetupCount').textContent = `${list.length} lead${list.length===1?'':'s'} will be dialed · ${lines} line${lines===1?'':'s'} at a time`;
+  $('pdSetupCount').textContent = `${list.length} lead${list.length===1?'':'s'} will be dialed`;
 }
 
 $('pdStageFilter')?.addEventListener('change', pdUpdateCount);
-$('pdLineCount')?.addEventListener('change', pdUpdateCount);
 
 $('pdSetupCancel').addEventListener('click', () => {
   $('pdSetupScreen').classList.add('hide');
@@ -3075,9 +3083,7 @@ $('pdSetupStart').addEventListener('click', async () => {
   // Freeze the queue. pdGetList() shrinks as leads get marked called,
   // so an index into the live list skips a lead after every call.
   pdQueue   = list.map(p => p.id);
-  pdLineCount = Math.max(1, Math.min(3, parseInt($('pdLineCount')?.value || '1', 10) || 1));
-  localStorage.setItem('cb_pd_lines', String(pdLineCount));
-  pdSession = { callerId, agentPhone, profileId, lineCount: pdLineCount };
+  pdSession = { callerId, agentPhone, profileId };
   pdWrapSecs = parseInt($('pdWrapSecs')?.value ?? '10', 10);
   pdActive  = true;
   pdIndex   = 0;
@@ -3111,108 +3117,10 @@ $('pdSetupStart').addEventListener('click', async () => {
     $('pdCounter').textContent = `Starting in ${Math.max(0, 15 - waited)}s — answer your phone`;
     if(waited >= 15){
       clearInterval(warm);
-      if(pdLineCount > 1) pdDialBatch(0, callerId, agentPhone, profileId);
-      else pdDialNext(pdQueue[0], callerId, agentPhone, profileId);
+      pdDialNext(pdQueue[0], callerId, agentPhone, profileId);
     }
   }, 1000);
 });
-
-// ── Double / triple-line batch dialing ───────────────────────────
-function pdRenderBatchLines(){
-  const box = $('pdBatchLines');
-  if(!box) return;
-  if(pdLineCount <= 1 || !pdBatchCalls.length){ box.classList.add('hide'); box.innerHTML=''; return; }
-  box.classList.remove('hide');
-  box.innerHTML = pdBatchCalls.map((c,i) => {
-    const cls = c.sid && c.sid === pdBatchWinnerSid ? ' winner' : '';
-    const stateCls = c.stateCls || (c.terminal ? 'done' : 'ringing');
-    return `<div class="pd-line${cls}"><span class="pd-line-num">${i+1}</span><span class="pd-line-main"><div class="pd-line-name">${escapeHtml(c.sellerName||'Unknown owner')}</div><div class="pd-line-phone">${escapeHtml(fmtPhone(c.sellerPhone||''))}</div></span><span class="pd-line-state ${stateCls}">${escapeHtml(c.state||'Dialing')}</span></div>`;
-  }).join('');
-}
-function pdMarkBatchCards(){
-  document.querySelectorAll('.card.pd-active').forEach(c => c.classList.remove('pd-active'));
-  pdBatchIds.forEach(id => { const card=document.querySelector(`[data-card-id="${CSS.escape(id)}"]`); if(card) card.classList.add('pd-active'); });
-}
-async function pdDialBatch(startIndex, callerId, agentPhone, profileId){
-  if(!pdActive) return;
-  pdHideWrapUp(); clearTimeout(pdPollTimer); clearTimeout(pdBatchPollTimer);
-  pdBatchWinnerSid=null; pdBatchCalls=[]; pdBatchVmBusy.clear();
-  pdBatchIds=pdQueue.slice(startIndex,startIndex+pdLineCount);
-  if(!pdBatchIds.length){ toast('All leads dialed! 🎉','ok'); pdStop(); return; }
-  const batch=pdBatchIds.map(id=>properties.find(x=>x.id===id)).filter(Boolean);
-  const callable=batch.filter(p=>p.phones?.[0]?.e164);
-  if(!callable.length){
-    batch.forEach(p=>{p.lead=p.lead||{};p.lead.called=true;api('update-lead',{method:'POST',body:{propertyId:p.id,called:true}}).catch(()=>{});});
-    pdStartWrapUp(batch[0]||null); return;
-  }
-  $('pdNowDialing')?.classList.remove('hide');
-  $('pdNowName').textContent=`${callable.length}-line dial in progress`;
-  $('pdNowAddr').textContent='First human answer wins'; $('pdNowPhone').textContent='';
-  pdSetState(`${callable.length} lines active`,'ringing');
-  $('pdCounter').textContent=`Leads ${startIndex+1}–${Math.min(startIndex+pdBatchIds.length,pdQueue.length)} of ${pdQueue.length} · ${callable.length} lines`;
-  if(currentView!=='dialer') switchView('dialer'); setTimeout(pdMarkBatchCards,100);
-  try{
-    const r=await api('power-dial-batch',{method:'POST',body:{from:callerId,conference:pdConf,profileId,leads:callable.map(p=>({to:p.phones[0].e164,propertyId:p.id,sellerName:p.owners||'Unknown owner'}))}});
-    pdBatchCalls=(r.calls||[]).map(c=>({...c,state:c.status==='failed'?'Failed':'Ringing',stateCls:c.status==='failed'?'done':'ringing',terminal:c.status==='failed'}));
-    pdActiveSid=null; pdRenderBatchLines(); pdPollBatch();
-  }catch(e){ toast('Batch dial failed: '+e.message,'err'); setTimeout(()=>pdStartWrapUp(batch[0]||null),1200); }
-}
-async function pdBatchAutoDrop(c){
-  if(!c?.sid||pdBatchVmBusy.has(c.sid)||c.vmDropped) return;
-  pdBatchVmBusy.add(c.sid); c.state='Dropping VM…'; c.stateCls='vm'; pdRenderBatchLines();
-  const p=properties.find(x=>x.id===c.propertyId);
-  try{
-    await api('drop-voicemail',{method:'POST',body:{sid:c.sid,profileId:(pdSession&&pdSession.profileId)||activeProfileId,message:buildVmMessage(p),voice:localStorage.getItem(LS.vmVoice)||'Polly.Ruth-Generative',forceTts:(localStorage.getItem(LS.vmMode)||'ai')==='ai',direct:true}});
-    c.vmDropped=true; c.state='VM dropped'; c.stateCls='vm';
-    if(p){p.lead=p.lead||{};p.lead.lead_status='voicemail';api('update-lead',{method:'POST',body:{propertyId:p.id,leadStatus:'voicemail'}}).catch(()=>{});}
-  }catch(e){c.state='VM failed';c.stateCls='done';}
-  finally{pdBatchVmBusy.delete(c.sid);api('end-call',{method:'POST',body:{sid:c.sid}}).catch(()=>{});pdRenderBatchLines();}
-}
-async function pdPromoteWinner(c){
-  if(!c?.sid||pdBatchWinnerSid) return;
-  pdBatchWinnerSid=c.sid; pdActiveSid=c.sid; c.state='Connecting'; c.stateCls='live'; pdRenderBatchLines();
-  const losers=pdBatchCalls.filter(x=>x.sid&&x.sid!==c.sid&&!x.vmDropped).map(x=>x.sid);
-  if(losers.length) api('power-dial-cancel-many',{method:'POST',body:{sids:losers,keepSid:c.sid}}).catch(()=>{});
-  try{ await api('power-dial-promote',{method:'POST',body:{sid:c.sid,conference:pdConf}}); }
-  catch(e){ toast('Could not connect winning call: '+e.message,'err'); api('end-call',{method:'POST',body:{sid:c.sid}}).catch(()=>{}); return; }
-  const p=properties.find(x=>x.id===c.propertyId);
-  $('pdNowName').textContent=p?.owners||c.sellerName||'Live seller'; $('pdNowAddr').textContent=p?.property_address||''; $('pdNowPhone').textContent=fmtPhone(c.sellerPhone||''); pdSetState('Live — human answered','live');
-  pdMarkBatchCards(); document.querySelectorAll('.card.pd-active').forEach(card=>{if(card.dataset.cardId!==String(c.propertyId))card.classList.remove('pd-active');});
-  if(activeCall&&activeCall.tickTimer)clearInterval(activeCall.tickTimer);
-  activeCall={sid:c.sid,btn:null,propertyId:c.propertyId,phidx:0,startedAt:Date.now()};
-  showDrawer({name:p?.owners||c.sellerName,num:c.sellerPhone,state:'Connected',from:fmtPhone(pdSession?.callerId||''),addr:p?.property_address,prop:p},false);
-  activeCall.tickTimer=setInterval(updateDrawerTimer,1000);
-}
-function pdFinishBatch(){
-  if(!pdActive)return; clearTimeout(pdBatchPollTimer);
-  const winner=pdBatchCalls.find(c=>c.sid===pdBatchWinnerSid); const winnerP=winner?properties.find(x=>x.id===winner.propertyId):null; const firstP=properties.find(x=>x.id===pdBatchIds[0]);
-  pdBatchIds.forEach(id=>{const p=properties.find(x=>x.id===id);if(p){p.lead=p.lead||{};p.lead.called=true;api('update-lead',{method:'POST',body:{propertyId:p.id,called:true}}).catch(()=>{});}});
-  if(activeCall&&winner&&activeCall.sid===winner.sid)finishCall('Ended',false); pdActiveSid=null; renderPage();refreshCounter(); pdStartWrapUp(winnerP||firstP||null);
-}
-function pdPollBatch(){
-  if(!pdActive||pdLineCount<=1)return; clearTimeout(pdBatchPollTimer);
-  pdBatchPollTimer=setTimeout(async()=>{
-    if(!pdActive)return;
-    try{
-      await Promise.all(pdBatchCalls.map(async c=>{
-        if(!c.sid||c.terminal)return; let r; try{r=await api(`call-status&sid=${encodeURIComponent(c.sid)}`);}catch(e){return;}
-        if(r.isHuman&&!pdBatchWinnerSid){c.state='Human';c.stateCls='live';await pdPromoteWinner(c);}
-        else if(r.isMachine){
-          c.state=c.vmDropped?'VM dropped':'Voicemail';c.stateCls='vm';
-          if(pdAutoVm&&!pdBatchWinnerSid&&!c.vmDropped) pdBatchAutoDrop(c);
-          else if(!pdAutoVm&&!c.vmDropped){ c.terminal=true; api('end-call',{method:'POST',body:{sid:c.sid}}).catch(()=>{}); }
-        }
-        else if(['ringing','queued','initiated'].includes(r.status)){c.state='Ringing';c.stateCls='ringing';}
-        else if(r.status==='in-progress'){c.state=c.sid===pdBatchWinnerSid?'Live':'Answered';c.stateCls=c.sid===pdBatchWinnerSid?'live':'ringing';}
-        if(['completed','failed','busy','no-answer','canceled'].includes(r.status)){c.terminal=true;c.state=c.sid===pdBatchWinnerSid?'Ended':(c.vmDropped?'VM dropped':(r.status||'ended').replace('-',' '));c.stateCls=c.vmDropped?'vm':'done';}
-      }));
-      pdRenderBatchLines(); const winner=pdBatchCalls.find(c=>c.sid===pdBatchWinnerSid);
-      if(winner){if(winner.terminal){pdFinishBatch();return;}}
-      else if(pdBatchCalls.length&&pdBatchCalls.every(c=>c.terminal||c.vmDropped)){if(pdBatchVmBusy.size){pdPollBatch();return;}pdFinishBatch();return;}
-    }catch(e){}
-    pdPollBatch();
-  },1400);
-}
 
 // Dial one lead by property ID. The queue holds IDs rather than
 // objects so a re-render or reload can't leave us on a stale copy.
@@ -3352,8 +3260,7 @@ function pdPollForCompletion(sid, propertyId){
 // you'd tapped the dropdown the next call was already ringing.
 function pdStartWrapUp(p){
   if(!pdActive) return;
-  const consumed = pdLineCount > 1 ? Math.max(1, pdBatchIds.length) : 1;
-  const atEnd = pdIndex + consumed >= pdQueue.length;
+  const atEnd = pdIndex + 1 >= pdQueue.length;
   if(atEnd){ toast('All leads dialed! 🎉','ok'); pdStop(); return; }
 
   // No pause configured — go straight on, with a beat to let the
@@ -3414,16 +3321,16 @@ $('pdWrapHold')?.addEventListener('click', () => {
 function pdAdvance(){
   if(!pdActive || !pdSession) return;
   pdHideWrapUp();
-  const consumed = pdLineCount > 1 ? Math.max(1, pdBatchIds.length) : 1;
+  // Paused — stop here rather than dialing the next lead. The agent's
+  // conference leg is untouched, so Resume picks up without re-ringing.
   if(pdPaused){
     pdHideNow();
-    $('pdCounter').textContent = `Paused at lead ${Math.min(pdIndex+consumed+1,pdQueue.length)} of ${pdQueue.length}`;
+    $('pdCounter').textContent = `Paused at lead ${pdIndex+1} of ${pdQueue.length}`;
     return;
   }
-  pdIndex += consumed;
+  pdIndex++;
   if(pdIndex >= pdQueue.length){ toast('All leads dialed! 🎉','ok'); pdStop(); return; }
-  if(pdLineCount > 1) pdDialBatch(pdIndex, pdSession.callerId, pdSession.agentPhone, pdSession.profileId);
-  else pdDialNext(pdQueue[pdIndex], pdSession.callerId, pdSession.agentPhone, pdSession.profileId);
+  pdDialNext(pdQueue[pdIndex], pdSession.callerId, pdSession.agentPhone, pdSession.profileId);
 }
 
 // ── Pause / Resume ────────────────────────────────────────────
@@ -3447,12 +3354,10 @@ $('pdPause')?.addEventListener('click', () => {
     pdSetPaused(false);
     // Resume from wherever we stopped. If a call is still live, let it
     // finish on its own; the poller will advance when it ends.
-    if(!pdActiveSid && !(pdLineCount>1 && pdBatchCalls.some(c => c.sid && !c.terminal))){
-      const consumed = pdLineCount > 1 ? Math.max(1, pdBatchIds.length) : 1;
-      pdIndex += consumed;
+    if(!pdActiveSid){
+      pdIndex++;
       if(pdIndex >= pdQueue.length){ toast('All leads dialed! 🎉','ok'); pdStop(); return; }
-      if(pdLineCount > 1) pdDialBatch(pdIndex, pdSession.callerId, pdSession.agentPhone, pdSession.profileId);
-      else pdDialNext(pdQueue[pdIndex], pdSession.callerId, pdSession.agentPhone, pdSession.profileId);
+      pdDialNext(pdQueue[pdIndex], pdSession.callerId, pdSession.agentPhone, pdSession.profileId);
     }
   } else {
     pdSetPaused(true);
@@ -3466,11 +3371,8 @@ function pdStop(){
   pdHideNow();
   if(activeCall) finishCall('Session ended', false);
   closeScriptPanel();
-  clearTimeout(pdPollTimer); clearTimeout(pdBatchPollTimer);
+  clearTimeout(pdPollTimer);
   pdHideWrapUp();
-  if(pdBatchCalls.length) api('power-dial-cancel-many',{method:'POST',body:{sids:pdBatchCalls.map(c=>c.sid).filter(Boolean)}}).catch(()=>{});
-  pdBatchCalls=[]; pdBatchIds=[]; pdBatchWinnerSid=null; pdBatchVmBusy.clear();
-  $('pdBatchLines')?.classList.add('hide'); if($('pdBatchLines')) $('pdBatchLines').innerHTML='';
   // Drop the seller's leg, then the agent's — otherwise the agent sits
   // in a silent conference after the session bar disappears.
   if(pdActiveSid) api('end-call', {method:'POST', body:{sid:pdActiveSid}}).catch(()=>{});
@@ -3490,19 +3392,23 @@ function pdStop(){
 $('pdStop').addEventListener('click', pdStop);
 $('pdSkip').addEventListener('click', () => {
   if(!pdActive) return;
-  clearTimeout(pdPollTimer); clearTimeout(pdBatchPollTimer);
-  if(pdLineCount>1 && pdBatchCalls.length){ api('power-dial-cancel-many',{method:'POST',body:{sids:pdBatchCalls.map(c=>c.sid).filter(Boolean)}}).catch(()=>{}); pdBatchCalls.forEach(c=>c.terminal=true); }
-  else if(pdActiveSid){ api('end-call', {method:'POST', body:{sid:pdActiveSid}}).catch(()=>{}); pdActiveSid = null; }
+  clearTimeout(pdPollTimer);
+  if(pdActiveSid){
+    api('end-call', {method:'POST', body:{sid:pdActiveSid}}).catch(()=>{});
+    pdActiveSid = null;
+  }
   pdAdvance();
 });
 $('pdPrev').addEventListener('click', () => {
   if(!pdActive || !pdSession) return;
-  clearTimeout(pdPollTimer); clearTimeout(pdBatchPollTimer); pdHideWrapUp();
-  if(pdLineCount>1 && pdBatchCalls.length) api('power-dial-cancel-many',{method:'POST',body:{sids:pdBatchCalls.map(c=>c.sid).filter(Boolean)}}).catch(()=>{});
-  else if(pdActiveSid){ api('end-call', {method:'POST', body:{sid:pdActiveSid}}).catch(()=>{}); pdActiveSid = null; }
-  pdIndex = Math.max(0, pdIndex - (pdLineCount>1 ? pdLineCount : 1));
-  if(pdLineCount>1) pdDialBatch(pdIndex, pdSession.callerId, pdSession.agentPhone, pdSession.profileId);
-  else pdDialNext(pdQueue[pdIndex], pdSession.callerId, pdSession.agentPhone, pdSession.profileId);
+  clearTimeout(pdPollTimer);
+  pdHideWrapUp();
+  if(pdActiveSid){
+    api('end-call', {method:'POST', body:{sid:pdActiveSid}}).catch(()=>{});
+    pdActiveSid = null;
+  }
+  pdIndex = Math.max(0, pdIndex - 1);
+  pdDialNext(pdQueue[pdIndex], pdSession.callerId, pdSession.agentPhone, pdSession.profileId);
 });
 
 // ── Search bar ────────────────────────────────────────────────
@@ -4234,7 +4140,7 @@ $('voiceSettingsSave')?.addEventListener('click', async () => {
 // backend ship as separate files, so it is easy to update one and not the
 // other — which surfaces later as "Unknown action" on a button that looks
 // like it should work.
-const EXPECTED_API_VERSION = '2026-08-21-c';
+const EXPECTED_API_VERSION = '2026-08-21-d';
 async function checkApiVersion(){
   const line = $('apiVersionLine');
   if(!line) return;
@@ -7798,13 +7704,17 @@ $('buyersBlastSelected').addEventListener('click', () => {
 
 $('buyersAddNew').addEventListener('click', () => openBuyerForm(null));
 
-function openBuyerForm(buyer){
-  editingBuyerId = buyer?.id || null;
+function openBuyerForm(buyer, prefill){
+  // prefill = the values came off a lead card, so this is still a NEW buyer
+  // even though the form arrives with fields already filled in.
+  editingBuyerId = prefill ? null : (buyer?.id || null);
+  const isEdit = !!buyer && !prefill;
   const b = buyer || {};
   const holder = $('buyerFormHolder');
   holder.innerHTML = '';
   const form = el(`<div class="buyer-form">
-    <h3>${buyer ? '✎ Edit buyer' : '+ Add new buyer'}</h3>
+    <h3>${isEdit ? '✎ Edit buyer' : (prefill ? '+ Add buyer from lead' : '+ Add new buyer')}</h3>
+    ${prefill ? '<div style="font-size:12px;color:#96751A;background:#fffdf5;border:1px solid #e8d29a;border-radius:8px;padding:9px 11px;margin-bottom:12px">Filled in from the lead card. Add an email and anything else you know, then save.</div>' : ''}
     <div class="buyer-form-grid">
       <div><label>Name *</label><input type="text" id="bfName" value="${escapeHtml(b.name||'')}" placeholder="John Smith"></div>
       <div><label>Company</label><input type="text" id="bfCompany" value="${escapeHtml(b.company||'')}" placeholder="Smith Investments LLC"></div>
@@ -7845,18 +7755,21 @@ function openBuyerForm(buyer){
       <div class="full"><label>Notes (private)</label><textarea id="bfNotes">${escapeHtml(b.notes||'')}</textarea></div>
     </div>
     <div class="buyer-form-actions">
-      ${buyer ? `<button class="btn-ghost" id="bfDelete" style="color:#b91c1c">Delete buyer</button>` : ''}
+      ${isEdit ? `<button class="btn-ghost" id="bfDelete" style="color:#b91c1c">Delete buyer</button>` : ''}
       <div style="flex:1"></div>
       <button class="btn-ghost" id="bfCancel">Cancel</button>
-      <button class="btn-primary" id="bfSave">${buyer ? 'Save changes' : 'Add buyer'}</button>
+      <button class="btn-primary" id="bfSave">${isEdit ? 'Save changes' : 'Add buyer'}</button>
     </div>
   </div>`);
   holder.appendChild(form);
-  setTimeout(() => $('bfName').focus(), 50);
+  setTimeout(() => {
+    const first = ['bfName','bfEmail','bfPhone'].map(id => $(id)).find(el => el && !el.value);
+    (first || $('bfName')).focus();
+  }, 50);
 
   $('bfCancel').addEventListener('click', () => { holder.innerHTML = ''; editingBuyerId = null; });
   $('bfSave').addEventListener('click', saveBuyer);
-  if(buyer){
+  if(isEdit){
     $('bfDelete').addEventListener('click', async () => {
       if(!confirm('Delete '+buyer.name+'? This cannot be undone.')) return;
       try {
