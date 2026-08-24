@@ -1048,7 +1048,7 @@ async function cleanupExpiredRecordings() {
 // Bumped whenever this file changes in a way the frontend depends on.
 // The Settings screen reads it, so a half-finished deploy is visible
 // instead of showing up later as a mystery "Unknown action" error.
-const API_VERSION = '2026-08-21-a';
+const API_VERSION = '2026-08-22-a';
 
 // ── Main handler ──────────────────────────────────────────────
 exports.handler = async (event) => {
@@ -1640,126 +1640,6 @@ exports.handler = async (event) => {
           sellerPhone: body.to,
           callerId: body.from,
         });
-      }
-
-      // ── Power Dialer: dial 2–3 leads at once ──────────────────
-      // Each seller rings on an independent outbound leg while Twilio AMD
-      // listens. Nobody is placed in the agent conference yet. The browser
-      // promotes the first confirmed human with power-dial-promote and ends
-      // the other legs, preventing two sellers from entering together.
-      case 'power-dial-batch': {
-        if (!body.from)       return err('from required');
-        if (!body.conference) return err('conference required');
-        if (!Array.isArray(body.leads) || !body.leads.length) return err('leads required');
-
-        const leads = body.leads.slice(0, 3).filter(x => x && x.to);
-        if (!leads.length) return err('No callable leads in batch');
-
-        // Confirm the agent conference is still alive before ringing anyone.
-        const cj = await tw(
-          `/Accounts/${twilioSid()}/Conferences.json` +
-          `?FriendlyName=${encodeURIComponent(body.conference)}&Status=in-progress`
-        );
-        const conf = cj && Array.isArray(cj.conferences) && cj.conferences[0];
-        if (!conf) return err('Your line dropped — restart the session', 409);
-
-        const raceId = `race-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        const out = [];
-        for (const lead of leads) {
-          try {
-            // Keep an answered seller in a silent holding leg while AMD decides.
-            // A human is promoted to the real conference immediately by the UI.
-            const holdTwiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Pause length="60"/></Response>`;
-            const j = await tw(`/Accounts/${twilioSid()}/Calls.json`, 'POST', {
-              From: body.from,
-              To: lead.to,
-              Twiml: holdTwiml,
-              Timeout: 30,
-              MachineDetection: 'DetectMessageEnd',
-              MachineDetectionTimeout: 30,
-              MachineDetectionSpeechThreshold: 1900,
-              MachineDetectionSpeechEndThreshold: 1400,
-              // Calls API uses asynchronous AMD callback names (different
-              // from the Conference Participants API used by single-line mode).
-              AsyncAmd: 'true',
-              AsyncAmdStatusCallback: `${APP_BASE_URL}?action=amd-status`,
-              AsyncAmdStatusCallbackMethod: 'POST',
-              StatusCallback: `${APP_BASE_URL}?action=twilio-status`,
-              StatusCallbackMethod: 'POST',
-              StatusCallbackEvent: 'initiated ringing answered completed',
-              Record: body.record ? 'true' : 'false',
-            });
-
-            try {
-              await supa('/calls', 'POST', [{
-                twilio_sid: j.sid,
-                conference_room: raceId,
-                property_id: lead.propertyId ? String(lead.propertyId) : null,
-                from_number: body.from,
-                to_number: lead.to,
-                status: j.status || 'queued',
-                profile_id: body.profileId || null,
-              }], { Prefer: 'return=minimal' });
-            } catch (e) { console.warn('batch call persist failed', e.message); }
-
-            out.push({
-              sid: j.sid,
-              status: j.status || 'queued',
-              propertyId: lead.propertyId || null,
-              sellerName: lead.sellerName || '',
-              sellerPhone: lead.to,
-            });
-          } catch (e) {
-            out.push({
-              sid: null,
-              status: 'failed',
-              propertyId: lead.propertyId || null,
-              sellerName: lead.sellerName || '',
-              sellerPhone: lead.to,
-              error: e.message,
-            });
-          }
-        }
-        return ok({ raceId, conference: body.conference, calls: out, recording: !!body.record });
-      }
-
-      // Move the winning, already-answered seller leg from its silent holding
-      // TwiML into the agent's persistent conference.
-      case 'power-dial-promote': {
-        if (!body.sid)        return err('sid required');
-        if (!body.conference) return err('conference required');
-
-        const cj = await tw(
-          `/Accounts/${twilioSid()}/Conferences.json` +
-          `?FriendlyName=${encodeURIComponent(body.conference)}&Status=in-progress`
-        );
-        const conf = cj && Array.isArray(cj.conferences) && cj.conferences[0];
-        if (!conf) return err('Your line dropped — restart the session', 409);
-
-        const twiml =
-          `<?xml version="1.0" encoding="UTF-8"?>` +
-          `<Response><Dial><Conference beep="true" startConferenceOnEnter="true" ` +
-          `endConferenceOnExit="false" waitUrl="">${escapeXml(body.conference)}</Conference></Dial></Response>`;
-        const j = await tw(`/Accounts/${twilioSid()}/Calls/${encodeURIComponent(body.sid)}.json`, 'POST', {
-          Twiml: twiml,
-        });
-        return ok({ sid: body.sid, promoted: true, status: j.status || 'in-progress' });
-      }
-
-      // End every non-winning leg in one request. Used by double/triple dial
-      // the moment a human wins the race, and when the session is stopped.
-      case 'power-dial-cancel-many': {
-        const sids = Array.isArray(body.sids) ? body.sids.filter(Boolean).slice(0, 10) : [];
-        const keep = body.keepSid || '';
-        const ended = [];
-        for (const sid of sids) {
-          if (!sid || sid === keep) continue;
-          try {
-            await tw(`/Accounts/${twilioSid()}/Calls/${encodeURIComponent(sid)}.json`, 'POST', { Status: 'completed' });
-            ended.push(sid);
-          } catch (e) { /* a leg that already ended is fine */ }
-        }
-        return ok({ ended });
       }
 
       // ── Power Dialer: close the session ────────────────────────
@@ -2599,6 +2479,8 @@ exports.handler = async (event) => {
           cash_only: body.cashOnly !== false,
           funding_proof_on_file: !!body.fundingProofOnFile,
           preferred_areas: body.preferredAreas || '',
+          website: body.website || '',
+          social_links: body.socialLinks || '',
           notes: body.notes || '',
           active: body.active !== false,
           rating: parseInt(body.rating || 0, 10) || 0,
