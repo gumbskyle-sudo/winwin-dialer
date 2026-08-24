@@ -1048,7 +1048,7 @@ async function cleanupExpiredRecordings() {
 // Bumped whenever this file changes in a way the frontend depends on.
 // The Settings screen reads it, so a half-finished deploy is visible
 // instead of showing up later as a mystery "Unknown action" error.
-const API_VERSION = '2026-08-22-a';
+const API_VERSION = '2026-08-22-b';
 
 // ── Main handler ──────────────────────────────────────────────
 exports.handler = async (event) => {
@@ -2493,6 +2493,70 @@ exports.handler = async (event) => {
           const { json } = await supa('/buyers', 'POST', [row]);
           return ok({ buyer: json[0] });
         }
+      }
+
+      // Bulk buyer import. Body: { buyers: [ {...}, ... ] }
+      // Matches on email first, then name, so re-uploading a corrected
+      // sheet updates people instead of duplicating them.
+      case 'import-buyers': {
+        const incoming = Array.isArray(body.buyers) ? body.buyers : [];
+        if (!incoming.length) return err('buyers required');
+        if (incoming.length > 2000) return err('Too many at once — keep it under 2000');
+
+        const { json: existing } = await supa('/buyers?select=id,name,email');
+        const byEmail = new Map();
+        const byName  = new Map();
+        (existing || []).forEach(b => {
+          if (b.email) byEmail.set(String(b.email).trim().toLowerCase(), b.id);
+          if (b.name)  byName.set(String(b.name).trim().toLowerCase(), b.id);
+        });
+
+        const toInsert = [];
+        let updated = 0, skipped = 0;
+        for (const raw of incoming) {
+          const name = String(raw.name || '').trim();
+          if (!name) { skipped++; continue; }
+          const email = String(raw.email || '').trim();
+          const row = {
+            name,
+            company:        raw.company || '',
+            email,
+            phone:          raw.phone || '',
+            city:           raw.city || '',
+            state:          raw.state || '',
+            website:        raw.website || '',
+            social_links:   raw.socialLinks || '',
+            buy_box:        raw.buyBox || '',
+            property_types: raw.propertyTypes || '',
+            preferred_areas: raw.preferredAreas || '',
+            min_price:      raw.minPrice === '' || raw.minPrice == null ? null : raw.minPrice,
+            max_price:      raw.maxPrice === '' || raw.maxPrice == null ? null : raw.maxPrice,
+            notes:          raw.notes || '',
+            active:         raw.active !== false,
+            rating:         parseInt(raw.rating || 0, 10) || 0,
+          };
+          const hit = (email && byEmail.get(email.toLowerCase())) || byName.get(name.toLowerCase());
+          if (hit) {
+            // Don't blank out fields the sheet left empty
+            const patch = {};
+            Object.entries(row).forEach(([k, v]) => {
+              if (v !== '' && v !== null && v !== 0) patch[k] = v;
+            });
+            if (Object.keys(patch).length) {
+              await supa(`/buyers?id=eq.${hit}`, 'PATCH', patch, { Prefer: 'return=minimal' });
+              updated++;
+            } else skipped++;
+          } else {
+            row.created_by_profile = body.createdByProfileId || null;
+            toInsert.push(row);
+            if (email) byEmail.set(email.toLowerCase(), -1);
+            byName.set(name.toLowerCase(), -1);
+          }
+        }
+        for (let i = 0; i < toInsert.length; i += 200) {
+          await supa('/buyers', 'POST', toInsert.slice(i, i + 200), { Prefer: 'return=minimal' });
+        }
+        return ok({ added: toInsert.length, updated, skipped });
       }
 
       case 'delete-buyer': {
