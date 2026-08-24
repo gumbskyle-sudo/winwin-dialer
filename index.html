@@ -1295,6 +1295,41 @@ main{max-width:100%}
     <div class="pipe-board" id="pipeBoard"></div>
   </div>
 
+  <!-- Buyers CSV upload -->
+  <div class="modal" id="buyerUploadModal">
+    <div class="modal-box">
+      <div class="modal-head">
+        <h3>Upload buyers</h3>
+        <button data-close="buyerUploadModal">✕</button>
+      </div>
+      <div class="modal-body">
+        <div style="font-size:12px;color:#6b7280;line-height:1.5;margin-bottom:12px">
+          Any CSV with a name column works. Columns are matched by their headers —
+          nothing to map by hand. No address needed.
+        </div>
+        <details style="margin-bottom:14px">
+          <summary style="font-size:12px;font-weight:700;color:#96751A;cursor:pointer">Which headers are recognised</summary>
+          <div style="font-size:11px;color:#6b7280;line-height:1.7;margin-top:8px">
+            <b>Name</b> — name, buyer, buyer name, company, business<br>
+            <b>Company</b> — company, business name, llc, entity<br>
+            <b>Phone</b> — phone, phone number, mobile, cell, tel<br>
+            <b>Email</b> — email, e-mail, contact email<br>
+            <b>Website</b> — website, site, url, web<br>
+            <b>Socials</b> — social, socials, linkedin, facebook, instagram, ig, twitter, x, tiktok, youtube<br>
+            <b>Buy box</b> — buy box, criteria, buying criteria<br>
+            <b>Types</b> — property types, asset type<br>
+            <b>Areas</b> — areas, preferred areas, markets, zips<br>
+            <b>Price</b> — min price, max price, budget<br>
+            <b>Notes</b> — notes, comments<br>
+            <b>City / State</b> — city, state (optional)
+          </div>
+        </details>
+        <input type="file" id="buyerCsvFile" accept=".csv,text/csv" style="width:100%;padding:10px;border:1px dashed #d1d5db;border-radius:9px;background:#fafafa">
+        <div id="buyerCsvPreview" class="hide" style="margin-top:14px"></div>
+      </div>
+    </div>
+  </div>
+
   <!-- List / bulk lead tools -->
   <div class="modal" id="listToolsModal">
     <div class="modal-box">
@@ -1410,6 +1445,7 @@ main{max-width:100%}
       <div class="pipe-summary" id="buyersSummary">—</div>
       <div class="buyers-actions">
         <button class="header-link" id="buyersBlastSelected" style="background:#D4AF37;color:#0f0d0a" disabled>📧 Blast selected (0)</button>
+        <button class="header-link on-light" id="buyersUpload">⬆ Upload CSV</button>
         <button class="header-link on-light" id="buyersAddNew">+ Add buyer</button>
       </div>
     </div>
@@ -1977,7 +2013,7 @@ const DEFAULT_WEBSITE = 'winwinproperties.net';
 const companyName = () => localStorage.getItem(LS.company) || DEFAULT_COMPANY;
 const companySite = () => localStorage.getItem(LS.website) || DEFAULT_WEBSITE;
 // Bump this on every deploy so you can see which build is actually live
-const BUILD_ID = 'build 2026-08-22-a';
+const BUILD_ID = 'build 2026-08-22-b';
 const DEFAULT_VM_MESSAGE = "Hi {FirstName}, we are calling from Win Win Properties to give you a quick offer on your property at {Address}. Give us a call back at {CallbackNumber}, or find us online at win win properties dot net. That's W W W dot winwinproperties dot net. Thanks, and have a great day.";
 let backend  = localStorage.getItem(LS.backend) || '/api';
 let password = localStorage.getItem(LS.pwd) || '';
@@ -4146,7 +4182,7 @@ $('voiceSettingsSave')?.addEventListener('click', async () => {
 // backend ship as separate files, so it is easy to update one and not the
 // other — which surfaces later as "Unknown action" on a button that looks
 // like it should work.
-const EXPECTED_API_VERSION = '2026-08-22-a';
+const EXPECTED_API_VERSION = '2026-08-22-b';
 async function checkApiVersion(){
   const line = $('apiVersionLine');
   if(!line) return;
@@ -7718,6 +7754,137 @@ $('buyersBlastSelected').addEventListener('click', () => {
 });
 
 $('buyersAddNew').addEventListener('click', () => openBuyerForm(null));
+
+// ── Buyers CSV upload ─────────────────────────────────────────
+let buyerCsvRows = null;
+
+// Header synonyms, checked in order. Several sheets in the wild call the
+// same thing different names, so match loosely rather than demanding an
+// exact template.
+const BUYER_COLS = {
+  name:           [/^buyer\s*name$/, /^name$/, /^buyer$/, /^contact\s*name$/, /^full\s*name$/, /^company$/, /^company\s*name$/, /^business\s*name$/],
+  company:        [/^company$/, /^company\s*name$/, /^business\s*name$/, /^business$/, /^entity$/, /^llc$/, /^organization$/],
+  phone:          [/^phone$/, /^phone\s*number$/, /^phone\s*\d+$/, /^mobile$/, /^cell$/, /^tel$/, /^telephone$/, /^contact\s*phone$/],
+  email:          [/^email$/, /^e-?mail$/, /^email\s*address$/, /^contact\s*email$/],
+  website:        [/^website$/, /^web\s*site$/, /^site$/, /^url$/, /^web$/, /^webpage$/, /^domain$/],
+  buyBox:         [/^buy\s*box$/, /^criteria$/, /^buying\s*criteria$/, /^buybox$/],
+  propertyTypes:  [/^property\s*types?$/, /^asset\s*types?$/, /^types?$/],
+  preferredAreas: [/^preferred\s*areas?$/, /^areas?$/, /^markets?$/, /^zips?$/, /^neighborhoods?$/, /^target\s*areas?$/],
+  minPrice:       [/^min\s*price$/, /^minimum\s*price$/, /^price\s*min$/, /^budget\s*min$/],
+  maxPrice:       [/^max\s*price$/, /^maximum\s*price$/, /^price\s*max$/, /^budget$/, /^budget\s*max$/],
+  city:           [/^city$/, /^property\s*city$/],
+  state:          [/^state$/, /^property\s*state$/],
+  notes:          [/^notes?$/, /^comments?$/, /^note$/],
+};
+// Any of these become social links; several can appear at once.
+const BUYER_SOCIAL_COLS = [/social/i, /^linked\s*in$/i, /^linkedin$/i, /^facebook$/i, /^fb$/i,
+  /^instagram$/i, /^ig$/i, /^twitter$/i, /^x$/i, /^tiktok$/i, /^youtube$/i];
+
+function mapBuyerHeaders(headers){
+  const used = new Set();
+  const pick = pats => {
+    for(const pat of pats){
+      const h = headers.find(x => !used.has(x) && pat.test(x.toLowerCase().trim()));
+      if(h){ used.add(h); return h; }
+    }
+    return '';
+  };
+  const m = {};
+  // Name first so a "Company" column isn't stolen by it when a real
+  // name column also exists.
+  m.name = pick(BUYER_COLS.name);
+  Object.keys(BUYER_COLS).forEach(k => { if(k !== 'name') m[k] = pick(BUYER_COLS[k]); });
+  m.socials = headers.filter(h => !used.has(h) && BUYER_SOCIAL_COLS.some(p => p.test(h.trim())));
+  return m;
+}
+
+function buyerRowFrom(r, m){
+  const get = k => (m[k] ? String(r[m[k]] || '').trim() : '');
+  const socials = (m.socials || [])
+    .map(h => normalizeUrl(String(r[h] || '').trim()))
+    .filter(Boolean);
+  const digits = get('phone').replace(/\D/g, '');
+  const phone = digits.length === 11 && digits[0] === '1' ? digits.slice(1) : digits;
+  return {
+    name: get('name'),
+    company: get('company'),
+    phone: phone.length === 10 ? fmtPhone('+1' + phone) : get('phone'),
+    email: get('email'),
+    website: normalizeUrl(get('website')),
+    socialLinks: socials.join('\n'),
+    buyBox: get('buyBox'),
+    propertyTypes: get('propertyTypes'),
+    preferredAreas: get('preferredAreas'),
+    minPrice: get('minPrice').replace(/[^0-9.]/g, ''),
+    maxPrice: get('maxPrice').replace(/[^0-9.]/g, ''),
+    city: get('city'),
+    state: get('state').toUpperCase().slice(0, 2),
+    notes: get('notes'),
+    active: true,
+  };
+}
+
+$('buyersUpload').addEventListener('click', () => {
+  buyerCsvRows = null;
+  $('buyerCsvFile').value = '';
+  $('buyerCsvPreview').classList.add('hide');
+  openModal('buyerUploadModal');
+});
+
+$('buyerCsvFile').addEventListener('change', async e => {
+  const file = e.target.files[0];
+  if(!file) return;
+  const text = await file.text();
+  const parsed = parseCsv(text);
+  if(!parsed.headers.length){ toast('Could not read that CSV','err'); return; }
+  const m = mapBuyerHeaders(parsed.headers);
+  if(!m.name){
+    $('buyerCsvPreview').className = '';
+    $('buyerCsvPreview').innerHTML =
+      '<div style="color:#b91c1c;font-size:12px">No name column found. The sheet needs a header like <b>Name</b>, <b>Buyer</b> or <b>Company</b>.</div>';
+    return;
+  }
+  buyerCsvRows = parsed.rows.map(r => buyerRowFrom(r, m)).filter(r => r.name);
+
+  const matched = Object.entries(m)
+    .filter(([k,v]) => k !== 'socials' && v)
+    .map(([k,v]) => `${k} ← ${escapeHtml(v)}`);
+  if(m.socials.length) matched.push('socials ← ' + m.socials.map(escapeHtml).join(', '));
+
+  const sample = buyerCsvRows.slice(0, 3).map(b =>
+    `<div style="font-size:11px;color:#374151;padding:5px 0;border-top:1px solid #f3f4f6">
+      <b>${escapeHtml(b.name)}</b>${b.phone?' · '+escapeHtml(b.phone):''}${b.email?' · '+escapeHtml(b.email):''}
+      ${b.website?'<br><span style="color:#96751A">'+escapeHtml(b.website)+'</span>':''}
+      ${b.socialLinks?'<br>'+socialChipsHtml(b.socialLinks,''):''}
+    </div>`).join('');
+
+  const pv = $('buyerCsvPreview');
+  pv.className = '';
+  pv.innerHTML = `
+    <div style="background:#f0fdf4;border:1px solid #86efac;color:#166534;border-radius:9px;padding:10px 12px;font-size:12px;font-weight:700">
+      ${buyerCsvRows.length} buyer${buyerCsvRows.length===1?'':'s'} ready
+    </div>
+    <div style="font-size:11px;color:#6b7280;margin-top:8px;line-height:1.6">${matched.map(escapeHtml).join('<br>')}</div>
+    ${sample}
+    <div style="font-size:11px;color:#6b7280;margin-top:8px">Anyone already on your list — matched by email, then name — is updated rather than duplicated.</div>
+    <button class="btn-primary" id="buyerCsvGo" style="width:100%;margin-top:12px">⬆ Import ${buyerCsvRows.length} buyers</button>`;
+
+  $('buyerCsvGo').addEventListener('click', async () => {
+    const btn = $('buyerCsvGo');
+    btn.disabled = true; btn.textContent = 'Importing…';
+    try {
+      const r = await api('import-buyers', {method:'POST', body:{
+        buyers: buyerCsvRows, createdByProfileId: activeProfileId,
+      }});
+      $('buyerUploadModal').classList.remove('open');
+      toast(`${r.added} added, ${r.updated} updated`, 'ok');
+      loadBuyers();
+    } catch(err){
+      toast('Import failed: ' + err.message, 'err');
+      btn.disabled = false; btn.textContent = 'Retry import';
+    }
+  });
+});
 
 // A pasted link is usually missing its scheme. Add one, and reject
 // anything that still doesn't parse — no dead chips on the buyer row.
