@@ -1048,7 +1048,7 @@ async function cleanupExpiredRecordings() {
 // Bumped whenever this file changes in a way the frontend depends on.
 // The Settings screen reads it, so a half-finished deploy is visible
 // instead of showing up later as a mystery "Unknown action" error.
-const API_VERSION = '2026-08-21-a';
+const API_VERSION = '2026-08-22-b';
 
 // ── Main handler ──────────────────────────────────────────────
 exports.handler = async (event) => {
@@ -1120,23 +1120,49 @@ exports.handler = async (event) => {
       // PROPERTIES & LEADS
       // ════════════════════════════════════════════════════════
 
-      // Returns all properties + their phones + lead state
+      // Returns properties + their phones + lead state, ONE PAGE AT A TIME.
+      // Paged because a full 4,000+ lead payload (properties + every phone +
+      // every lead note) blows past Netlify's 6MB response cap and 502s.
+      // Query params: ?limit=500&offset=0 — the frontend loops until hasMore is false.
       case 'list-properties': {
-        // Supabase default limit is 1000; raise it for larger lists.
-        const LIMIT = 50000;
-        const { json: props }  = await supa(`/properties?select=id,owners,owner_last_name,property_address,mailing_address,email,list_name,imported_at,postcard_sent_at,postcard_id&order=imported_at.asc,id.asc&limit=${LIMIT}`);
-        const { json: phones } = await supa(`/phones?select=property_id,e164,display,type&order=property_id.asc,id.asc&limit=${LIMIT}`);
-        const { json: leads }  = await supa(`/leads?select=property_id,called,lead_status,notes,va_notes,recording_url,highlight,assigned_to,sms_consent,sms_cell&limit=${LIMIT}`);
+        const MAX_LIMIT = 1000;
+        const reqLimit  = parseInt(qs.limit, 10);
+        const limit     = Number.isFinite(reqLimit) && reqLimit > 0 ? Math.min(reqLimit, MAX_LIMIT) : 500;
+        const reqOffset = parseInt(qs.offset, 10);
+        const offset    = Number.isFinite(reqOffset) && reqOffset > 0 ? reqOffset : 0;
+
+        // count=exact makes PostgREST return a Content-Range like "0-499/4679"
+        const { json: props, count } = await supa(
+          `/properties?select=id,owners,owner_last_name,property_address,mailing_address,email,list_name,imported_at,postcard_sent_at,postcard_id&order=imported_at.asc,id.asc&limit=${limit}&offset=${offset}`,
+          'GET', undefined, { Prefer: 'count=exact' }
+        );
+        const pageRows = props || [];
+
+        let total = offset + pageRows.length;
+        if (count && String(count).includes('/')) {
+          const t = parseInt(String(count).split('/')[1], 10);
+          if (Number.isFinite(t)) total = t;
+        }
+
+        // Only pull the phones and leads belonging to THIS page
+        let phones = [], leads = [];
+        if (pageRows.length) {
+          const inList = pageRows.map(p => `"${String(p.id).replace(/"/g, '\\"')}"`).join(',');
+          const filter = `property_id=in.(${encodeURIComponent(inList)})`;
+          ({ json: phones } = await supa(`/phones?select=property_id,e164,display,type&${filter}&order=property_id.asc,id.asc&limit=50000`));
+          ({ json: leads }  = await supa(`/leads?select=property_id,called,lead_status,notes,va_notes,recording_url,highlight,assigned_to,sms_consent,sms_cell&${filter}&limit=50000`));
+        }
+
         const phonesBy = {};
         for (const p of phones || []) (phonesBy[p.property_id] ||= []).push(p);
         const leadsBy = {};
         for (const l of leads || []) leadsBy[l.property_id] = l;
-        const out = (props || []).map(p => ({
+        const out = pageRows.map(p => ({
           ...p,
           phones: phonesBy[p.id] || [],
           lead: leadsBy[p.id] || { called: false, lead_status: '', notes: '', va_notes: '' },
         }));
-        return ok({ properties: out });
+        return ok({ properties: out, total, offset, limit, hasMore: offset + pageRows.length < total });
       }
 
       // Bulk import. Body: {properties: [{id, owners, property_address, mailing_address, phones:[{e164,display,type}]}], replace: true|false}
@@ -2479,6 +2505,8 @@ exports.handler = async (event) => {
           cash_only: body.cashOnly !== false,
           funding_proof_on_file: !!body.fundingProofOnFile,
           preferred_areas: body.preferredAreas || '',
+          website: body.website || '',
+          social_links: body.socialLinks || '',
           notes: body.notes || '',
           active: body.active !== false,
           rating: parseInt(body.rating || 0, 10) || 0,
@@ -2491,6 +2519,70 @@ exports.handler = async (event) => {
           const { json } = await supa('/buyers', 'POST', [row]);
           return ok({ buyer: json[0] });
         }
+      }
+
+      // Bulk buyer import. Body: { buyers: [ {...}, ... ] }
+      // Matches on email first, then name, so re-uploading a corrected
+      // sheet updates people instead of duplicating them.
+      case 'import-buyers': {
+        const incoming = Array.isArray(body.buyers) ? body.buyers : [];
+        if (!incoming.length) return err('buyers required');
+        if (incoming.length > 2000) return err('Too many at once — keep it under 2000');
+
+        const { json: existing } = await supa('/buyers?select=id,name,email');
+        const byEmail = new Map();
+        const byName  = new Map();
+        (existing || []).forEach(b => {
+          if (b.email) byEmail.set(String(b.email).trim().toLowerCase(), b.id);
+          if (b.name)  byName.set(String(b.name).trim().toLowerCase(), b.id);
+        });
+
+        const toInsert = [];
+        let updated = 0, skipped = 0;
+        for (const raw of incoming) {
+          const name = String(raw.name || '').trim();
+          if (!name) { skipped++; continue; }
+          const email = String(raw.email || '').trim();
+          const row = {
+            name,
+            company:        raw.company || '',
+            email,
+            phone:          raw.phone || '',
+            city:           raw.city || '',
+            state:          raw.state || '',
+            website:        raw.website || '',
+            social_links:   raw.socialLinks || '',
+            buy_box:        raw.buyBox || '',
+            property_types: raw.propertyTypes || '',
+            preferred_areas: raw.preferredAreas || '',
+            min_price:      raw.minPrice === '' || raw.minPrice == null ? null : raw.minPrice,
+            max_price:      raw.maxPrice === '' || raw.maxPrice == null ? null : raw.maxPrice,
+            notes:          raw.notes || '',
+            active:         raw.active !== false,
+            rating:         parseInt(raw.rating || 0, 10) || 0,
+          };
+          const hit = (email && byEmail.get(email.toLowerCase())) || byName.get(name.toLowerCase());
+          if (hit) {
+            // Don't blank out fields the sheet left empty
+            const patch = {};
+            Object.entries(row).forEach(([k, v]) => {
+              if (v !== '' && v !== null && v !== 0) patch[k] = v;
+            });
+            if (Object.keys(patch).length) {
+              await supa(`/buyers?id=eq.${hit}`, 'PATCH', patch, { Prefer: 'return=minimal' });
+              updated++;
+            } else skipped++;
+          } else {
+            row.created_by_profile = body.createdByProfileId || null;
+            toInsert.push(row);
+            if (email) byEmail.set(email.toLowerCase(), -1);
+            byName.set(name.toLowerCase(), -1);
+          }
+        }
+        for (let i = 0; i < toInsert.length; i += 200) {
+          await supa('/buyers', 'POST', toInsert.slice(i, i + 200), { Prefer: 'return=minimal' });
+        }
+        return ok({ added: toInsert.length, updated, skipped });
       }
 
       case 'delete-buyer': {
