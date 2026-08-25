@@ -1120,23 +1120,49 @@ exports.handler = async (event) => {
       // PROPERTIES & LEADS
       // ════════════════════════════════════════════════════════
 
-      // Returns all properties + their phones + lead state
+      // Returns properties + their phones + lead state, ONE PAGE AT A TIME.
+      // Paged because a full 4,000+ lead payload (properties + every phone +
+      // every lead note) blows past Netlify's 6MB response cap and 502s.
+      // Query params: ?limit=500&offset=0 — the frontend loops until hasMore is false.
       case 'list-properties': {
-        // Supabase default limit is 1000; raise it for larger lists.
-        const LIMIT = 50000;
-        const { json: props }  = await supa(`/properties?select=id,owners,owner_last_name,property_address,mailing_address,email,list_name,imported_at,postcard_sent_at,postcard_id&order=imported_at.asc,id.asc&limit=${LIMIT}`);
-        const { json: phones } = await supa(`/phones?select=property_id,e164,display,type&order=property_id.asc,id.asc&limit=${LIMIT}`);
-        const { json: leads }  = await supa(`/leads?select=property_id,called,lead_status,notes,va_notes,recording_url,highlight,assigned_to,sms_consent,sms_cell&limit=${LIMIT}`);
+        const MAX_LIMIT = 1000;
+        const reqLimit  = parseInt(qs.limit, 10);
+        const limit     = Number.isFinite(reqLimit) && reqLimit > 0 ? Math.min(reqLimit, MAX_LIMIT) : 500;
+        const reqOffset = parseInt(qs.offset, 10);
+        const offset    = Number.isFinite(reqOffset) && reqOffset > 0 ? reqOffset : 0;
+
+        // count=exact makes PostgREST return a Content-Range like "0-499/4679"
+        const { json: props, count } = await supa(
+          `/properties?select=id,owners,owner_last_name,property_address,mailing_address,email,list_name,imported_at,postcard_sent_at,postcard_id&order=imported_at.asc,id.asc&limit=${limit}&offset=${offset}`,
+          'GET', undefined, { Prefer: 'count=exact' }
+        );
+        const pageRows = props || [];
+
+        let total = offset + pageRows.length;
+        if (count && String(count).includes('/')) {
+          const t = parseInt(String(count).split('/')[1], 10);
+          if (Number.isFinite(t)) total = t;
+        }
+
+        // Only pull the phones and leads belonging to THIS page
+        let phones = [], leads = [];
+        if (pageRows.length) {
+          const inList = pageRows.map(p => `"${String(p.id).replace(/"/g, '\\"')}"`).join(',');
+          const filter = `property_id=in.(${encodeURIComponent(inList)})`;
+          ({ json: phones } = await supa(`/phones?select=property_id,e164,display,type&${filter}&order=property_id.asc,id.asc&limit=50000`));
+          ({ json: leads }  = await supa(`/leads?select=property_id,called,lead_status,notes,va_notes,recording_url,highlight,assigned_to,sms_consent,sms_cell&${filter}&limit=50000`));
+        }
+
         const phonesBy = {};
         for (const p of phones || []) (phonesBy[p.property_id] ||= []).push(p);
         const leadsBy = {};
         for (const l of leads || []) leadsBy[l.property_id] = l;
-        const out = (props || []).map(p => ({
+        const out = pageRows.map(p => ({
           ...p,
           phones: phonesBy[p.id] || [],
           lead: leadsBy[p.id] || { called: false, lead_status: '', notes: '', va_notes: '' },
         }));
-        return ok({ properties: out });
+        return ok({ properties: out, total, offset, limit, hasMore: offset + pageRows.length < total });
       }
 
       // Bulk import. Body: {properties: [{id, owners, property_address, mailing_address, phones:[{e164,display,type}]}], replace: true|false}
