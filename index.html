@@ -5412,19 +5412,49 @@ $('uploadGo').addEventListener('click', async () => {
   }
   const btn = $('uploadGo');
   btn.disabled = true; btn.textContent = 'Importing…';
+
+  // Batched upload — one giant POST blows past Netlify's 6MB body cap and the
+  // 10s function timeout. 500 rows per request, 5 requests in flight at a time.
+  const CHUNK = 500;
+  const CONCURRENCY = 5;
+  const batches = [];
+  for(let i = 0; i < out.length; i += CHUNK) batches.push(out.slice(i, i + CHUNK));
+
+  const totals = { imported:0, phones:0, dupesCollapsed:0, dupeAddressesSkipped:0 };
+  let doneRows = 0;
+
+  const sendBatch = async (batch, useReplace) => {
+    const r = await api('import-properties', {method:'POST', body:{properties: batch, replace: useReplace, skipDuplicates: skipDupes, assignedTo: assignTo}});
+    totals.imported             += (r.imported||0);
+    totals.phones               += (r.phones||0);
+    totals.dupesCollapsed       += (r.dupesCollapsed||0);
+    totals.dupeAddressesSkipped += (r.dupeAddressesSkipped||0);
+    doneRows += batch.length;
+    btn.textContent = `Importing… ${doneRows.toLocaleString()}/${out.length.toLocaleString()}`;
+    return r;
+  };
+
   try {
-    const r = await api('import-properties', {method:'POST', body:{properties: out, replace, skipDuplicates: skipDupes, assignedTo: assignTo}});
-    const totalDupes = (r.dupesCollapsed||0) + (r.dupeAddressesSkipped||0);
+    let startIdx = 0;
+    // "Replace existing" wipes the table, so it must run alone and first —
+    // otherwise a parallel batch lands before the wipe and gets deleted.
+    if(replace){ await sendBatch(batches[0], true); startIdx = 1; }
+    for(let i = startIdx; i < batches.length; i += CONCURRENCY){
+      await Promise.all(batches.slice(i, i + CONCURRENCY).map(b => sendBatch(b, false)));
+    }
+    const totalDupes = totals.dupesCollapsed + totals.dupeAddressesSkipped;
     const dupMsg = totalDupes ? ` · ${totalDupes} duplicate${totalDupes===1?'':'s'} merged` : '';
     const dncMsg = dncScrubbed ? ` · ${dncScrubbed} DNC scrubbed` : '';
     const skipMsg = dncOnlyRows ? ` · ${dncOnlyRows} DNC-only lead${dncOnlyRows===1?'':'s'} skipped` : '';
-    toast(`Imported ${r.imported} properties · ${r.phones} phones${dupMsg}${dncMsg}${skipMsg}`,'ok');
+    toast(`Imported ${totals.imported} properties · ${totals.phones} phones${dupMsg}${dncMsg}${skipMsg}`,'ok');
     $('uploadModal').classList.remove('open');
     csvParsed = null;
     page = 1;
     await loadProperties();
   } catch(e){
-    toast('Import failed: '+e.message,'err');
+    const partial = doneRows ? ` — ${doneRows.toLocaleString()} of ${out.length.toLocaleString()} rows already imported` : '';
+    toast('Import failed: '+e.message+partial,'err');
+    if(doneRows) await loadProperties();
   } finally { btn.disabled = false; btn.textContent = 'Import'; }
 });
 
