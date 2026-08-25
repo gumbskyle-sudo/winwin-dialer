@@ -5461,9 +5461,25 @@ $('uploadGo').addEventListener('click', async () => {
 // ── Properties load ─────────────────────────────────────────────
 async function loadProperties(){
   badge('sync','Loading…');
+  const PAGE = 500;
   try {
-    const j = await api('list-properties');
-    properties = j.properties || [];
+    let offset = 0, all = [], total = null, guard = 0;
+    while(true){
+      const j = await api(`list-properties&limit=${PAGE}&offset=${offset}`);
+      const batch = j.properties || [];
+      all = all.concat(batch);
+      if(total === null) total = (typeof j.total === 'number') ? j.total : batch.length;
+
+      // Paint the first page straight away so the list isn't blank while the rest loads
+      properties = all;
+      if(offset === 0) renderPage();
+      badge('sync', total ? `Loading… ${all.length.toLocaleString()}/${total.toLocaleString()}` : 'Loading…');
+
+      offset += batch.length;
+      if(!batch.length || !j.hasMore) break;
+      if(++guard > 400) break; // safety valve — never loop forever
+    }
+    properties = all;
     renderPage();
     refreshCounter();
     badge('ok','Synced');
@@ -7423,13 +7439,9 @@ async function renderSmsSection(){
     $('smsConsentBlock').innerHTML = '<div style="font-size:12px;color:#6b7280;padding:8px 0">No linked property — SMS unavailable.</div>';
     return;
   }
-  // Fetch the lead (for consent + cell)
-  let lead = null;
-  try {
-    const r = await fetch(backend + (backend.includes('?')?'&':'?') + 'action=' + encodeURIComponent('list-properties'), { headers:{'X-Access-Password':password} });
-    // Cheaper: just query list-deals data + properties index. We'll use openDealData.calls to derive phones.
-  } catch {}
-  // Easier path: get phones from any cached property list, or use a small inline lookup via existing properties global.
+  // Phones + consent come from the already-loaded properties cache.
+  // (There used to be a full list-properties fetch here whose result was never
+  // used — it pulled the entire table on every render for nothing.)
   const prop = properties.find(p => p.id === d.property_id);
   const phones = prop ? prop.phones : [];
   const leadInfo = prop ? prop.lead : null;
