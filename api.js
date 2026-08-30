@@ -1,4 +1,3 @@
-
 /* Real Estate Dialer — single backend
  * ─────────────────────────────────────
  * Required env vars (Netlify → Site → Environment variables):
@@ -413,6 +412,156 @@ function fillTemplate(body, ctx) {
     .replace(/\{your_name\}/g, ctx.yourName || '');
 }
 
+// ════════════════════════════════════════════════════════════
+// VOICEMAIL DROP — message building
+// ════════════════════════════════════════════════════════════
+// The drop message used to be whatever text the front end happened to
+// send, which is why drops went out with no rep name, no callback
+// number and no address. It is now assembled here, from the lead row
+// and the rep's profile, so every drop is complete no matter which
+// screen fired it.
+
+const VM_DEFAULT_TEMPLATE =
+  "Hi {first_name}, this is {your_name} with {company}. " +
+  "I'm calling about your property at {address}. " +
+  "We'd like to get you a quick cash offer on it — no obligation, no repairs, " +
+  "and no commissions. You can reach me back at {callback}. " +
+  "Again, that's {your_name} at {callback}, or you can visit {website}. " +
+  "Thanks, and have a great day.";
+
+// Two lines is the ceiling on purpose. The FCC caps abandoned calls at
+// 3% per campaign; at 3+ lines that rate is very hard to hold on a
+// wholesaling list, and the exposure isn't worth the extra contacts.
+const MAX_PD_LINES = 2;
+
+// One place that builds the AMD callback, so every dial path carries the
+// room, the rep's leg (never hung up) and the auto-drop flag.
+function amdCallbackUrl(room, agentSid, autoVm) {
+  let u = `${APP_BASE_URL}?action=amd-status`;
+  if (room)     u += `&room=${encodeURIComponent(room)}`;
+  if (agentSid) u += `&agent=${encodeURIComponent(agentSid)}`;
+  if (autoVm)   u += `&auto=1`;
+  return u;
+}
+
+const VM_COMPANY_DEFAULT = 'Win Win Properties';
+const VM_WEBSITE_DEFAULT = 'winwinproperties.net';
+
+// A raw 10-digit string gets read by Polly as one enormous number.
+// <say-as interpret-as="telephone"> makes it "three oh two ... five two six ..."
+// with natural pauses, which is the difference between a callback and a
+// deleted message.
+function spokenPhoneSsml(num) {
+  const digits = String(num || '').replace(/[^0-9]/g, '').replace(/^1(?=\d{10}$)/, '');
+  if (digits.length !== 10) return escapeXml(String(num || '').trim());
+  return `<say-as interpret-as="telephone">${digits}</say-as>`;
+}
+
+// Street line only, with the unit stripped. "12 Oak St, Apt 2B, Freeport NY"
+// reads as "twelve Oak Street" instead of spelling out "pound two bee".
+function spokenAddress(addr) {
+  let s = shortAddress(addr);
+  s = s.replace(/\s+(apt|apartment|unit|ste|suite|#)\s*[\w-]*\s*$/i, '').trim();
+  return s || 'your property';
+}
+
+// Pulls everything the message needs: owner name + address from the lead,
+// rep name + callback number from the profile, company/website from settings.
+async function vmContext(propertyId, profileId, overrides) {
+  const o = overrides || {};
+  const ctx = {
+    firstName: 'there',
+    address:   'your property',
+    yourName:  '',
+    company:   (await getAppConfig('vm_company_name')) || VM_COMPANY_DEFAULT,
+    website:   (await getAppConfig('vm_website')) || VM_WEBSITE_DEFAULT,
+    callback:  '',
+  };
+
+  if (propertyId) {
+    try {
+      const { json: rows } = await supa(
+        `/properties?id=eq.${encodeURIComponent(propertyId)}&select=owners,property_address`
+      );
+      const p = Array.isArray(rows) && rows[0];
+      if (p) {
+        ctx.firstName = firstName(p.owners);
+        ctx.address   = spokenAddress(p.property_address);
+      }
+    } catch (e) { console.warn('vm property lookup failed', e.message); }
+  }
+
+  if (profileId) {
+    try {
+      const { json: rows } = await supa(
+        `/profiles?id=eq.${encodeURIComponent(profileId)}&select=name,phone`
+      );
+      const pr = Array.isArray(rows) && rows[0];
+      if (pr) {
+        if (pr.name)  ctx.yourName = firstName(pr.name);
+        if (pr.phone) ctx.callback = pr.phone;
+      }
+    } catch (e) { console.warn('vm profile lookup failed', e.message); }
+  }
+
+  // Explicit overrides from the caller win, then the app-wide fallbacks.
+  if (o.yourName) ctx.yourName = o.yourName;
+  if (o.callback) ctx.callback = o.callback;
+  if (o.company)  ctx.company  = o.company;
+  if (o.website)  ctx.website  = o.website;
+  if (!ctx.yourName) ctx.yourName = (await getAppConfig('vm_rep_name')) || ctx.company;
+  // Last resort for the callback: the app-wide number, then the caller ID
+  // the call actually went out on, so the seller always has something to dial.
+  if (!ctx.callback) ctx.callback = (await getAppConfig('vm_callback_number')) || o.fromNumber || '';
+
+  return ctx;
+}
+
+// Escape the literal text first, then substitute — so a seller named
+// "O'Brien & Sons" can't break the TwiML, while the telephone SSML tag
+// we insert deliberately survives.
+function renderVmSsml(template, ctx) {
+  let raw = String(template || VM_DEFAULT_TEMPLATE);
+  // If no callback number resolved, drop the whole sentence rather than
+  // say "you can reach me back at" and then nothing.
+  if (!ctx.callback) {
+    raw = raw.split(/(?<=[.!?])\s+/)
+             .filter(s => s.indexOf('{callback}') === -1)
+             .join(' ')
+             .trim();
+  }
+  let out = escapeXml(raw);
+  out = out
+    .replace(/\{first_name\}/g, escapeXml(ctx.firstName || 'there'))
+    .replace(/\{address\}/g,    escapeXml(ctx.address || 'your property'))
+    .replace(/\{your_name\}/g,  escapeXml(ctx.yourName || ''))
+    .replace(/\{company\}/g,    escapeXml(ctx.company || VM_COMPANY_DEFAULT))
+    .replace(/\{website\}/g,    escapeXml(ctx.website || VM_WEBSITE_DEFAULT))
+    .replace(/\{callback\}/g,   ctx.callback ? spokenPhoneSsml(ctx.callback) : '');
+  return out;
+}
+
+// The saved template, or the default if nothing has been customized.
+async function vmTemplate() {
+  return (await getAppConfig('vm_template')) || VM_DEFAULT_TEMPLATE;
+}
+
+const VM_VOICE_ALLOWLIST = [
+  'Polly.Ruth-Generative', 'Polly.Matthew-Generative', 'Polly.Danielle-Generative',
+  'Polly.Joanna-Neural', 'Polly.Matthew-Neural', 'Polly.Stephen-Neural', 'alice',
+];
+function vmVoice(requested) {
+  return VM_VOICE_ALLOWLIST.includes(requested) ? requested : 'Polly.Ruth-Generative';
+}
+
+// Redirect a live leg into a voicemail message and hang up.
+async function dropVmOnLeg(targetSid, innerTwiml) {
+  const dropTwiml =
+    `<?xml version="1.0" encoding="UTF-8"?><Response><Pause length="1"/>${innerTwiml}<Hangup/></Response>`;
+  await tw(`/Accounts/${twilioSid()}/Calls/${encodeURIComponent(targetSid)}.json`,
+    'POST', { Twiml: dropTwiml });
+}
+
 // ── Twilio inbound webhook handler ──────────────────────────
 async function handleTwilioInbound(event) {
   // Twilio sends application/x-www-form-urlencoded
@@ -767,7 +916,9 @@ async function handleConferenceStatus(event) {
   if (!to || !from) return { statusCode: 200, body: 'missing to/from' };
 
   const baseUrl = APP_BASE_URL;
-  const amdCb = `${baseUrl}?action=amd-status&room=${encodeURIComponent(room)}`;
+  // auto=1 → a detected answering machine gets the merged voicemail
+  // message dropped on it automatically (see handleAmdStatus).
+  const amdCb = `${baseUrl}?action=amd-status&room=${encodeURIComponent(room)}&auto=1`;
 
   try {
     await tw(`/Accounts/${twilioSid()}/Conferences/${encodeURIComponent(conferenceSid)}/Participants.json`, 'POST', {
@@ -815,8 +966,10 @@ async function handleAmdStatus(event) {
     }
   }
 
-  const room = qs.room || '';
-  const callSid = params.CallSid || '';
+  const room     = qs.room  || '';
+  const agentSid = qs.agent || '';        // the rep's own leg — never hang this up
+  const autoVm   = qs.auto === '1';       // auto-drop enabled for this session
+  const callSid  = params.CallSid || '';
   // human | machine_start | machine_end_beep | machine_end_silence |
   // machine_end_other | fax | unknown
   const answeredBy = params.AnsweredBy || '';
@@ -832,7 +985,132 @@ async function handleAmdStatus(event) {
     } catch (e) { console.warn('amd patch failed', e.message); }
   }
 
+  // ── Multi-line: first human wins ──────────────────────────────
+  // On 2 lines both legs are dialed MUTED. The first human to answer
+  // gets unmuted and joined to the rep; any other seller leg still up
+  // is hung up immediately (inside ~2s, which is what keeps the
+  // abandoned-call rate compliant). Without this, two people who both
+  // pick up end up in the same conference talking to each other.
+  if (answeredBy === 'human' && room && callSid) {
+    try {
+      const { json: humans } = await supa(
+        `/calls?conference_room=eq.${encodeURIComponent(room)}` +
+        `&answered_by=eq.human&select=twilio_sid,created_at&order=created_at.asc&limit=5`
+      );
+      const rows = Array.isArray(humans) ? humans : [];
+      const winner = rows.length ? rows[0].twilio_sid : callSid;
+
+      if (winner && winner !== callSid) {
+        // Somebody else already got the rep. Release this one right away.
+        await hangupCall(callSid);
+        return { statusCode: 200, body: 'ok' };
+      }
+
+      // This leg is the winner — open its audio to the rep.
+      await unmuteInConference(room, callSid);
+      // ...and clear every other seller leg still ringing or connected.
+      await releaseLosingLegs(room, callSid, agentSid);
+    } catch (e) { console.warn('multi-line arbitration failed', e.message); }
+  }
+
+  // ── Automatic voicemail drop on a detected machine ────────────
+  // DetectMessageEnd means we're arriving right at the beep, which is
+  // exactly when the message should start. The leg gets redirected out
+  // of the conference, speaks, and hangs up — the rep hears none of it
+  // and the dialer moves on.
+  if (autoVm && /^machine_end/.test(answeredBy) && callSid) {
+    try {
+      await autoDropVoicemail(callSid);
+    } catch (e) { console.warn('auto vm drop failed', e.message); }
+  }
+
   return { statusCode: 200, body: 'ok' };
+}
+
+// ── Conference plumbing used by the multi-line arbitration ─────
+async function conferenceSidFor(room) {
+  const j = await tw(
+    `/Accounts/${twilioSid()}/Conferences.json` +
+    `?FriendlyName=${encodeURIComponent(room)}&Status=in-progress`
+  );
+  const conf = j && Array.isArray(j.conferences) && j.conferences[0];
+  return conf ? conf.sid : null;
+}
+
+async function hangupCall(sid) {
+  try {
+    await tw(`/Accounts/${twilioSid()}/Calls/${encodeURIComponent(sid)}.json`,
+      'POST', { Status: 'completed' });
+  } catch (e) { /* already gone is fine */ }
+}
+
+async function unmuteInConference(room, callSid) {
+  const confSid = await conferenceSidFor(room);
+  if (!confSid) return;
+  try {
+    await tw(
+      `/Accounts/${twilioSid()}/Conferences/${encodeURIComponent(confSid)}` +
+      `/Participants/${encodeURIComponent(callSid)}.json`,
+      'POST', { Muted: 'false', Hold: 'false' }
+    );
+  } catch (e) { console.warn('unmute failed', e.message); }
+}
+
+// Everyone in the room except the rep and the winner gets released.
+async function releaseLosingLegs(room, winnerSid, agentSid) {
+  const confSid = await conferenceSidFor(room);
+  if (!confSid) return;
+  let list;
+  try {
+    list = await tw(
+      `/Accounts/${twilioSid()}/Conferences/${encodeURIComponent(confSid)}/Participants.json`
+    );
+  } catch (e) { return; }
+  const parts = (list && list.participants) || [];
+  for (const p of parts) {
+    const sid = p.call_sid;
+    if (!sid || sid === winnerSid || (agentSid && sid === agentSid)) continue;
+    await hangupCall(sid);
+  }
+}
+
+// Looks up who this leg belongs to and speaks a fully merged message.
+async function autoDropVoicemail(callSid) {
+  const { json: rows } = await supa(
+    `/calls?twilio_sid=eq.${encodeURIComponent(callSid)}` +
+    `&select=property_id,profile_id,from_number&limit=1`
+  );
+  const row = Array.isArray(rows) && rows[0];
+  if (!row) return;
+
+  // Prefer the rep's own recorded audio when one exists.
+  let playUrl = null;
+  if (row.profile_id) {
+    try {
+      const { json: profs } = await supa(
+        `/profiles?id=eq.${encodeURIComponent(row.profile_id)}&select=vm_recording_sid`
+      );
+      const pr = Array.isArray(profs) && profs[0];
+      if (pr && pr.vm_recording_sid) playUrl = recordingPlaybackUrl(pr.vm_recording_sid);
+    } catch (e) { /* fall through to TTS */ }
+  }
+  // A recorded file can't name the property, so the AI voice is the
+  // default here unless the rep explicitly prefers their own audio.
+  const preferRecording = (await getAppConfig('vm_prefer_recording')) === '1';
+
+  let inner;
+  if (playUrl && preferRecording) {
+    inner = `<Play>${escapeXml(playUrl)}</Play>`;
+  } else {
+    const voice = vmVoice(await getAppConfig('vm_voice'));
+    const ctx = await vmContext(row.property_id, row.profile_id, { fromNumber: row.from_number });
+    inner = `<Say voice="${escapeXml(voice)}">${renderVmSsml(await vmTemplate(), ctx)}</Say>`;
+  }
+  await dropVmOnLeg(callSid, inner);
+  try {
+    await supa(`/calls?twilio_sid=eq.${encodeURIComponent(callSid)}`, 'PATCH',
+      { vm_dropped: true }, { Prefer: 'return=minimal' });
+  } catch (e) { /* column may not exist yet — non-fatal */ }
 }
 
 // ── Drip processor (called by frontend each page load) ──────
@@ -1048,7 +1326,7 @@ async function cleanupExpiredRecordings() {
 // Bumped whenever this file changes in a way the frontend depends on.
 // The Settings screen reads it, so a half-finished deploy is visible
 // instead of showing up later as a mystery "Unknown action" error.
-const API_VERSION = '2026-08-22-b';
+const API_VERSION = '2026-08-26-a';
 
 // ── Main handler ──────────────────────────────────────────────
 exports.handler = async (event) => {
@@ -1636,7 +1914,7 @@ exports.handler = async (event) => {
             MachineDetectionTimeout: 30,
             MachineDetectionSpeechThreshold: 1900,
             MachineDetectionSpeechEndThreshold: 1400,
-            AmdStatusCallback: `${APP_BASE_URL}?action=amd-status`,
+            AmdStatusCallback: amdCallbackUrl(body.conference, body.agentSid, body.autoVm !== false),
             AmdStatusCallbackMethod: 'POST',
             StatusCallback: `${APP_BASE_URL}?action=twilio-status`,
             StatusCallbackMethod: 'POST',
@@ -1666,6 +1944,167 @@ exports.handler = async (event) => {
           sellerPhone: body.to,
           callerId: body.from,
         });
+      }
+
+      // ── Power Dialer: dial SEVERAL leads at once (multi-line) ──
+      // The reason the dialer was stuck on one line: nothing here ever
+      // dialed more than one participant per lead. The conference itself
+      // was always capable of holding more.
+      //
+      // Every leg goes out MUTED, so if two people answer they can't hear
+      // each other. handleAmdStatus unmutes the first human and releases
+      // the rest. Capped at MAX_PD_LINES.
+      case 'power-dial-lines': {
+        if (!body.from)       return err('from required');
+        if (!body.conference) return err('conference required');
+        const leads = Array.isArray(body.leads) ? body.leads.filter(l => l && l.to) : [];
+        if (!leads.length) return err('leads required');
+        if (leads.length > MAX_PD_LINES) {
+          return err(`Too many lines — ${MAX_PD_LINES} is the compliant maximum`);
+        }
+
+        const confSid = await conferenceSidFor(body.conference);
+        if (!confSid) return err('Your line dropped — restart the session', 409);
+
+        const multi  = leads.length > 1;
+        const amdCb  = amdCallbackUrl(body.conference, body.agentSid, body.autoVm !== false);
+        const placed = [];
+
+        for (const lead of leads) {
+          try {
+            const p = await tw(
+              `/Accounts/${twilioSid()}/Conferences/${encodeURIComponent(confSid)}/Participants.json`,
+              'POST', {
+                From: body.from,
+                To:   lead.to,
+                EarlyMedia: 'false',
+                // On one line the connect tone fires on entry as before.
+                // On two, the tone would sound for a leg that may be about
+                // to be released, so it moves to the unmute instead.
+                Beep: multi ? 'false' : 'onEnter',
+                Muted: multi ? 'true' : 'false',
+                StartConferenceOnEnter: 'true',
+                EndConferenceOnExit: 'false',
+                Timeout: 30,
+                MachineDetection: 'DetectMessageEnd',
+                MachineDetectionTimeout: 30,
+                MachineDetectionSpeechThreshold: 1900,
+                MachineDetectionSpeechEndThreshold: 1400,
+                AmdStatusCallback: amdCb,
+                AmdStatusCallbackMethod: 'POST',
+                StatusCallback: `${APP_BASE_URL}?action=twilio-status`,
+                StatusCallbackMethod: 'POST',
+                StatusCallbackEvent: 'ringing answered completed',
+                Record: body.record ? 'true' : 'false',
+              }
+            );
+            placed.push({
+              sid: p.call_sid,
+              to: lead.to,
+              propertyId: lead.propertyId || '',
+              sellerName: lead.sellerName || '',
+            });
+            try {
+              await supa('/calls', 'POST', [{
+                twilio_sid: p.call_sid,
+                conference_room: body.conference,
+                property_id: lead.propertyId ? String(lead.propertyId) : null,
+                from_number: body.from,
+                to_number:   lead.to,
+                status: 'queued',
+                profile_id: body.profileId || null,
+              }], { Prefer: 'return=minimal' });
+            } catch (e) { console.warn('line persist failed', e.message); }
+          } catch (e) {
+            placed.push({ to: lead.to, error: e.message });
+          }
+        }
+
+        return ok({
+          lines: placed.length,
+          calls: placed,
+          muted: multi,
+          callerId: body.from,
+        });
+      }
+
+      // ── Click to call ──────────────────────────────────────────
+      // Tap any number anywhere in the app and dial it. Two paths:
+      //   in a live power dial session → the number joins the conference
+      //     the rep is already sitting in, so their phone never re-rings
+      //   no session → a plain bridge call, rep's phone first
+      case 'click-to-call': {
+        if (!body.to)   return err('to required');
+        if (!body.from) return err('from required');
+
+        // Path 1: drop it into the open session.
+        if (body.conference) {
+          const confSid = await conferenceSidFor(body.conference);
+          if (confSid) {
+            const p = await tw(
+              `/Accounts/${twilioSid()}/Conferences/${encodeURIComponent(confSid)}/Participants.json`,
+              'POST', {
+                From: body.from,
+                To:   body.to,
+                EarlyMedia: 'false',
+                Beep: 'onEnter',
+                StartConferenceOnEnter: 'true',
+                EndConferenceOnExit: 'false',
+                Timeout: 30,
+                StatusCallback: `${APP_BASE_URL}?action=twilio-status`,
+                StatusCallbackMethod: 'POST',
+                StatusCallbackEvent: 'ringing answered completed',
+                Record: body.record ? 'true' : 'false',
+              }
+            );
+            try {
+              await supa('/calls', 'POST', [{
+                twilio_sid: p.call_sid,
+                conference_room: body.conference,
+                property_id: body.propertyId ? String(body.propertyId) : null,
+                from_number: body.from,
+                to_number:   body.to,
+                status: 'queued',
+                profile_id: body.profileId || null,
+              }], { Prefer: 'return=minimal' });
+            } catch (e) { console.warn('click-to-call persist failed', e.message); }
+            return ok({ sid: p.call_sid, mode: 'conference', to: body.to, callerId: body.from });
+          }
+          // Session is gone — fall through to the bridge call rather than
+          // failing the tap.
+        }
+
+        // Path 2: bridge call. Rings the rep, then dials the number.
+        const agentPhone = body.agentPhone || await getAppConfig('default_voice_forward_number');
+        if (!agentPhone) return err('agentPhone required (no forwarding number saved)');
+
+        const twiml =
+          `<?xml version="1.0" encoding="UTF-8"?>` +
+          `<Response><Dial callerId="${escapeXml(body.from)}" timeout="30" answerOnBridge="true"` +
+          (body.record ? ` record="record-from-answer-dual"` : ``) +
+          `><Number>${escapeXml(body.to)}</Number></Dial></Response>`;
+
+        const j = await tw(`/Accounts/${twilioSid()}/Calls.json`, 'POST', {
+          From: body.from,
+          To:   agentPhone,
+          Twiml: twiml,
+          StatusCallback: `${APP_BASE_URL}?action=twilio-status`,
+          StatusCallbackMethod: 'POST',
+          StatusCallbackEvent: 'initiated ringing answered completed',
+        });
+
+        try {
+          await supa('/calls', 'POST', [{
+            twilio_sid: j.sid,
+            property_id: body.propertyId ? String(body.propertyId) : null,
+            from_number: body.from,
+            to_number:   body.to,
+            status: j.status || 'queued',
+            profile_id: body.profileId || null,
+          }], { Prefer: 'return=minimal' });
+        } catch (e) { console.warn('click-to-call persist failed', e.message); }
+
+        return ok({ sid: j.sid, mode: 'bridge', status: j.status, to: body.to, callerId: body.from });
       }
 
       // ── Power Dialer: close the session ────────────────────────
@@ -1757,6 +2196,16 @@ exports.handler = async (event) => {
           vmGreeting:  await getAppConfig('voice_vm_greeting'),
           ringSeconds: parseInt(await getAppConfig('voice_ring_seconds'), 10) || 25,
           forwardTo:   await getAppConfig('default_voice_forward_number'),
+          // ── Voicemail drop ──
+          vmTemplate:  (await getAppConfig('vm_template')) || VM_DEFAULT_TEMPLATE,
+          vmCompany:   (await getAppConfig('vm_company_name')) || VM_COMPANY_DEFAULT,
+          vmWebsite:   (await getAppConfig('vm_website')) || VM_WEBSITE_DEFAULT,
+          vmRepName:   await getAppConfig('vm_rep_name'),
+          vmCallback:  await getAppConfig('vm_callback_number'),
+          vmVoice:     vmVoice(await getAppConfig('vm_voice')),
+          vmPreferRecording: (await getAppConfig('vm_prefer_recording')) === '1',
+          vmPlaceholders: ['{first_name}', '{address}', '{your_name}', '{callback}', '{company}', '{website}'],
+          maxLines:    MAX_PD_LINES,
         });
       }
 
@@ -1766,7 +2215,38 @@ exports.handler = async (event) => {
         if (typeof body.vmGreeting === 'string') await setAppConfig('voice_vm_greeting', body.vmGreeting);
         if (body.ringSeconds)                  await setAppConfig('voice_ring_seconds', String(parseInt(body.ringSeconds, 10) || 25));
         if (typeof body.forwardTo === 'string') await setAppConfig('default_voice_forward_number', body.forwardTo);
+        if (typeof body.vmTemplate === 'string') await setAppConfig('vm_template', body.vmTemplate);
+        if (typeof body.vmCompany === 'string')  await setAppConfig('vm_company_name', body.vmCompany);
+        if (typeof body.vmWebsite === 'string')  await setAppConfig('vm_website', body.vmWebsite);
+        if (typeof body.vmRepName === 'string')  await setAppConfig('vm_rep_name', body.vmRepName);
+        if (typeof body.vmCallback === 'string') await setAppConfig('vm_callback_number', body.vmCallback);
+        if (typeof body.vmVoice === 'string')    await setAppConfig('vm_voice', vmVoice(body.vmVoice));
+        if (typeof body.vmPreferRecording === 'boolean') {
+          await setAppConfig('vm_prefer_recording', body.vmPreferRecording ? '1' : '0');
+        }
         return ok({ saved: true });
+      }
+
+      // Renders the drop message for a given lead without calling anyone —
+      // so Settings can show exactly what the seller will hear.
+      case 'preview-voicemail': {
+        const ctx = await vmContext(body.propertyId, body.profileId, {
+          yourName: body.yourName,
+          callback: body.callbackNumber,
+          company:  body.company,
+          website:  body.website,
+        });
+        const tpl = (typeof body.template === 'string' && body.template.trim())
+          ? body.template : await vmTemplate();
+        // Plain-text version for the screen; the call itself uses SSML.
+        const spoken = tpl
+          .replace(/\{first_name\}/g, ctx.firstName)
+          .replace(/\{address\}/g,    ctx.address)
+          .replace(/\{your_name\}/g,  ctx.yourName)
+          .replace(/\{company\}/g,    ctx.company)
+          .replace(/\{website\}/g,    ctx.website)
+          .replace(/\{callback\}/g,   ctx.callback || '(no callback number saved)');
+        return ok({ text: spoken, context: ctx, voice: vmVoice(body.voice || await getAppConfig('vm_voice')) });
       }
 
       // ── Removing leads ──────────────────────────────────────
@@ -1876,11 +2356,7 @@ exports.handler = async (event) => {
         if (!body.sid) return err('sid required (the parent call sid)');
         // AI mode (forceTts) skips the recorded audio and speaks a
         // per-property personalized message in a natural Polly voice.
-        const VOICE_ALLOWLIST = [
-          'Polly.Ruth-Generative', 'Polly.Matthew-Generative', 'Polly.Danielle-Generative',
-          'Polly.Joanna-Neural', 'Polly.Matthew-Neural', 'Polly.Stephen-Neural', 'alice',
-        ];
-        const voice = VOICE_ALLOWLIST.includes(body.voice) ? body.voice : 'Polly.Ruth-Generative';
+        const voice = vmVoice(body.voice);
         let playUrl = null;
         if (!body.forceTts && body.profileId) {
           try {
@@ -1889,7 +2365,27 @@ exports.handler = async (event) => {
             if (profile && profile.vm_recording_sid) playUrl = recordingPlaybackUrl(profile.vm_recording_sid);
           } catch (e) { console.warn('vm profile lookup failed', e.message); }
         }
-        if (!playUrl && !body.message) return err('No recorded voicemail message and no fallback text provided');
+
+        // ── Build the spoken message here, not on the front end ──────
+        // body.message is now treated as an optional TEMPLATE, not as
+        // finished text. Whatever it contains, the rep's name, the
+        // callback number and the property address get merged in. If it
+        // arrives with no placeholders at all (an old front-end build),
+        // the saved template is used instead so the drop is never bare.
+        let vmSsml = null;
+        if (!playUrl) {
+          const rawTemplate = (typeof body.message === 'string' && /\{\w+\}/.test(body.message))
+            ? body.message
+            : await vmTemplate();
+          const ctx = await vmContext(body.propertyId, body.profileId, {
+            yourName:   body.yourName,
+            callback:   body.callbackNumber,
+            company:    body.company,
+            website:    body.website,
+            fromNumber: body.from,
+          });
+          vmSsml = `<Say voice="${escapeXml(voice)}">${renderVmSsml(rawTemplate, ctx)}</Say>`;
+        }
 
         // Which leg actually has the seller on it.
         //   direct  → power dial: the seller is dialed into the conference
@@ -1903,21 +2399,22 @@ exports.handler = async (event) => {
           targetSid = body.sid;
         } else {
           try {
-            const { json: childCalls } = await tw(`/Accounts/${twilioSid()}/Calls.json?ParentCallSid=${encodeURIComponent(body.sid)}`);
+            // BUGFIX: tw() returns the parsed JSON directly, so the old
+            // `const { json: childCalls }` destructure was always undefined
+            // and the seller's leg was never found — every drop landed on
+            // the rep's own leg instead.
+            const childCalls = await tw(`/Accounts/${twilioSid()}/Calls.json?ParentCallSid=${encodeURIComponent(body.sid)}`);
             const childCall = childCalls && childCalls.calls && childCalls.calls[0];
             if (childCall) targetSid = childCall.sid;
           } catch (e) { console.warn('child leg lookup failed', e.message); }
           if (!targetSid) targetSid = body.sid;
         }
 
-        const inner = playUrl
-          ? `<Play>${escapeXml(playUrl)}</Play>`
-          : `<Say voice="${escapeXml(voice)}">${escapeXml(body.message)}</Say>`;
-        // Half a second of silence first so the machine's beep doesn't clip
-        // the opening word.
-        const dropTwiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Pause length="1"/>${inner}<Hangup/></Response>`;
+        const inner = playUrl ? `<Play>${escapeXml(playUrl)}</Play>` : vmSsml;
+        // A beat of silence first so the machine's beep doesn't clip the
+        // opening word.
         try {
-          await tw(`/Accounts/${twilioSid()}/Calls/${encodeURIComponent(targetSid)}.json`, 'POST', { Twiml: dropTwiml });
+          await dropVmOnLeg(targetSid, inner);
         } catch (e) {
           return err('Could not drop the voicemail — the lead may have already hung up (' + e.message + ')');
         }
@@ -3234,6 +3731,365 @@ exports.handler = async (event) => {
         const result = slice.length === 20 ? slice : [...slice, ...pool.slice(0, 20 - slice.length)];
 
         return ok({ agents: result.slice(0, 20), total: pool.length, page });
+      }
+
+      // ════════════════════════════════════════════════════════
+      // DRIVING FOR DOLLARS
+      // Pins dropped from the map tab. `photoBase64` is optional and
+      // stored inline — these are phone snapshots, not gallery images,
+      // so a base64 column beats standing up a storage bucket.
+      // ════════════════════════════════════════════════════════
+
+      case 'd4d-list': {
+        const { json } = await supa(
+          '/d4d_leads?select=id,address,lat,lng,tags,notes,status,photo,created_by,property_id,created_at&order=created_at.desc&limit=1000'
+        );
+        return ok({ leads: Array.isArray(json) ? json : [] });
+      }
+
+      case 'd4d-add': {
+        if (!body.address && (body.lat == null || body.lng == null)) {
+          return err('address or lat/lng required');
+        }
+        const row = {
+          address:    body.address || '',
+          lat:        body.lat  != null ? Number(body.lat)  : null,
+          lng:        body.lng  != null ? Number(body.lng)  : null,
+          tags:       body.tags  || '',
+          notes:      body.notes || '',
+          status:     'new',
+          created_by: body.createdBy || null,
+        };
+        if (body.photoBase64) row.photo = String(body.photoBase64).slice(0, 4000000);
+        const { json } = await supa('/d4d_leads', 'POST', [row]);
+        return ok({ lead: Array.isArray(json) ? json[0] : json });
+      }
+
+      case 'd4d-update': {
+        if (!body.id) return err('id required');
+        const patch = {};
+        if (body.address !== undefined) patch.address = body.address;
+        if (body.tags    !== undefined) patch.tags    = body.tags;
+        if (body.notes   !== undefined) patch.notes   = body.notes;
+        if (body.status  !== undefined) patch.status  = body.status;
+        if (body.photoBase64) patch.photo = String(body.photoBase64).slice(0, 4000000);
+        if (!Object.keys(patch).length) return err('nothing to update');
+        const { json } = await supa(
+          `/d4d_leads?id=eq.${encodeURIComponent(body.id)}`, 'PATCH', patch
+        );
+        return ok({ lead: Array.isArray(json) ? json[0] : json });
+      }
+
+      case 'd4d-delete': {
+        if (!body.id) return err('id required');
+        await supa(`/d4d_leads?id=eq.${encodeURIComponent(body.id)}`, 'DELETE', undefined,
+          { Prefer: 'return=minimal' });
+        return ok({ deleted: true });
+      }
+
+      // Promote a pin into a real dialer lead. Idempotent: a pin that's
+      // already been sent returns {already:true} instead of creating a
+      // duplicate property, which is what the frontend checks for.
+      case 'd4d-to-dialer': {
+        if (!body.id) return err('id required');
+        const { json: rows } = await supa(
+          `/d4d_leads?id=eq.${encodeURIComponent(body.id)}&select=*&limit=1`
+        );
+        const pin = Array.isArray(rows) && rows[0];
+        if (!pin) return err('D4D lead not found', 404);
+        if (pin.property_id) return ok({ already: true, propertyId: pin.property_id });
+
+        const { json: made } = await supa('/properties', 'POST', [{
+          property_address: pin.address || '',
+          owners:           '',
+          source:           'D4D',
+          list_name:        'Driving for Dollars',
+        }]);
+        const prop = Array.isArray(made) ? made[0] : made;
+        if (!prop || !prop.id) return err('Could not create the dialer lead', 500);
+
+        // Carry the pin's notes across so the caller sees what you saw.
+        if (pin.notes || pin.tags) {
+          await supa('/leads', 'POST', [{
+            property_id: prop.id,
+            notes: [pin.tags, pin.notes].filter(Boolean).join(' — '),
+          }], { Prefer: 'return=minimal' }).catch(() => {});
+        }
+
+        await supa(`/d4d_leads?id=eq.${encodeURIComponent(body.id)}`, 'PATCH',
+          { status: 'in_dialer', property_id: prop.id }, { Prefer: 'return=minimal' });
+
+        return ok({ already: false, propertyId: prop.id });
+      }
+
+      // ════════════════════════════════════════════════════════
+      // E-SIGNATURE — SignWell, tracked in esign_envelopes
+      // Wraps the existing send-for-signature call so every document
+      // sent from a lead card leaves a row behind. Without that row the
+      // status box on the card has nothing to read.
+      // ════════════════════════════════════════════════════════
+
+      case 'esign-list': {
+        if (!body.propertyId && !body.dealId) return err('propertyId or dealId required');
+        const filter = body.propertyId
+          ? `property_id=eq.${encodeURIComponent(body.propertyId)}`
+          : `deal_id=eq.${encodeURIComponent(body.dealId)}`;
+        const { json } = await supa(
+          `/esign_envelopes?${filter}&select=*&order=sent_at.desc&limit=50`
+        );
+        const envelopes = (Array.isArray(json) ? json : []).map(v => ({
+          id:            v.id,
+          status:        v.status || 'sent',
+          doc_type:      v.doc_type,
+          document_name: v.document_name,
+          sent_at:       v.sent_at,
+          signed_at:     v.signed_at,
+          pdfUrl:        v.pdf_url  || null,
+          signUrl:       v.sign_url || null,
+        }));
+        return ok({ envelopes });
+      }
+
+      case 'esign-send': {
+        if (!body.docType)    return err('docType required');
+        if (!body.signerName) return err('signerName required');
+        const deliver = body.deliver || 'email';
+        if ((deliver === 'email' || deliver === 'both') && !body.signerEmail) {
+          return err('signerEmail required for email delivery');
+        }
+        if ((deliver === 'sms' || deliver === 'both') && !body.signerPhone) {
+          return err('signerPhone required for SMS delivery');
+        }
+
+        const SIGNWELL_KEY = process.env.SIGNWELL_API_KEY;
+        if (!SIGNWELL_KEY) return err('SIGNWELL_API_KEY is not set in Netlify env vars', 500);
+
+        // Template per document type. Override in env if you rebuild them.
+        const TEMPLATES = {
+          purchase_sale: process.env.SIGNWELL_TEMPLATE_PURCHASE   || 'a961e8b8-0a33-4d61-9fb2-6d812772eb33',
+          assignment:    process.env.SIGNWELL_TEMPLATE_ASSIGNMENT || '80f24b5f-9da2-4de7-9307-bbad72c0cf93',
+        };
+        const templateId = body.templateId || TEMPLATES[body.docType];
+        if (!templateId) return err('No template configured for docType ' + body.docType);
+
+        const docName = body.documentName ||
+          (body.docType === 'assignment' ? 'Assignment Agreement' : 'Purchase & Sale Agreement');
+
+        const payload = {
+          template_id: templateId,
+          name: `${docName} — ${body.signerName}`,
+          subject: body.subject || `Please sign: ${docName}`,
+          message: body.message ||
+            `Hi ${body.signerName}, please review and sign the attached ${docName.toLowerCase()}.`,
+          recipients: [{
+            id: '1',
+            name:  body.signerName,
+            email: body.signerEmail || '',
+            placeholder_name: body.placeholderName || 'Signer 1',
+          }],
+          draft: false,
+          test_mode: body.testMode === true,
+        };
+        if (body.fields && typeof body.fields === 'object') {
+          payload.template_fields = Object.entries(body.fields)
+            .filter(([, v]) => v !== '' && v != null)
+            .map(([api_id, value]) => ({ api_id, value: String(value) }));
+        }
+
+        const resp = await fetch(
+          'https://www.signwell.com/api/v1/document_templates/' +
+            encodeURIComponent(templateId) + '/documents',
+          {
+            method: 'POST',
+            headers: { 'X-Api-Key': SIGNWELL_KEY, 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          }
+        );
+        const doc = await resp.json().catch(() => ({}));
+        if (!resp.ok) return err(doc.message || doc.error || 'SignWell request failed', resp.status);
+
+        const recip  = (doc.recipients && doc.recipients[0]) || {};
+        const signUrl = recip.embedded_signing_url || recip.signing_url || doc.signing_url || null;
+
+        const { json: saved } = await supa('/esign_envelopes', 'POST', [{
+          provider_id:   doc.id || null,
+          property_id:   body.propertyId || null,
+          deal_id:       body.dealId     || null,
+          buyer_id:      body.buyerId    || null,
+          doc_type:      body.docType,
+          document_name: docName,
+          signer_name:   body.signerName,
+          signer_email:  body.signerEmail || '',
+          signer_phone:  body.signerPhone || '',
+          status:        'sent',
+          sign_url:      signUrl,
+          pdf_url:       doc.file_url || null,
+          sent_at:       new Date().toISOString(),
+        }]).catch(() => ({ json: null }));
+
+        // SMS delivery — SignWell emails; we text the link ourselves.
+        if ((deliver === 'sms' || deliver === 'both') && signUrl && body.signerPhone) {
+          try {
+            let d = String(body.signerPhone).replace(/\D/g, '');
+            if (d.length === 11 && d[0] === '1') d = d.slice(1);
+            const to = d.length === 10 ? '+1' + d : '';
+            const from = await getAppConfig('sms_from_number');
+            if (to && from && !(await isOptedOut(to))) {
+              await tw(`/Accounts/${twilioSid()}/Messages.json`, 'POST', {
+                To: to, From: from,
+                Body: `${docName} ready to sign: ${signUrl}\n\nReply STOP to opt out.`,
+              });
+            }
+          } catch (e) { /* the document still went out by email */ }
+        }
+
+        return ok({
+          document: doc,
+          envelope: Array.isArray(saved) ? saved[0] : null,
+          signUrl,
+        });
+      }
+
+      case 'esign-void': {
+        if (!body.envelopeId) return err('envelopeId required');
+        const { json: rows } = await supa(
+          `/esign_envelopes?id=eq.${encodeURIComponent(body.envelopeId)}&select=*&limit=1`
+        );
+        const env = Array.isArray(rows) && rows[0];
+        if (!env) return err('Envelope not found', 404);
+
+        const SIGNWELL_KEY = process.env.SIGNWELL_API_KEY;
+        if (SIGNWELL_KEY && env.provider_id) {
+          await fetch('https://www.signwell.com/api/v1/documents/' +
+            encodeURIComponent(env.provider_id), {
+            method: 'DELETE',
+            headers: { 'X-Api-Key': SIGNWELL_KEY },
+          }).catch(() => {});
+        }
+
+        await supa(`/esign_envelopes?id=eq.${encodeURIComponent(body.envelopeId)}`, 'PATCH',
+          { status: 'voided', voided_at: new Date().toISOString() },
+          { Prefer: 'return=minimal' });
+
+        return ok({ voided: true });
+      }
+
+      // ════════════════════════════════════════════════════════
+      // CALL RECORDINGS — listing, review, settings, 30-day purge
+      // ════════════════════════════════════════════════════════
+
+      case 'list-call-recordings': {
+        const days    = Math.min(parseInt(qs.days || '7', 10) || 7, 90);
+        const minDur  = parseInt(qs.minDuration || '0', 10) || 0;
+        const since   = new Date(Date.now() - days * 86400000).toISOString();
+
+        const { json } = await supa(
+          `/calls?started_at=gte.${encodeURIComponent(since)}` +
+          `&recording_url=not.is.null&select=*&order=started_at.desc&limit=300`
+        );
+        let rows = Array.isArray(json) ? json : [];
+        if (minDur) rows = rows.filter(r => Number(r.duration || 0) >= minDur);
+
+        // Attach the review, if one has been saved.
+        const ids = rows.map(r => r.id).filter(Boolean);
+        let reviews = [];
+        if (ids.length) {
+          const inList = ids.map(encodeURIComponent).join(',');
+          const rv = await supa(
+            `/call_reviews?call_id=in.(${inList})&select=*`
+          ).catch(() => ({ json: [] }));
+          reviews = Array.isArray(rv.json) ? rv.json : [];
+        }
+        const byCall = {};
+        reviews.forEach(r => { byCall[r.call_id] = r; });
+
+        const recordings = rows.map(r => ({
+          id:            r.id,
+          recording_url: r.recording_url,
+          duration:      Number(r.duration || 0),
+          to_number:     r.to_number || r.to || '',
+          from_number:   r.from_number || r.from || '',
+          property_id:   r.property_id || null,
+          profile_id:    r.profile_id || null,
+          created_at:    r.started_at,
+          review:        byCall[r.id] || null,
+        }));
+        return ok({ recordings, days, minDuration: minDur });
+      }
+
+      case 'save-call-review': {
+        if (!body.callId) return err('callId required');
+        const row = {
+          call_id:    body.callId,
+          profile_id: body.profileId || null,
+          notes:      body.notes || '',
+          reviewed_at: new Date().toISOString(),
+        };
+        // Every other key the frontend sends is a checkbox on the review
+        // card. Storing them in one jsonb column means adding a checkbox
+        // later needs no migration.
+        const flags = {};
+        Object.keys(body).forEach(k => {
+          if (['callId', 'profileId', 'notes'].includes(k)) return;
+          if (typeof body[k] === 'boolean') flags[k] = body[k];
+        });
+        row.flags = flags;
+
+        await supa('/call_reviews?on_conflict=call_id', 'POST', [row],
+          { Prefer: 'resolution=merge-duplicates,return=minimal' });
+        return ok({ saved: true });
+      }
+
+      case 'get-recording-config': {
+        const raw = await getAppConfig('recording_config');
+        let config = {};
+        if (raw) { try { config = JSON.parse(raw); } catch { config = {}; } }
+        return ok({ config });
+      }
+
+      case 'set-recording-config': {
+        const config = {
+          enabled:              body.enabled !== false,
+          voice:                body.voice || 'alice',
+          disclosure_mode:      body.disclosureMode || 'ai',
+          disclosure_audio_url: body.disclosureAudioUrl || '',
+          disclosure_text:      body.disclosureText || '',
+          retention_days:       Math.max(1, Math.min(parseInt(body.retentionDays || '30', 10) || 30, 365)),
+        };
+        await setAppConfig('recording_config', JSON.stringify(config));
+        return ok({ config });
+      }
+
+      // Deletes recordings older than the retention window from Twilio
+      // AND clears the URL on the call row. Runs on app load, so it has
+      // to stay cheap and never throw — a failed purge must not block boot.
+      case 'cleanup-call-recordings': {
+        const raw = await getAppConfig('recording_config');
+        let cfg = {};
+        if (raw) { try { cfg = JSON.parse(raw); } catch { cfg = {}; } }
+        const keepDays = Math.max(1, parseInt(cfg.retention_days || 30, 10) || 30);
+        const cutoff = new Date(Date.now() - keepDays * 86400000).toISOString();
+
+        const { json } = await supa(
+          `/calls?started_at=lt.${encodeURIComponent(cutoff)}` +
+          `&recording_url=not.is.null&select=id,recording_sid,recording_url&limit=100`
+        );
+        const rows = Array.isArray(json) ? json : [];
+        let purged = 0;
+
+        for (const r of rows) {
+          const sid = r.recording_sid ||
+            (String(r.recording_url || '').match(/(RE[a-f0-9]{32})/i) || [])[1];
+          if (sid) {
+            await tw(`/Accounts/${twilioSid()}/Recordings/${sid}.json`, 'DELETE')
+              .catch(() => {});
+          }
+          await supa(`/calls?id=eq.${encodeURIComponent(r.id)}`, 'PATCH',
+            { recording_url: null, recording_sid: null },
+            { Prefer: 'return=minimal' }).catch(() => {});
+          purged++;
+        }
+        return ok({ purged, keepDays, checked: rows.length });
       }
 
       default:
