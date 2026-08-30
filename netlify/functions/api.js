@@ -3733,6 +3733,365 @@ exports.handler = async (event) => {
         return ok({ agents: result.slice(0, 20), total: pool.length, page });
       }
 
+      // ════════════════════════════════════════════════════════
+      // DRIVING FOR DOLLARS
+      // Pins dropped from the map tab. `photoBase64` is optional and
+      // stored inline — these are phone snapshots, not gallery images,
+      // so a base64 column beats standing up a storage bucket.
+      // ════════════════════════════════════════════════════════
+
+      case 'd4d-list': {
+        const { json } = await supa(
+          '/d4d_leads?select=id,address,lat,lng,tags,notes,status,photo,created_by,property_id,created_at&order=created_at.desc&limit=1000'
+        );
+        return ok({ leads: Array.isArray(json) ? json : [] });
+      }
+
+      case 'd4d-add': {
+        if (!body.address && (body.lat == null || body.lng == null)) {
+          return err('address or lat/lng required');
+        }
+        const row = {
+          address:    body.address || '',
+          lat:        body.lat  != null ? Number(body.lat)  : null,
+          lng:        body.lng  != null ? Number(body.lng)  : null,
+          tags:       body.tags  || '',
+          notes:      body.notes || '',
+          status:     'new',
+          created_by: body.createdBy || null,
+        };
+        if (body.photoBase64) row.photo = String(body.photoBase64).slice(0, 4000000);
+        const { json } = await supa('/d4d_leads', 'POST', [row]);
+        return ok({ lead: Array.isArray(json) ? json[0] : json });
+      }
+
+      case 'd4d-update': {
+        if (!body.id) return err('id required');
+        const patch = {};
+        if (body.address !== undefined) patch.address = body.address;
+        if (body.tags    !== undefined) patch.tags    = body.tags;
+        if (body.notes   !== undefined) patch.notes   = body.notes;
+        if (body.status  !== undefined) patch.status  = body.status;
+        if (body.photoBase64) patch.photo = String(body.photoBase64).slice(0, 4000000);
+        if (!Object.keys(patch).length) return err('nothing to update');
+        const { json } = await supa(
+          `/d4d_leads?id=eq.${encodeURIComponent(body.id)}`, 'PATCH', patch
+        );
+        return ok({ lead: Array.isArray(json) ? json[0] : json });
+      }
+
+      case 'd4d-delete': {
+        if (!body.id) return err('id required');
+        await supa(`/d4d_leads?id=eq.${encodeURIComponent(body.id)}`, 'DELETE', undefined,
+          { Prefer: 'return=minimal' });
+        return ok({ deleted: true });
+      }
+
+      // Promote a pin into a real dialer lead. Idempotent: a pin that's
+      // already been sent returns {already:true} instead of creating a
+      // duplicate property, which is what the frontend checks for.
+      case 'd4d-to-dialer': {
+        if (!body.id) return err('id required');
+        const { json: rows } = await supa(
+          `/d4d_leads?id=eq.${encodeURIComponent(body.id)}&select=*&limit=1`
+        );
+        const pin = Array.isArray(rows) && rows[0];
+        if (!pin) return err('D4D lead not found', 404);
+        if (pin.property_id) return ok({ already: true, propertyId: pin.property_id });
+
+        const { json: made } = await supa('/properties', 'POST', [{
+          property_address: pin.address || '',
+          owners:           '',
+          source:           'D4D',
+          list_name:        'Driving for Dollars',
+        }]);
+        const prop = Array.isArray(made) ? made[0] : made;
+        if (!prop || !prop.id) return err('Could not create the dialer lead', 500);
+
+        // Carry the pin's notes across so the caller sees what you saw.
+        if (pin.notes || pin.tags) {
+          await supa('/leads', 'POST', [{
+            property_id: prop.id,
+            notes: [pin.tags, pin.notes].filter(Boolean).join(' — '),
+          }], { Prefer: 'return=minimal' }).catch(() => {});
+        }
+
+        await supa(`/d4d_leads?id=eq.${encodeURIComponent(body.id)}`, 'PATCH',
+          { status: 'in_dialer', property_id: prop.id }, { Prefer: 'return=minimal' });
+
+        return ok({ already: false, propertyId: prop.id });
+      }
+
+      // ════════════════════════════════════════════════════════
+      // E-SIGNATURE — SignWell, tracked in esign_envelopes
+      // Wraps the existing send-for-signature call so every document
+      // sent from a lead card leaves a row behind. Without that row the
+      // status box on the card has nothing to read.
+      // ════════════════════════════════════════════════════════
+
+      case 'esign-list': {
+        if (!body.propertyId && !body.dealId) return err('propertyId or dealId required');
+        const filter = body.propertyId
+          ? `property_id=eq.${encodeURIComponent(body.propertyId)}`
+          : `deal_id=eq.${encodeURIComponent(body.dealId)}`;
+        const { json } = await supa(
+          `/esign_envelopes?${filter}&select=*&order=sent_at.desc&limit=50`
+        );
+        const envelopes = (Array.isArray(json) ? json : []).map(v => ({
+          id:            v.id,
+          status:        v.status || 'sent',
+          doc_type:      v.doc_type,
+          document_name: v.document_name,
+          sent_at:       v.sent_at,
+          signed_at:     v.signed_at,
+          pdfUrl:        v.pdf_url  || null,
+          signUrl:       v.sign_url || null,
+        }));
+        return ok({ envelopes });
+      }
+
+      case 'esign-send': {
+        if (!body.docType)    return err('docType required');
+        if (!body.signerName) return err('signerName required');
+        const deliver = body.deliver || 'email';
+        if ((deliver === 'email' || deliver === 'both') && !body.signerEmail) {
+          return err('signerEmail required for email delivery');
+        }
+        if ((deliver === 'sms' || deliver === 'both') && !body.signerPhone) {
+          return err('signerPhone required for SMS delivery');
+        }
+
+        const SIGNWELL_KEY = process.env.SIGNWELL_API_KEY;
+        if (!SIGNWELL_KEY) return err('SIGNWELL_API_KEY is not set in Netlify env vars', 500);
+
+        // Template per document type. Override in env if you rebuild them.
+        const TEMPLATES = {
+          purchase_sale: process.env.SIGNWELL_TEMPLATE_PURCHASE   || 'a961e8b8-0a33-4d61-9fb2-6d812772eb33',
+          assignment:    process.env.SIGNWELL_TEMPLATE_ASSIGNMENT || '80f24b5f-9da2-4de7-9307-bbad72c0cf93',
+        };
+        const templateId = body.templateId || TEMPLATES[body.docType];
+        if (!templateId) return err('No template configured for docType ' + body.docType);
+
+        const docName = body.documentName ||
+          (body.docType === 'assignment' ? 'Assignment Agreement' : 'Purchase & Sale Agreement');
+
+        const payload = {
+          template_id: templateId,
+          name: `${docName} — ${body.signerName}`,
+          subject: body.subject || `Please sign: ${docName}`,
+          message: body.message ||
+            `Hi ${body.signerName}, please review and sign the attached ${docName.toLowerCase()}.`,
+          recipients: [{
+            id: '1',
+            name:  body.signerName,
+            email: body.signerEmail || '',
+            placeholder_name: body.placeholderName || 'Signer 1',
+          }],
+          draft: false,
+          test_mode: body.testMode === true,
+        };
+        if (body.fields && typeof body.fields === 'object') {
+          payload.template_fields = Object.entries(body.fields)
+            .filter(([, v]) => v !== '' && v != null)
+            .map(([api_id, value]) => ({ api_id, value: String(value) }));
+        }
+
+        const resp = await fetch(
+          'https://www.signwell.com/api/v1/document_templates/' +
+            encodeURIComponent(templateId) + '/documents',
+          {
+            method: 'POST',
+            headers: { 'X-Api-Key': SIGNWELL_KEY, 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          }
+        );
+        const doc = await resp.json().catch(() => ({}));
+        if (!resp.ok) return err(doc.message || doc.error || 'SignWell request failed', resp.status);
+
+        const recip  = (doc.recipients && doc.recipients[0]) || {};
+        const signUrl = recip.embedded_signing_url || recip.signing_url || doc.signing_url || null;
+
+        const { json: saved } = await supa('/esign_envelopes', 'POST', [{
+          provider_id:   doc.id || null,
+          property_id:   body.propertyId || null,
+          deal_id:       body.dealId     || null,
+          buyer_id:      body.buyerId    || null,
+          doc_type:      body.docType,
+          document_name: docName,
+          signer_name:   body.signerName,
+          signer_email:  body.signerEmail || '',
+          signer_phone:  body.signerPhone || '',
+          status:        'sent',
+          sign_url:      signUrl,
+          pdf_url:       doc.file_url || null,
+          sent_at:       new Date().toISOString(),
+        }]).catch(() => ({ json: null }));
+
+        // SMS delivery — SignWell emails; we text the link ourselves.
+        if ((deliver === 'sms' || deliver === 'both') && signUrl && body.signerPhone) {
+          try {
+            let d = String(body.signerPhone).replace(/\D/g, '');
+            if (d.length === 11 && d[0] === '1') d = d.slice(1);
+            const to = d.length === 10 ? '+1' + d : '';
+            const from = await getAppConfig('sms_from_number');
+            if (to && from && !(await isOptedOut(to))) {
+              await tw(`/Accounts/${twilioSid()}/Messages.json`, 'POST', {
+                To: to, From: from,
+                Body: `${docName} ready to sign: ${signUrl}\n\nReply STOP to opt out.`,
+              });
+            }
+          } catch (e) { /* the document still went out by email */ }
+        }
+
+        return ok({
+          document: doc,
+          envelope: Array.isArray(saved) ? saved[0] : null,
+          signUrl,
+        });
+      }
+
+      case 'esign-void': {
+        if (!body.envelopeId) return err('envelopeId required');
+        const { json: rows } = await supa(
+          `/esign_envelopes?id=eq.${encodeURIComponent(body.envelopeId)}&select=*&limit=1`
+        );
+        const env = Array.isArray(rows) && rows[0];
+        if (!env) return err('Envelope not found', 404);
+
+        const SIGNWELL_KEY = process.env.SIGNWELL_API_KEY;
+        if (SIGNWELL_KEY && env.provider_id) {
+          await fetch('https://www.signwell.com/api/v1/documents/' +
+            encodeURIComponent(env.provider_id), {
+            method: 'DELETE',
+            headers: { 'X-Api-Key': SIGNWELL_KEY },
+          }).catch(() => {});
+        }
+
+        await supa(`/esign_envelopes?id=eq.${encodeURIComponent(body.envelopeId)}`, 'PATCH',
+          { status: 'voided', voided_at: new Date().toISOString() },
+          { Prefer: 'return=minimal' });
+
+        return ok({ voided: true });
+      }
+
+      // ════════════════════════════════════════════════════════
+      // CALL RECORDINGS — listing, review, settings, 30-day purge
+      // ════════════════════════════════════════════════════════
+
+      case 'list-call-recordings': {
+        const days    = Math.min(parseInt(qs.days || '7', 10) || 7, 90);
+        const minDur  = parseInt(qs.minDuration || '0', 10) || 0;
+        const since   = new Date(Date.now() - days * 86400000).toISOString();
+
+        const { json } = await supa(
+          `/calls?started_at=gte.${encodeURIComponent(since)}` +
+          `&recording_url=not.is.null&select=*&order=started_at.desc&limit=300`
+        );
+        let rows = Array.isArray(json) ? json : [];
+        if (minDur) rows = rows.filter(r => Number(r.duration || 0) >= minDur);
+
+        // Attach the review, if one has been saved.
+        const ids = rows.map(r => r.id).filter(Boolean);
+        let reviews = [];
+        if (ids.length) {
+          const inList = ids.map(encodeURIComponent).join(',');
+          const rv = await supa(
+            `/call_reviews?call_id=in.(${inList})&select=*`
+          ).catch(() => ({ json: [] }));
+          reviews = Array.isArray(rv.json) ? rv.json : [];
+        }
+        const byCall = {};
+        reviews.forEach(r => { byCall[r.call_id] = r; });
+
+        const recordings = rows.map(r => ({
+          id:            r.id,
+          recording_url: r.recording_url,
+          duration:      Number(r.duration || 0),
+          to_number:     r.to_number || r.to || '',
+          from_number:   r.from_number || r.from || '',
+          property_id:   r.property_id || null,
+          profile_id:    r.profile_id || null,
+          created_at:    r.started_at,
+          review:        byCall[r.id] || null,
+        }));
+        return ok({ recordings, days, minDuration: minDur });
+      }
+
+      case 'save-call-review': {
+        if (!body.callId) return err('callId required');
+        const row = {
+          call_id:    body.callId,
+          profile_id: body.profileId || null,
+          notes:      body.notes || '',
+          reviewed_at: new Date().toISOString(),
+        };
+        // Every other key the frontend sends is a checkbox on the review
+        // card. Storing them in one jsonb column means adding a checkbox
+        // later needs no migration.
+        const flags = {};
+        Object.keys(body).forEach(k => {
+          if (['callId', 'profileId', 'notes'].includes(k)) return;
+          if (typeof body[k] === 'boolean') flags[k] = body[k];
+        });
+        row.flags = flags;
+
+        await supa('/call_reviews?on_conflict=call_id', 'POST', [row],
+          { Prefer: 'resolution=merge-duplicates,return=minimal' });
+        return ok({ saved: true });
+      }
+
+      case 'get-recording-config': {
+        const raw = await getAppConfig('recording_config');
+        let config = {};
+        if (raw) { try { config = JSON.parse(raw); } catch { config = {}; } }
+        return ok({ config });
+      }
+
+      case 'set-recording-config': {
+        const config = {
+          enabled:              body.enabled !== false,
+          voice:                body.voice || 'alice',
+          disclosure_mode:      body.disclosureMode || 'ai',
+          disclosure_audio_url: body.disclosureAudioUrl || '',
+          disclosure_text:      body.disclosureText || '',
+          retention_days:       Math.max(1, Math.min(parseInt(body.retentionDays || '30', 10) || 30, 365)),
+        };
+        await setAppConfig('recording_config', JSON.stringify(config));
+        return ok({ config });
+      }
+
+      // Deletes recordings older than the retention window from Twilio
+      // AND clears the URL on the call row. Runs on app load, so it has
+      // to stay cheap and never throw — a failed purge must not block boot.
+      case 'cleanup-call-recordings': {
+        const raw = await getAppConfig('recording_config');
+        let cfg = {};
+        if (raw) { try { cfg = JSON.parse(raw); } catch { cfg = {}; } }
+        const keepDays = Math.max(1, parseInt(cfg.retention_days || 30, 10) || 30);
+        const cutoff = new Date(Date.now() - keepDays * 86400000).toISOString();
+
+        const { json } = await supa(
+          `/calls?started_at=lt.${encodeURIComponent(cutoff)}` +
+          `&recording_url=not.is.null&select=id,recording_sid,recording_url&limit=100`
+        );
+        const rows = Array.isArray(json) ? json : [];
+        let purged = 0;
+
+        for (const r of rows) {
+          const sid = r.recording_sid ||
+            (String(r.recording_url || '').match(/(RE[a-f0-9]{32})/i) || [])[1];
+          if (sid) {
+            await tw(`/Accounts/${twilioSid()}/Recordings/${sid}.json`, 'DELETE')
+              .catch(() => {});
+          }
+          await supa(`/calls?id=eq.${encodeURIComponent(r.id)}`, 'PATCH',
+            { recording_url: null, recording_sid: null },
+            { Prefer: 'return=minimal' }).catch(() => {});
+          purged++;
+        }
+        return ok({ purged, keepDays, checked: rows.length });
+      }
+
       default:
         return err('Unknown action: ' + action, 404);
     }
