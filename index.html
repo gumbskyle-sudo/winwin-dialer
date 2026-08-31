@@ -1264,18 +1264,6 @@ main{max-width:100%}
     </div>
 
     <div class="pd-setup-field">
-      <label>Lines at a time</label>
-      <select id="pdLines">
-        <option value="1">1 line — one lead at a time</option>
-        <option value="2" selected>2 lines — dial two, first to answer wins</option>
-      </select>
-      <div style="font-size:11px;color:#6b7280;margin-top:4px">
-        Two lines roughly halves your dead air. The other line is released
-        the moment someone picks up, so nobody hears silence.
-      </div>
-    </div>
-
-    <div class="pd-setup-field">
       <label>Pause between calls (wrap-up time)</label>
       <select id="pdWrapSecs">
         <option value="0">No pause — dial straight through</option>
@@ -3011,18 +2999,10 @@ let pdWrapHeld  = false;
 let pdPaused    = false;
 // Auto voicemail drop when answering-machine detection says machine.
 let pdAutoVm    = localStorage.getItem('cb_vm_auto') !== '0';
+let pdLastEndedSid = null; // last SID we tore down, so the dial gate
+                           // doesn't trip on a call that already ended
 let pdVmDropped = false;   // one drop per lead, never two
 let pdVmDropping = false;
-// ── Multi-line ────────────────────────────────────────────────
-// How many leads go out per round. The backend caps this at
-// MAX_PD_LINES and refuses anything higher, so this is a request,
-// not a guarantee.
-let pdLines     = parseInt(localStorage.getItem('cb_pd_lines') || '2', 10) || 2;
-let pdMaxLines  = 2;      // overwritten by power-dial-start's reply
-// The property IDs dialed in the current round, and the one that won.
-let pdRoundIds  = [];
-let pdRoundSids = [];
-let pdWinnerId  = null;
 
 // ── Now-dialing panel ─────────────────────────────────────────
 function pdShowNow(p, phone){
@@ -3121,8 +3101,6 @@ $('pdSetupStart').addEventListener('click', async () => {
 
   pdStageFilter = $('pdStageFilter')?.value || '';
   pdListFilter  = $('pdListFilter')?.value  || '';
-  pdLines = parseInt($('pdLines')?.value || '2', 10) || 1;
-  localStorage.setItem('cb_pd_lines', String(pdLines));
   const list = pdGetList();
   if(!list.length){ toast('No leads match your selection','err'); return; }
 
@@ -3166,7 +3144,6 @@ $('pdSetupStart').addEventListener('click', async () => {
       agentPhone, from: callerId, profileId,
     }});
     pdConf     = st.conference;
-  if(st.maxLines) pdMaxLines = st.maxLines;
     pdAgentSid = st.sid;
   } catch(e){
     toast('Could not start the session: '+e.message,'err');
@@ -3216,6 +3193,16 @@ async function pdDialNext(propertyId, callerId, agentPhone, profileId){
     }
   }, 150);
 
+  // Never open a new call while one is still connected. Single-line
+  // shouldn't reach here with a live call, but a late pickup or a
+  // stalled status poll can, and dialing over a live seller is the one
+  // failure worth guarding twice.
+  if(activeCall && activeCall.sid && activeCall.sid !== pdLastEndedSid){
+    console.warn('pdDialNext blocked — a call is still connected');
+    setTimeout(() => { if(pdActive) pdDialNext(); }, 3000);
+    return;
+  }
+
   // Place the call via backend
   const phone = p.phones?.[0]?.e164;
   if(!phone){
@@ -3224,69 +3211,17 @@ async function pdDialNext(propertyId, callerId, agentPhone, profileId){
     return;
   }
 
-  // ── Safety gate ────────────────────────────────────────────────
-  // Nothing new goes out while a call is still up. Last line of
-  // defence: if any earlier check misses, this still stops the dialer
-  // talking over a live conversation.
-  if(pdCallLive()){
-    console.warn('pdDialNext blocked — a call is still connected');
-    setTimeout(() => { if(pdActive) pdDialNext(); }, 3000);
-    return;
-  }
-
-  // ── Build the round ────────────────────────────────────────────
-  // With 2 lines we dial this lead AND the next one that has a number.
-  // Both legs go out muted; the backend unmutes whoever answers first
-  // and releases the other, so two people never land on the same call.
-  const wanted = pdConf ? Math.max(1, Math.min(pdLines, pdMaxLines)) : 1;
-  const round = [{ p, phone }];
-  if(wanted > 1){
-    for(let k = pdIndex + 1; k < pdQueue.length && round.length < wanted; k++){
-      const q = properties.find(x => x.id === pdQueue[k]);
-      const qp = q?.phones?.[0]?.e164;
-      if(q && qp) round.push({ p:q, phone:qp });
-    }
-  }
-  pdRoundIds  = round.map(r2 => r2.p.id);
-  pdRoundSids = [];
-  pdWinnerId  = null;
-
   try {
     // Conference mode when a session is up, bridge mode otherwise.
-    let r;
-    if(pdConf && round.length > 1){
-      const multi = await api('power-dial-lines', {method:'POST', body:{
-        from: callerId,
-        conference: pdConf,
-        agentSid: pdAgentSid,
-        autoVm: pdAutoVm,
-        profileId,
-        leads: round.map(x => ({
-          to: x.phone,
-          propertyId: x.p.id,
-          sellerName: x.p.owners || '',
-        })),
-      }});
-      const placed = (multi.calls || []).filter(c => c && c.sid);
-      if(!placed.length) throw new Error('Neither line connected');
-      pdRoundSids = placed.map(c => c.sid);
-      // Track the first leg for the drawer; whichever lead actually
-      // answers takes over the panel via pdClaimWinner().
-      r = { sid: placed[0].sid, recording: false };
-      pdSetRoundLabel(round.length);
-    } else if(pdConf){
-      r = await api('power-dial-lead', {method:'POST', body:{
+    const r = pdConf
+      ? await api('power-dial-lead', {method:'POST', body:{
           to: phone,
           from: callerId,
           conference: pdConf,
-          agentSid: pdAgentSid,
-          autoVm: pdAutoVm,
           propertyId: p.id,
           profileId,
-        }});
-      pdRoundSids = [r.sid];
-    } else {
-      r = await api('power-dial-call', {method:'POST', body:{
+        }})
+      : await api('power-dial-call', {method:'POST', body:{
           to: phone,
           from: callerId,
           agentPhone,
@@ -3294,8 +3229,6 @@ async function pdDialNext(propertyId, callerId, agentPhone, profileId){
           propertyId: p.id,
           profileId,
         }});
-      pdRoundSids = [r.sid];
-    }
     pdActiveSid = r.sid;
     pdShowNow(p, phone);
     recPillShow(r.sid, r.recording);
@@ -3313,133 +3246,10 @@ async function pdDialNext(propertyId, callerId, agentPhone, profileId){
     activeCall.tickTimer = setInterval(updateDrawerTimer, 1000);
     // Capture the id NOW. Reading it back after the call ends used to
     // pull from a list that had already shifted, marking the wrong lead.
-    if(pdRoundSids.length > 1){
-      round.forEach((x, i) => {
-        if(pdRoundSids[i]) pdWatchLine(pdRoundSids[i], x.p.id, x.phone);
-      });
-    } else {
-      pdPollForCompletion(r.sid, p.id);
-    }
+    pdPollForCompletion(r.sid, p.id);
   } catch(e){
     toast('Call failed: '+e.message,'err');
     setTimeout(() => pdAdvance(), 2000);
-  }
-}
-
-// ── Two-line watcher ───────────────────────────────────────────
-// One of these runs per leg. The first leg to reach a human claims the
-// round: its lead takes over the panel and the drawer, and the losing
-// leg is hung up. If neither reaches a human, whichever finishes last
-// ends the round and the wrap-up starts.
-// True while any leg of the current round is still connected.
-// activeCall is set the moment a lead is claimed and cleared by
-// finishCall(), so it is the single source of truth for "someone is on
-// the phone right now".
-let pdLastEndedSid = null;
-function pdCallLive(){
-  if(!activeCall || !activeCall.sid) return false;
-  if(pdLastEndedSid && pdLastEndedSid === activeCall.sid) return false;
-  return true;
-}
-
-function pdSetRoundLabel(n){
-  const el = $('pdNowState');
-  if(el && n > 1){
-    el.textContent = `Dialing ${n} lines…`;
-    el.className = 'pd-now-state ringing';
-  }
-}
-
-function pdClaimWinner(propertyId, sid, phone){
-  if(pdWinnerId) return pdWinnerId === propertyId;
-  pdWinnerId  = propertyId;
-  pdActiveSid = sid;
-
-  // Release the other leg. The backend already unmutes the winner; this
-  // makes sure nobody is left holding a silent line.
-  pdRoundSids.filter(s2 => s2 && s2 !== sid).forEach(s2 => {
-    api('end-call', {method:'POST', body:{ sid: s2 }}).catch(()=>{});
-  });
-
-  const p = properties.find(x => x.id === propertyId);
-  if(p){
-    // Move the queue pointer onto whoever actually answered, so Skip,
-    // Back and the wrap-up all act on the right lead.
-    const qi = pdQueue.indexOf(propertyId);
-    if(qi >= 0) pdIndex = qi;
-    pdShowNow(p, phone);
-    highlightPdCard(p);
-    if(activeCall && activeCall.tickTimer) clearInterval(activeCall.tickTimer);
-    pdVmDropped = false; pdVmDropping = false;
-    activeCall = { sid, btn:null, propertyId:p.id, phidx:0, startedAt:Date.now() };
-    showDrawer({
-      name: p.owners, num: phone, state:'Live — human answered',
-      from: fmtPhone(pdSession?.callerId || ''), addr: p.property_address, prop: p,
-    }, false);
-    activeCall.tickTimer = setInterval(updateDrawerTimer, 1000);
-  }
-  return true;
-}
-
-function pdWatchLine(sid, propertyId, phone){
-  if(!pdActive) return;
-  setTimeout(async () => {
-    if(!pdActive) return;
-    // Round already resolved and this leg lost — stop watching it.
-    if(pdWinnerId && pdWinnerId !== propertyId) return;
-    try {
-      const r = await api(`call-status&sid=${encodeURIComponent(sid)}`);
-
-      // A connected call is a claimed call. AMD is advisory only: it
-      // returns 'unknown' often enough that gating on isHuman leaves a
-      // real person talking to a line nobody is watching, and the queue
-      // rolls on over the top of them.
-      const connected = r.status === 'in-progress' || r.isHuman;
-      if(connected && !r.isMachine && pdClaimWinner(propertyId, sid, phone)){
-        pdSetState(r.isHuman ? 'Live — human answered' : 'Connected', 'live');
-        pdPollForCompletion(sid, propertyId);
-        return;
-      }
-      // Machine on a losing line still gets the voicemail drop, so a
-      // second line is never wasted.
-      if(r.isMachine && pdAutoVm && pdWinnerId !== propertyId){
-        pdAutoDropVoicemail(sid, propertyId);
-      }
-      const done = ['completed','failed','busy','no-answer','canceled'].includes(r.status);
-      if(done){
-        markLeadCalled(propertyId);
-        pdRoundSids = pdRoundSids.filter(s2 => s2 !== sid);
-        // Last leg standing with nobody home — end the round.
-        if(!pdWinnerId && !pdRoundSids.length){
-          pdActiveSid = null;
-          if(activeCall){ pdLastEndedSid = activeCall.sid; finishCall('Ended', false); }
-          pdStartWrapUp(properties.find(x => x.id === propertyId));
-        }
-        return;
-      }
-      pdWatchLine(sid, propertyId, phone);
-    } catch(e){
-      pdWatchLine(sid, propertyId, phone);
-    }
-  }, 2500);
-}
-
-function markLeadCalled(propertyId){
-  const p = properties.find(x => x.id === propertyId);
-  if(!p) return;
-  if(!p.lead) p.lead = {};
-  if(p.lead.called) return;
-  p.lead.called = true;
-  api('update-lead', {method:'POST', body:{propertyId:p.id, called:true}}).catch(()=>{});
-  renderPage(); refreshCounter();
-}
-
-function highlightPdCard(p){
-  const card = document.querySelector(`[data-card-id="${CSS.escape(p.id)}"]`);
-  if(card){
-    document.querySelectorAll('.card.pd-active').forEach(c => c.classList.remove('pd-active'));
-    card.classList.add('pd-active');
-    card.scrollIntoView({ behavior:'smooth', block:'center' });
   }
 }
 
@@ -3536,9 +3346,10 @@ function pdStartWrapUp(p){
   pdWrapTimer = setInterval(() => {
     if(!pdActive){ clearInterval(pdWrapTimer); return; }
     if(pdWrapHeld) return;
-    // Someone answered late, after wrap-up already started. Freeze the
-    // countdown rather than dialing over them.
-    if(pdCallLive()){ $('pdWrapCount').textContent = 'on call'; return; }
+    // Late pickup after wrap-up started: freeze rather than dial over them.
+    if(activeCall && activeCall.sid && activeCall.sid !== pdLastEndedSid){
+      $('pdWrapCount').textContent = 'on call'; return;
+    }
     pdWrapLeft--;
     $('pdWrapCount').textContent = Math.max(0, pdWrapLeft);
     if(pdWrapLeft <= 0){ clearInterval(pdWrapTimer); pdAdvance(); }
@@ -3931,14 +3742,10 @@ async function placeCall(p, ph, btn, phidx){
   btn.querySelector('.badge:last-child').textContent='DIALING';
   showDrawer({name:p.owners, num:ph.e164, state:'Initializing', from:fmtPhone(activeCallerId), addr:p.property_address, prop:p}, true);
   try {
-    // Click to call. During a power dial session the number is dropped
-    // straight into the conference the rep is already sitting in, so
-    // their phone never re-rings. Outside a session it's a bridge call.
-    const r = await api('click-to-call',{method:'POST', body:{
+    const r = await api('make-call',{method:'POST', body:{
       to: toE164(ph.e164),
       from: activeCallerId,
-      conference: pdConf || undefined,
-      agentPhone: toE164(forwardPhone),
+      forwardTo: toE164(forwardPhone),
       propertyId: p.id,
       profileId: activeProfileId,
     }});
