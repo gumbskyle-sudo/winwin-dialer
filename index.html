@@ -3224,6 +3224,16 @@ async function pdDialNext(propertyId, callerId, agentPhone, profileId){
     return;
   }
 
+  // ── Safety gate ────────────────────────────────────────────────
+  // Nothing new goes out while a call is still up. Last line of
+  // defence: if any earlier check misses, this still stops the dialer
+  // talking over a live conversation.
+  if(pdCallLive()){
+    console.warn('pdDialNext blocked — a call is still connected');
+    setTimeout(() => { if(pdActive) pdDialNext(); }, 3000);
+    return;
+  }
+
   // ── Build the round ────────────────────────────────────────────
   // With 2 lines we dial this lead AND the next one that has a number.
   // Both legs go out muted; the backend unmutes whoever answers first
@@ -3321,6 +3331,17 @@ async function pdDialNext(propertyId, callerId, agentPhone, profileId){
 // round: its lead takes over the panel and the drawer, and the losing
 // leg is hung up. If neither reaches a human, whichever finishes last
 // ends the round and the wrap-up starts.
+// True while any leg of the current round is still connected.
+// activeCall is set the moment a lead is claimed and cleared by
+// finishCall(), so it is the single source of truth for "someone is on
+// the phone right now".
+let pdLastEndedSid = null;
+function pdCallLive(){
+  if(!activeCall || !activeCall.sid) return false;
+  if(pdLastEndedSid && pdLastEndedSid === activeCall.sid) return false;
+  return true;
+}
+
 function pdSetRoundLabel(n){
   const el = $('pdNowState');
   if(el && n > 1){
@@ -3369,8 +3390,13 @@ function pdWatchLine(sid, propertyId, phone){
     try {
       const r = await api(`call-status&sid=${encodeURIComponent(sid)}`);
 
-      if(r.isHuman && pdClaimWinner(propertyId, sid, phone)){
-        pdSetState('Live — human answered', 'live');
+      // A connected call is a claimed call. AMD is advisory only: it
+      // returns 'unknown' often enough that gating on isHuman leaves a
+      // real person talking to a line nobody is watching, and the queue
+      // rolls on over the top of them.
+      const connected = r.status === 'in-progress' || r.isHuman;
+      if(connected && !r.isMachine && pdClaimWinner(propertyId, sid, phone)){
+        pdSetState(r.isHuman ? 'Live — human answered' : 'Connected', 'live');
         pdPollForCompletion(sid, propertyId);
         return;
       }
@@ -3386,7 +3412,7 @@ function pdWatchLine(sid, propertyId, phone){
         // Last leg standing with nobody home — end the round.
         if(!pdWinnerId && !pdRoundSids.length){
           pdActiveSid = null;
-          if(activeCall) finishCall('Ended', false);
+          if(activeCall){ pdLastEndedSid = activeCall.sid; finishCall('Ended', false); }
           pdStartWrapUp(properties.find(x => x.id === propertyId));
         }
         return;
@@ -3450,6 +3476,7 @@ function pdPollForCompletion(sid, propertyId){
         // A voicemail drop in flight has to finish playing before we move on
         if(pdVmDropping){ pdPollForCompletion(sid, propertyId); return; }
         pdActiveSid = null;
+        pdLastEndedSid = sid;
         // Tear down the call drawer / script panel for this lead
         if(activeCall && activeCall.sid === sid){
           finishCall(pdVmDropped ? 'Voicemail dropped' : 'Ended', false);
@@ -3509,6 +3536,9 @@ function pdStartWrapUp(p){
   pdWrapTimer = setInterval(() => {
     if(!pdActive){ clearInterval(pdWrapTimer); return; }
     if(pdWrapHeld) return;
+    // Someone answered late, after wrap-up already started. Freeze the
+    // countdown rather than dialing over them.
+    if(pdCallLive()){ $('pdWrapCount').textContent = 'on call'; return; }
     pdWrapLeft--;
     $('pdWrapCount').textContent = Math.max(0, pdWrapLeft);
     if(pdWrapLeft <= 0){ clearInterval(pdWrapTimer); pdAdvance(); }
