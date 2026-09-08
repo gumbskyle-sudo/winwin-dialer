@@ -1326,7 +1326,7 @@ async function cleanupExpiredRecordings() {
 // Bumped whenever this file changes in a way the frontend depends on.
 // The Settings screen reads it, so a half-finished deploy is visible
 // instead of showing up later as a mystery "Unknown action" error.
-const API_VERSION = '2026-09-08-lux-teardown';
+const API_VERSION = '2026-09-08-email-blast';
 
 // ── Main handler ──────────────────────────────────────────────
 exports.handler = async (event) => {
@@ -3455,6 +3455,26 @@ exports.handler = async (event) => {
       // SPACEMAIL — pull recent inbox messages via IMAP
       // Optional body.search filters by sender address or subject.
       // ════════════════════════════════════════════════════════
+
+      // Lead email blast — deliberately one recipient per request.
+      // The browser handles pacing so a campaign never exposes recipient addresses
+      // to one another and a long-running Netlify invocation is avoided.
+      case 'send-email-blast': {
+        const to = String(body.to || '').trim();
+        if (!to) return err('to (recipient) required');
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) return err('Invalid recipient email');
+        if (!body.subject || !String(body.subject).trim()) return err('subject required');
+        if (!body.text && !body.html) return err('message required');
+        const res = await sendViaSpacemail({
+          to,
+          subject: String(body.subject).slice(0, 250),
+          html: body.html,
+          text: body.text,
+        });
+        if (res.error) return err(res.error, 500);
+        return ok({ sent: true, id: res.id, propertyId: body.propertyId || null, campaignName: body.campaignName || '' });
+      }
+
       case 'fetch-inbox': {
         if (!spacemailReady()) return err('SPACEMAIL_USER / SPACEMAIL_PASS not set in Netlify env vars', 500);
         const limit  = Math.min(parseInt(body.limit, 10) || 30, 50);
