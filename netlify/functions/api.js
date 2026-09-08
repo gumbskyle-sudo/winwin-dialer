@@ -1209,27 +1209,59 @@ async function sendEmail({ to, subject, html, text, replyTo }) {
 
 // ════════════════════════════════════════════════════════════════
 // SPACEMAIL (branded email — SMTP send + IMAP inbox)
-// Credentials come ONLY from Netlify env vars, never hardcoded:
-//   SPACEMAIL_USER = kyleg@winwinproperties.net
-//   SPACEMAIL_PASS = <mailbox password>   (or app password if 2FA on)
-//   SPACEMAIL_FROM_NAME (optional display name)
+// All mailbox settings come from Netlify environment variables.
+// Change the mailbox in Netlify; no code edit is required.
+//
+// Preferred variables:
+//   SPACEMAIL_EMAIL, SPACEMAIL_PASSWORD, SPACEMAIL_FROM_NAME
+//   SPACEMAIL_SMTP_HOST, SPACEMAIL_SMTP_PORT, SPACEMAIL_SMTP_SECURE
+//   SPACEMAIL_IMAP_HOST, SPACEMAIL_IMAP_PORT, SPACEMAIL_IMAP_SECURE
+//
+// Backward compatibility: SPACEMAIL_USER and SPACEMAIL_PASS still work.
+// Host/port defaults match the current Spacemail configuration used by this app.
 // ════════════════════════════════════════════════════════════════
 
+function envBool(name, fallback) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === null || String(raw).trim() === '') return fallback;
+  return !/^(0|false|no|off)$/i.test(String(raw).trim());
+}
+function envPort(name, fallback) {
+  const n = parseInt(process.env[name], 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+function spacemailConfig() {
+  const email = String(process.env.SPACEMAIL_EMAIL || process.env.SPACEMAIL_USER || '').trim();
+  const password = String(process.env.SPACEMAIL_PASSWORD || process.env.SPACEMAIL_PASS || '');
+  return {
+    email,
+    password,
+    fromName: String(process.env.SPACEMAIL_FROM_NAME || 'Win Win Property Solutions NY').trim(),
+    smtpHost: String(process.env.SPACEMAIL_SMTP_HOST || 'mail.spacemail.com').trim(),
+    smtpPort: envPort('SPACEMAIL_SMTP_PORT', 465),
+    smtpSecure: envBool('SPACEMAIL_SMTP_SECURE', true),
+    imapHost: String(process.env.SPACEMAIL_IMAP_HOST || 'mail.spacemail.com').trim(),
+    imapPort: envPort('SPACEMAIL_IMAP_PORT', 993),
+    imapSecure: envBool('SPACEMAIL_IMAP_SECURE', true),
+  };
+}
 function spacemailReady() {
-  return !!(process.env.SPACEMAIL_USER && process.env.SPACEMAIL_PASS);
+  const cfg = spacemailConfig();
+  return !!(cfg.email && cfg.password);
 }
 function spacemailFrom() {
-  const name = process.env.SPACEMAIL_FROM_NAME || 'Win Win Property Solutions NY';
-  return `${name} <${process.env.SPACEMAIL_USER}>`;
+  const cfg = spacemailConfig();
+  return cfg.fromName ? `${cfg.fromName} <${cfg.email}>` : cfg.email;
 }
 async function sendViaSpacemail({ to, subject, html, text, replyTo, cc }) {
-  if (!spacemailReady()) return { error: 'SPACEMAIL_USER / SPACEMAIL_PASS not set in Netlify env vars' };
+  const cfg = spacemailConfig();
+  if (!cfg.email || !cfg.password) return { error: 'SPACEMAIL_EMAIL / SPACEMAIL_PASSWORD not set in Netlify env vars' };
   const nodemailer = require('nodemailer');
   const transporter = nodemailer.createTransport({
-    host: 'mail.spacemail.com',
-    port: 465,
-    secure: true,
-    auth: { user: process.env.SPACEMAIL_USER, pass: process.env.SPACEMAIL_PASS },
+    host: cfg.smtpHost,
+    port: cfg.smtpPort,
+    secure: cfg.smtpSecure,
+    auth: { user: cfg.email, pass: cfg.password },
   });
   const info = await transporter.sendMail({
     from: spacemailFrom(),
@@ -1245,11 +1277,12 @@ async function sendViaSpacemail({ to, subject, html, text, replyTo, cc }) {
 
 function spacemailImapClient() {
   const { ImapFlow } = require('imapflow');
+  const cfg = spacemailConfig();
   return new ImapFlow({
-    host: 'mail.spacemail.com',
-    port: 993,
-    secure: true,
-    auth: { user: process.env.SPACEMAIL_USER, pass: process.env.SPACEMAIL_PASS },
+    host: cfg.imapHost,
+    port: cfg.imapPort,
+    secure: cfg.imapSecure,
+    auth: { user: cfg.email, pass: cfg.password },
     logger: false,
   });
 }
@@ -3476,7 +3509,7 @@ exports.handler = async (event) => {
       }
 
       case 'fetch-inbox': {
-        if (!spacemailReady()) return err('SPACEMAIL_USER / SPACEMAIL_PASS not set in Netlify env vars', 500);
+        if (!spacemailReady()) return err('SPACEMAIL_EMAIL / SPACEMAIL_PASSWORD not set in Netlify env vars', 500);
         const limit  = Math.min(parseInt(body.limit, 10) || 30, 50);
         const search = (body.search || '').trim().toLowerCase();
         const client = spacemailImapClient();
@@ -3527,7 +3560,7 @@ exports.handler = async (event) => {
       case 'fetch-email': {
         const uid = parseInt(body.uid, 10);
         if (!uid) return err('uid required');
-        if (!spacemailReady()) return err('SPACEMAIL_USER / SPACEMAIL_PASS not set', 500);
+        if (!spacemailReady()) return err('SPACEMAIL_EMAIL / SPACEMAIL_PASSWORD not set', 500);
         const { simpleParser } = require('mailparser');
         const client = spacemailImapClient();
         let result = null;
