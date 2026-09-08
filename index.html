@@ -926,6 +926,20 @@ body.view-inbox header .callerid{display:none}
 }
 .inbox-empty{text-align:center;color:#9ca3af;font-size:13px;padding:40px 12px}
 /* Mail (email via Spacemail) view */
+
+/* ── Lead email blasts ─────────────────────────────────────── */
+.eb-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.eb-help{font-size:11px;color:#6b7280;line-height:1.45;margin-top:5px}
+.eb-merge{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.eb-chip{border:1px solid #d1d5db;background:#fff;border-radius:999px;padding:4px 8px;font-size:11px;cursor:pointer;color:#374151}
+.eb-chip:hover{border-color:#96751A;color:#7a5c10}
+.eb-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:10px 0}
+.eb-stat{background:#f8fafc;border:1px solid #e5e7eb;border-radius:9px;padding:9px;text-align:center}
+.eb-stat b{display:block;font-size:18px;color:#111827}.eb-stat span{font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:.35px}
+.eb-progress{height:8px;background:#e5e7eb;border-radius:999px;overflow:hidden;margin-top:10px}.eb-progress>div{height:100%;width:0;background:#D4AF37;transition:width .2s}
+.eb-running{background:#fff8dd;border:1px solid #ead487;border-radius:9px;padding:10px;font-size:12px;color:#5f4a0a}
+@media(max-width:640px){.eb-grid{grid-template-columns:1fr}.eb-stats{grid-template-columns:repeat(2,1fr)}}
+
 #mailView{display:none}
 body.view-mail #cards,body.view-mail #pageNav,body.view-mail #pipelineView,body.view-mail #inboxView,body.view-mail #buyersView,body.view-mail #realtorsView,body.view-mail .search-bar-wrap,body.view-mail .filter-row{display:none}
 body.view-mail #mailView{display:block}
@@ -1432,6 +1446,7 @@ main{max-width:100%}
     <div class="pipe-toolbar">
       <div class="pipe-summary" id="mailSummary">—</div>
       <div style="display:flex;gap:8px">
+        <button class="header-link on-light" id="mailBlast">📣 Email Blast</button>
         <button class="header-link on-light" id="mailCompose">✏️ Compose</button>
         <button class="header-link on-light" id="mailRefresh">↻ Refresh</button>
       </div>
@@ -1636,6 +1651,58 @@ main{max-width:100%}
       <div id="mailReadMeta"></div>
       <iframe id="mailReadFrame" class="mail-iframe" sandbox=""></iframe>
       <button class="btn-primary" id="mailReplyBtn" style="width:100%;margin-top:12px">↩ Reply</button>
+    </div>
+  </div>
+</div>
+
+
+<div class="modal" id="emailBlastModal">
+  <div class="modal-box" style="max-width:720px">
+    <div class="modal-head">
+      <h3>📣 Lead Email Blast</h3>
+      <button class="modal-close" data-close="emailBlastModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="eb-grid">
+        <div class="field"><label>Lead list</label><select id="ebList"></select></div>
+        <div class="field"><label>Send speed</label><select id="ebDelay"><option value="5000">Careful · ~12/min</option><option value="2500" selected>Normal · ~24/min</option><option value="1200">Faster · ~50/min</option></select></div>
+      </div>
+      <div class="eb-stats">
+        <div class="eb-stat"><b id="ebAudience">0</b><span>With email</span></div>
+        <div class="eb-stat"><b id="ebSuppressed">0</b><span>Suppressed</span></div>
+        <div class="eb-stat"><b id="ebSent">0</b><span>Sent</span></div>
+        <div class="eb-stat"><b id="ebFailed">0</b><span>Failed</span></div>
+      </div>
+      <div class="field"><label>Subject</label><input id="ebSubject" type="text" placeholder="Quick question about {{PropertyAddress}}"></div>
+      <div class="field">
+        <label>Message</label>
+        <textarea id="ebBody" rows="9" placeholder="Hi {{FirstName}},\n\nI’m reaching out about {{PropertyAddress}}..."></textarea>
+        <div class="eb-merge">
+          <button type="button" class="eb-chip" data-ebmerge="{{FirstName}}">First name</button>
+          <button type="button" class="eb-chip" data-ebmerge="{{OwnerName}}">Owner name</button>
+          <button type="button" class="eb-chip" data-ebmerge="{{PropertyAddress}}">Property address</button>
+          <button type="button" class="eb-chip" data-ebmerge="{{ListName}}">List name</button>
+        </div>
+      </div>
+      <label style="display:flex;gap:8px;align-items:flex-start;font-size:12px;color:#374151;margin:8px 0">
+        <input type="checkbox" id="ebOptOut" checked style="margin-top:2px">
+        <span>Append: “If you'd rather not receive emails from me, reply STOP and I won't email you again.”</span>
+      </label>
+      <div class="field">
+        <label>Suppression / opt-out emails</label>
+        <textarea id="ebSuppress" rows="2" placeholder="one@email.com, another@email.com"></textarea>
+        <div class="eb-help">Saved in this browser. Add anyone who opts out here; suppressed addresses are never sent by the blast tool.</div>
+      </div>
+      <div class="eb-grid">
+        <div class="field"><label>Test recipient</label><input type="email" id="ebTestTo" placeholder="your@email.com"></div>
+        <div style="display:flex;align-items:end;gap:8px;padding-bottom:1px"><button class="btn-ghost" id="ebSendTest" style="width:100%">🧪 Send test</button></div>
+      </div>
+      <div id="ebRunBox" class="eb-running hide"><div id="ebRunText">Preparing…</div><div class="eb-progress"><div id="ebProgressBar"></div></div></div>
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <button class="btn-primary" id="ebStart" style="flex:1">📤 Start blast</button>
+        <button class="btn-ghost hide" id="ebStop">■ Stop</button>
+      </div>
+      <div class="eb-help" style="margin-top:8px">Emails are sent individually through your existing branded mailbox. Keep this tab open while a blast is running.</div>
     </div>
   </div>
 </div>
@@ -4200,7 +4267,7 @@ $('voiceSettingsSave')?.addEventListener('click', async () => {
 // backend ship as separate files, so it is easy to update one and not the
 // other — which surfaces later as "Unknown action" on a button that looks
 // like it should work.
-const EXPECTED_API_VERSION = '2026-09-08-lux-teardown';
+const EXPECTED_API_VERSION = '2026-09-08-email-blast';
 async function checkApiVersion(){
   const line = $('apiVersionLine');
   if(!line) return;
@@ -7080,6 +7147,121 @@ $('composeSend')?.addEventListener('click', async () => {
     $('mailComposeModal').classList.remove('open');
   } catch(err){ toast('Send failed: '+err.message,'err'); }
   btn.disabled = false; btn.textContent = '📤 Send';
+});
+
+// ── Lead Email Blast ───────────────────────────────────────────
+const EB_SUPPRESS_KEY = 'winwin.emailBlastSuppression.v1';
+let emailBlastStop = false;
+let emailBlastRunning = false;
+
+function ebEmailsFromText(text){
+  return [...new Set(String(text||'').split(/[\s,;]+/).map(x=>x.trim().toLowerCase()).filter(x=>/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(x)))];
+}
+function ebPrimaryEmail(p){
+  return ebEmailsFromText(p && p.email)[0] || '';
+}
+function ebFirstName(p){
+  const name = String((p && p.owners)||'').trim();
+  if(!name) return '';
+  return name.split(/[\s,&]+/).filter(Boolean)[0] || '';
+}
+function ebMerge(text,p){
+  const map={
+    '{{FirstName}}': ebFirstName(p),
+    '{{OwnerName}}': String((p&&p.owners)||''),
+    '{{PropertyAddress}}': String((p&&p.property_address)||''),
+    '{{ListName}}': String((p&&p.list_name)||''),
+  };
+  let out=String(text||'');
+  Object.entries(map).forEach(([k,v])=>{ out=out.split(k).join(v); });
+  return out;
+}
+function ebSuppressionSet(){ return new Set(ebEmailsFromText($('ebSuppress')?.value||'')); }
+function ebSelectedProps(){
+  const key=$('ebList')?.value||'__all__';
+  return key==='__all__' ? properties : properties.filter(p=>String(p.list_name||'')===key);
+}
+function ebAudience(){
+  const sup=ebSuppressionSet();
+  const seen=new Set();
+  const out=[];
+  for(const p of ebSelectedProps()){
+    const email=ebPrimaryEmail(p);
+    if(!email || sup.has(email) || seen.has(email)) continue;
+    seen.add(email); out.push({p,email});
+  }
+  return out;
+}
+function ebRefreshCounts(){
+  if(!$('ebAudience')) return;
+  const selected=ebSelectedProps();
+  const sup=ebSuppressionSet();
+  const emails=selected.map(ebPrimaryEmail).filter(Boolean);
+  $('ebAudience').textContent=ebAudience().length;
+  $('ebSuppressed').textContent=new Set(emails.filter(e=>sup.has(e))).size;
+}
+function openEmailBlast(){
+  const select=$('ebList');
+  const names=[...new Set(properties.map(p=>String(p.list_name||'').trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+  select.innerHTML='<option value="__all__">All lead lists</option>'+names.map(n=>`<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('');
+  $('ebSuppress').value=localStorage.getItem(EB_SUPPRESS_KEY)||'';
+  $('ebSent').textContent='0'; $('ebFailed').textContent='0';
+  $('ebRunBox').classList.add('hide'); $('ebProgressBar').style.width='0%';
+  ebRefreshCounts();
+  openModal('emailBlastModal');
+}
+$('mailBlast')?.addEventListener('click', openEmailBlast);
+$('ebList')?.addEventListener('change', ebRefreshCounts);
+$('ebSuppress')?.addEventListener('input', ()=>{ localStorage.setItem(EB_SUPPRESS_KEY,$('ebSuppress').value); ebRefreshCounts(); });
+
+document.addEventListener('click',e=>{
+  const b=e.target.closest('[data-ebmerge]'); if(!b) return;
+  const ta=$('ebBody'); const token=b.dataset.ebmerge||''; const start=ta.selectionStart||ta.value.length, end=ta.selectionEnd||start;
+  ta.value=ta.value.slice(0,start)+token+ta.value.slice(end); ta.focus(); ta.selectionStart=ta.selectionEnd=start+token.length;
+});
+
+function ebMessageFor(p){
+  let text=ebMerge($('ebBody').value,p).trim();
+  if($('ebOptOut').checked) text += (text?'\n\n':'') + "If you'd rather not receive emails from me, reply STOP and I won't email you again.";
+  return text;
+}
+async function ebSendOne(email,p,subjectOverride){
+  const subject=ebMerge(subjectOverride==null?$('ebSubject').value:subjectOverride,p).trim();
+  const text=ebMessageFor(p);
+  return api('send-email-blast',{method:'POST',body:{to:email,subject,text,html:escapeHtml(text).replace(/\n/g,'<br>'),propertyId:p&&p.id||null,campaignName:p&&p.list_name||''}});
+}
+$('ebSendTest')?.addEventListener('click',async()=>{
+  const to=String($('ebTestTo').value||'').trim();
+  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)){ toast('Enter a valid test email','err'); return; }
+  const sample=(ebAudience()[0]||{}).p || {owners:'Sample Owner',property_address:'123 Sample St',list_name:'Sample List'};
+  const b=$('ebSendTest'); b.disabled=true; b.textContent='Sending…';
+  try{ await ebSendOne(to,sample); toast('Test email sent ✓','ok'); }catch(err){ toast('Test failed: '+err.message,'err'); }
+  b.disabled=false; b.textContent='🧪 Send test';
+});
+$('ebStop')?.addEventListener('click',()=>{ emailBlastStop=true; $('ebRunText').textContent='Stopping after the current email…'; });
+$('ebStart')?.addEventListener('click',async()=>{
+  if(emailBlastRunning) return;
+  const subject=$('ebSubject').value.trim(), body=$('ebBody').value.trim();
+  if(!subject || !body){ toast('Add a subject and message first','err'); return; }
+  const audience=ebAudience();
+  if(!audience.length){ toast('No unsuppressed emails in this audience','err'); return; }
+  if(!confirm(`Send ${audience.length} individual emails? Keep this tab open until the blast finishes.`)) return;
+  emailBlastRunning=true; emailBlastStop=false;
+  const startBtn=$('ebStart'), stopBtn=$('ebStop'); startBtn.disabled=true; startBtn.textContent='Sending…'; stopBtn.classList.remove('hide'); $('ebRunBox').classList.remove('hide');
+  let sent=0, failed=0; const delay=Math.max(1000,parseInt($('ebDelay').value,10)||2500);
+  for(let i=0;i<audience.length;i++){
+    if(emailBlastStop) break;
+    const {p,email}=audience[i];
+    $('ebRunText').textContent=`Sending ${i+1} of ${audience.length} · ${email}`;
+    try{ await ebSendOne(email,p); sent++; }catch(err){ failed++; console.warn('Blast email failed',email,err); }
+    $('ebSent').textContent=String(sent); $('ebFailed').textContent=String(failed);
+    $('ebProgressBar').style.width=((i+1)/audience.length*100).toFixed(1)+'%';
+    if(i<audience.length-1 && !emailBlastStop) await new Promise(r=>setTimeout(r,delay));
+  }
+  const stopped=emailBlastStop;
+  $('ebRunText').textContent=(stopped?'Stopped':'Finished')+` · ${sent} sent · ${failed} failed`;
+  startBtn.disabled=false; startBtn.textContent='📤 Start blast'; stopBtn.classList.add('hide'); emailBlastRunning=false;
+  toast((stopped?'Blast stopped':'Blast finished')+` — ${sent} sent, ${failed} failed`, failed?'':'ok');
 });
 
 // ── SMS consent toggle on Pipeline cards (during call) ──────────
