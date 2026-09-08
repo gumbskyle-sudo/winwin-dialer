@@ -1326,7 +1326,7 @@ async function cleanupExpiredRecordings() {
 // Bumped whenever this file changes in a way the frontend depends on.
 // The Settings screen reads it, so a half-finished deploy is visible
 // instead of showing up later as a mystery "Unknown action" error.
-const API_VERSION = '2026-08-26-a';
+const API_VERSION = '2026-09-08-lux-teardown';
 
 // ── Main handler ──────────────────────────────────────────────
 exports.handler = async (event) => {
@@ -1443,6 +1443,7 @@ exports.handler = async (event) => {
         return ok({ properties: out, total, offset, limit, hasMore: offset + pageRows.length < total });
       }
 
+      // Bulk import. LUX Teardown uses the same stable property payload and folds extra underwriting fields into va_notes.
       // Bulk import. Body: {properties: [{id, owners, property_address, mailing_address, phones:[{e164,display,type}]}], replace: true|false}
       case 'import-properties': {
         const list = Array.isArray(body.properties) ? body.properties : [];
