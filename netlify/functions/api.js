@@ -1287,6 +1287,19 @@ function spacemailImapClient() {
   });
 }
 
+// IMAP servers can close an otherwise healthy session before/while LOGOUT is
+// acknowledged. Cleanup errors should never turn a successful mailbox action
+// into a 502 response.
+async function safelyCloseImap(client) {
+  if (!client) return;
+  try {
+    if (client.usable) await client.logout();
+  } catch (e) {
+    console.warn('IMAP cleanup warning:', e && e.message ? e.message : e);
+    try { client.close(); } catch {}
+  }
+}
+
 // ════════════════════════════════════════════════════════════════
 // SUPABASE STORAGE (audio recordings)
 // ════════════════════════════════════════════════════════════════
@@ -3545,9 +3558,9 @@ exports.handler = async (event) => {
               }
             }
           } finally { lock.release(); }
-          await client.logout();
+          await safelyCloseImap(client);
         } catch (e) {
-          try { await client.close(); } catch {}
+          try { client.close(); } catch {}
           return err('IMAP error: ' + (e.message || e), 502);
         }
         messages.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
@@ -3586,9 +3599,9 @@ exports.handler = async (event) => {
               try { await client.messageFlagsAdd(String(uid), ['\\Seen'], { uid: true }); } catch {}
             }
           } finally { lock.release(); }
-          await client.logout();
+          await safelyCloseImap(client);
         } catch (e) {
-          try { await client.close(); } catch {}
+          try { client.close(); } catch {}
           return err('IMAP error: ' + (e.message || e), 502);
         }
         if (result && result.error) return err(result.error, 404);
