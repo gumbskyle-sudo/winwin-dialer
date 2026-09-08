@@ -1677,6 +1677,7 @@ main{max-width:100%}
             <button class="upload-template-btn active" data-template="va" style="padding:8px;border:2px solid #96751A;background:#faf3e0;color:#96751A;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer">📋 VA Leads</button>
             <button class="upload-template-btn" data-template="propertyreach" style="padding:8px;border:2px solid #d1d5db;background:#fff;color:#374151;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer">🏠 PropertyReach</button>
             <button class="upload-template-btn" data-template="lux" style="padding:8px;border:2px solid #d1d5db;background:#fff;color:#374151;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer">💎 LUX Leads</button>
+            <button class="upload-template-btn" data-template="luxteardown" style="padding:8px;border:2px solid #d1d5db;background:#fff;color:#374151;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer">🏗️ LUX Teardown</button>
             <button class="upload-template-btn" data-template="custom" style="padding:8px;border:2px solid #d1d5db;background:#fff;color:#374151;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer">🗂️ Custom</button>
           </div>
         </div>
@@ -2427,7 +2428,7 @@ const STATUS_COLORS = {
 const SPEC_ICONS = {
   'lot':'📐', 'lot size':'📐', 'sqft':'🏠', 'square footage':'🏠', 'building sqft':'🏠',
   'year built':'🗓', 'bed/bath':'🛏', 'beds/baths':'🛏', 'owner 2':'👤',
-  'zoning':'🗺', 'apn':'🔖', 'county':'📍',
+  'zoning':'🗺', 'apn':'🔖', 'county':'📍', 'lead status':'📋', 'vacant':'🚪', 'owner occupied':'🏡', 'last sale':'🗓', 'last sale price':'💵', 'loan balance':'🏦', 'equity':'💰', 'arv':'📈', 'email 2':'✉️',
 };
 const SPEC_GOLD = ['lot','lot size','zoning']; // the numbers that decide a teardown
 function parseLeadSpecs(text){
@@ -4199,7 +4200,7 @@ $('voiceSettingsSave')?.addEventListener('click', async () => {
 // backend ship as separate files, so it is easy to update one and not the
 // other — which surfaces later as "Unknown action" on a button that looks
 // like it should work.
-const EXPECTED_API_VERSION = '2026-08-22-b';
+const EXPECTED_API_VERSION = '2026-09-08-lux-teardown';
 async function checkApiVersion(){
   const line = $('apiVersionLine');
   if(!line) return;
@@ -4274,7 +4275,7 @@ function scriptFactsHtml(){
   // we don't have a slot for still shows up instead of vanishing.
   const named = ['year built','built','yearbuilt','sqft','square footage','building sqft',
                  'lot','lot size','zoning','zone','bed/bath','beds/baths','beds','bedrooms',
-                 'baths','bathrooms','property type','type','apn','county'];
+                 'baths','bathrooms','property type','type','apn','county','lead status','vacant','owner occupied','last sale','last sale price','loan balance','equity','arv','email 2'];
   const extra = (c.allSpecs || [])
     .filter(sp => !named.includes(String(sp.k).toLowerCase()))
     .map(sp => row(sp.k, sp.v)).join('');
@@ -5029,6 +5030,50 @@ function autoMapGeneric(headers){
   };
 }
 
+// Exact mapper for the repeatable PropStream-style luxury teardown export.
+// This is intentionally header-specific so future files from the same export
+// map in one click without forcing the caller to remap 25+ fields each time.
+function autoMapLuxTeardown(headers){
+  const detected = autoMapGeneric(headers);
+  const lower = headers.map(h => h.toLowerCase().trim());
+  const exact = name => {
+    const i = lower.indexOf(String(name).toLowerCase().trim());
+    return i >= 0 ? headers[i] : '';
+  };
+  return {
+    ...detected,
+    id:            exact('Apn') || detected.id,
+    owners:        exact('First Name') || detected.owners,
+    owner2:        exact('Owner 2 First Name') || detected.owner2,
+    propertyAddress: exact('Property Address') || detected.propertyAddress,
+    propertyCity:  exact('Property City') || detected.propertyCity,
+    propertyState: exact('Property State') || detected.propertyState,
+    propertyZip:   exact('Property Zip') || detected.propertyZip,
+    mailingAddress: exact('Mailing Line 1 New') || detected.mailingAddress,
+    mailingCity:   exact('Mailing City'),
+    mailingState:  exact('Mailing State'),
+    mailingZip:    exact('Mailing Zip'),
+    email:         exact('Email') || detected.email,
+    email2:        exact('Email 2'),
+    leadStatus:    exact('Lead Status'),
+    vacant:        exact('Is Vacant'),
+    ownerOccupied: exact('Owner Occupied'),
+    bedrooms:      exact('Bedroom Count') || detected.bedrooms,
+    bathrooms:     exact('Bathroom Count') || detected.bathrooms,
+    sqft:          exact('Total Building Area Square Feet') || detected.sqft,
+    lotSize:       exact('Lot Size Square Feet') || detected.lotSize,
+    yearBuilt:     exact('Year Built') || detected.yearBuilt,
+    propertyType:  exact('Property Type Detail') || detected.propertyType,
+    zoning:        exact('Zoning Code') || detected.zoning,
+    county:        exact('Property County') || detected.county,
+    lastSaleDate:  exact('Last Sale Date'),
+    lastSalePrice: exact('Last Sale Price'),
+    loanBalance:   exact('Total Loan Balance'),
+    equity:        exact('Equity Current Estimated Balance'),
+    arv:           exact('ARV'),
+  };
+}
+
 // ── Upload templates ─────────────────────────────────────────────
 
 const UPLOAD_TEMPLATES = {
@@ -5089,6 +5134,42 @@ const UPLOAD_TEMPLATES = {
     ],
     phones: [], // populated dynamically from autoMapGeneric()'s phone detection
   },
+  luxteardown: {
+    label: 'LUX Teardown',
+    cardView: 'lux',
+    fields: [
+      { id:'leadstatus',    label:'Lead Status' },
+      { id:'owners',        label:'Owner First Name' },
+      { id:'owner2',        label:'Owner 2 First Name' },
+      { id:'property',      label:'Property Address' },
+      { id:'city',          label:'Property City' },
+      { id:'state',         label:'Property State' },
+      { id:'zip',           label:'Property Zip' },
+      { id:'county',        label:'Property County' },
+      { id:'mailing',       label:'Mailing Address' },
+      { id:'mailingcity',   label:'Mailing City' },
+      { id:'mailingstate',  label:'Mailing State' },
+      { id:'mailingzip',    label:'Mailing Zip' },
+      { id:'email',         label:'Email' },
+      { id:'email2',        label:'Email 2' },
+      { id:'vacant',        label:'Vacant' },
+      { id:'owneroccupied', label:'Owner Occupied' },
+      { id:'bedrooms',      label:'Bedrooms' },
+      { id:'bathrooms',     label:'Bathrooms' },
+      { id:'sqft',          label:'Building Sq Ft' },
+      { id:'lotsize',       label:'Lot Size Sq Ft' },
+      { id:'yearbuilt',     label:'Year Built' },
+      { id:'proptype',      label:'Property Type' },
+      { id:'zoning',        label:'Zoning' },
+      { id:'id',            label:'APN / Parcel' },
+      { id:'lastsaledate',  label:'Last Sale Date' },
+      { id:'lastsaleprice', label:'Last Sale Price' },
+      { id:'loanbalance',   label:'Loan Balance' },
+      { id:'equity',        label:'Estimated Equity' },
+      { id:'arv',           label:'ARV' },
+    ],
+    phones: [],
+  },
   custom: {
     // Fields are auto-detected per-file via autoMapGeneric() rather than
     // fixed hint strings, since "Custom" exists for exports that don't
@@ -5146,9 +5227,9 @@ function applyTemplate(templateKey){
   let tmplPhones, fieldValueLookup;
   // "__extended__" is a clone made by "+ Add phone column" — keep the parent's behaviour
   const autoKey = templateKey === '__extended__' ? (tmpl.__base || 'custom') : templateKey;
-  if(autoKey === 'custom' || autoKey === 'lux'){
-    // Use the smarter generic auto-detector instead of fixed hint strings.
-    const detected = autoMapGeneric(headers);
+  if(autoKey === 'custom' || autoKey === 'lux' || autoKey === 'luxteardown'){
+    // Use the smarter generic detector; the teardown export gets an exact-header overlay.
+    const detected = autoKey === 'luxteardown' ? autoMapLuxTeardown(headers) : autoMapGeneric(headers);
     fieldValueLookup = {
       id: detected.id, owners: detected.owners, owner2: detected.owner2,
       property: detected.propertyAddress, mailing: detected.mailingAddress,
@@ -5157,6 +5238,11 @@ function applyTemplate(templateKey){
       listname: detected.listName, bedrooms: detected.bedrooms, bathrooms: detected.bathrooms,
       sqft: detected.sqft, lotsize: detected.lotSize, yearbuilt: detected.yearBuilt,
       proptype: detected.propertyType, zoning: detected.zoning, county: detected.county,
+      mailingcity: detected.mailingCity, mailingstate: detected.mailingState, mailingzip: detected.mailingZip,
+      email2: detected.email2, leadstatus: detected.leadStatus, vacant: detected.vacant,
+      owneroccupied: detected.ownerOccupied, lastsaledate: detected.lastSaleDate,
+      lastsaleprice: detected.lastSalePrice, loanbalance: detected.loanBalance,
+      equity: detected.equity, arv: detected.arv,
     };
     tmplPhones = (detected.phones || []).map(p => ({ num: p.num, type: p.type || '', dnc: p.dnc || '' }));
     if(templateKey === '__extended__' && Array.isArray(tmpl.phones)){
@@ -5186,7 +5272,7 @@ function applyTemplate(templateKey){
     </div>`).join('');
 
   $('colMap').innerHTML = tmpl.fields.map(f =>
-    `<div style="font-weight:600">${escapeHtml(f.label)}</div>${(templateKey==='custom'||templateKey==='lux') ? selForCustom(f.id) : sel(f.id, f.hint)}`
+    `<div style="font-weight:600">${escapeHtml(f.label)}</div>${(templateKey==='custom'||templateKey==='lux'||templateKey==='luxteardown'||(templateKey==='__extended__' && ['custom','lux','luxteardown'].includes(tmpl.__base))) ? selForCustom(f.id) : sel(f.id, f.hint)}`
   ).join('') + phoneRows + `
     <div></div><div><button class="btn-ghost" id="addPhoneCol" style="font-size:12px;padding:5px 10px">+ Add phone column</button></div>`;
 
@@ -5309,6 +5395,8 @@ $('uploadGo').addEventListener('click', async () => {
   const ownersCol   = $('map-owners')?.value || '';
   const propCol     = $('map-property')?.value || '';
   const emailCol    = $('map-email')?.value || '';
+  const email2Col   = $('map-email2')?.value || '';
+  const leadStatusCol = $('map-leadstatus')?.value || '';
   const vaNotesCol  = $('map-vanotes')?.value || '';
   const listNameCol = $('map-listname')?.value || '';
   const recordingCol= $('map-recording')?.value || '';
@@ -5327,6 +5415,18 @@ $('uploadGo').addEventListener('click', async () => {
   const lotSizeCol   = $('map-lotsize')?.value || '';
   const propTypeCol  = $('map-proptype')?.value || '';
   const zoningCol    = $('map-zoning')?.value || '';
+  const countyCol    = $('map-county')?.value || '';
+  const mailingCol   = $('map-mailing')?.value || '';
+  const mailingCityCol = $('map-mailingcity')?.value || '';
+  const mailingStateCol= $('map-mailingstate')?.value || '';
+  const mailingZipCol  = $('map-mailingzip')?.value || '';
+  const vacantCol      = $('map-vacant')?.value || '';
+  const ownerOccupiedCol = $('map-owneroccupied')?.value || '';
+  const lastSaleDateCol  = $('map-lastsaledate')?.value || '';
+  const lastSalePriceCol = $('map-lastsaleprice')?.value || '';
+  const loanBalanceCol   = $('map-loanbalance')?.value || '';
+  const equityCol        = $('map-equity')?.value || '';
+  const arvCol           = $('map-arv')?.value || '';
   const phoneCols   = Array.from(document.querySelectorAll('.map-phone-num')).map(s => s.value);
   const typeCols    = Array.from(document.querySelectorAll('.map-phone-type')).map(s => s.value);
   const dncCols     = Array.from(document.querySelectorAll('.map-phone-dnc')).map(s => s.value);
@@ -5392,6 +5492,16 @@ $('uploadGo').addEventListener('click', async () => {
     if(zoningCol && r[zoningCol])   prParts.push(`Zoning: ${r[zoningCol]}`);
     if(propTypeCol && r[propTypeCol]) prParts.push(`Property Type: ${r[propTypeCol]}`);
     if(idCol && r[idCol])           prParts.push(`APN: ${r[idCol]}`);
+    if(countyCol && r[countyCol])   prParts.push(`County: ${r[countyCol]}`);
+    if(leadStatusCol && r[leadStatusCol]) prParts.push(`Lead Status: ${r[leadStatusCol]}`);
+    if(vacantCol && r[vacantCol])   prParts.push(`Vacant: ${r[vacantCol]}`);
+    if(ownerOccupiedCol && r[ownerOccupiedCol]) prParts.push(`Owner Occupied: ${r[ownerOccupiedCol]}`);
+    if(lastSaleDateCol && r[lastSaleDateCol]) prParts.push(`Last Sale: ${r[lastSaleDateCol]}`);
+    if(lastSalePriceCol && r[lastSalePriceCol]) prParts.push(`Last Sale Price: $${Number(String(r[lastSalePriceCol]).replace(/[^0-9.-]/g,'')).toLocaleString()}`);
+    if(loanBalanceCol && r[loanBalanceCol]) prParts.push(`Loan Balance: $${Number(String(r[loanBalanceCol]).replace(/[^0-9.-]/g,'')).toLocaleString()}`);
+    if(equityCol && r[equityCol]) prParts.push(`Equity: $${Number(String(r[equityCol]).replace(/[^0-9.-]/g,'')).toLocaleString()}`);
+    if(arvCol && r[arvCol]) prParts.push(`ARV: $${Number(String(r[arvCol]).replace(/[^0-9.-]/g,'')).toLocaleString()}`);
+    if(email2Col && r[email2Col]) prParts.push(`Email 2: ${r[email2Col]}`);
     const prNotes = prParts.length ? prParts.join(' · ') : '';
     const vaNotes = vaNotesCol ? r[vaNotesCol] : '';
     const combinedNotes = [vaNotes, prNotes].filter(Boolean).join('\n');
@@ -5410,10 +5520,20 @@ $('uploadGo').addEventListener('click', async () => {
       if(tail) fullAddress = fullAddress + ', ' + tail;
     }
 
+    // Same treatment for the owner's mailing address in the teardown export.
+    let fullMailing = mailingCol ? String(r[mailingCol] || '').trim() : '';
+    const mailCity  = mailingCityCol ? String(r[mailingCityCol] || '').trim() : '';
+    const mailState = mailingStateCol ? String(r[mailingStateCol] || '').trim().toUpperCase() : '';
+    const mailZip   = mailingZipCol ? String(r[mailingZipCol] || '').trim() : '';
+    if(fullMailing && (mailCity || mailState || mailZip)){
+      fullMailing = [fullMailing, mailCity, [mailState, mailZip].filter(Boolean).join(' ')].filter(Boolean).join(', ');
+    }
+
     out.push({
       id: idCol && r[idCol] ? String(r[idCol]) : '',
       owners: ownerName,
       property_address: fullAddress,
+      mailing_address: fullMailing,
       email: emailCol ? r[emailCol] : '',
       va_notes: combinedNotes,
       recording_url: recordingCol ? r[recordingCol] : '',
