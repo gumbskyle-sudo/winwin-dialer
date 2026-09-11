@@ -1816,6 +1816,16 @@ main{max-width:100%}
         <button class="btn-ghost" id="testPhoneBtn" style="width:100%;margin-top:8px">📞 Ring this phone now (test)</button>
         <div id="testPhoneResult" class="hide" style="margin-top:8px;padding:10px 12px;border-radius:8px;font-size:12px;line-height:1.45;overflow-wrap:anywhere"></div>
       </div>
+      <div class="field" style="background:#fef3c7;border:1.5px solid #fde68a;border-radius:8px;padding:11px 12px">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:600;color:#78350f">
+          <input type="checkbox" id="settingsUseMyPhone" style="width:18px;height:18px;cursor:pointer;accent-color:#d97706">
+          Use my phone to dial (skip Twilio)
+        </label>
+        <div style="font-size:11px;color:#92400e;margin-top:6px;line-height:1.4">
+          Tapping a number opens your phone's own dialer instead of placing a Twilio call. Your <b>real cell caller ID</b> shows to the seller. No recording, no rotation, no call log, and the power dialer will not work. Turn this back OFF once Twilio is working again.
+        </div>
+      </div>
+
       <div class="field" style="border-top:1px solid #e5e7eb;padding-top:14px;margin-top:4px">
         <label>📞 When someone calls your Twilio number</label>
         <select id="voiceScreen">
@@ -2087,6 +2097,7 @@ let backend  = localStorage.getItem(LS.backend) || '/api';
 let password = localStorage.getItem(LS.pwd) || '';
 let forwardPhone   = localStorage.getItem(LS.forward) || '';
 let activeCallerId = localStorage.getItem(LS.active)  || '';
+let useMyPhone     = localStorage.getItem('cb_use_my_phone') === '1';
 
 // ── Tiny DOM helpers ────────────────────────────────────────────
 const $  = id => document.getElementById(id);
@@ -2391,6 +2402,7 @@ function openModal(id){
   if(id==='settingsModal'){
     $('settingsForwardPhone').value = forwardPhone;
     $('settingsBackendUrl').value   = backend;
+    $('settingsUseMyPhone').checked = useMyPhone;
     $('settingsVmMessage').value    = localStorage.getItem(LS.vmMessage) || DEFAULT_VM_MESSAGE;
     $('settingsVmMode').value       = localStorage.getItem(LS.vmMode) || 'ai';
     $('settingsVmVoice').value      = localStorage.getItem(LS.vmVoice) || 'Polly.Ruth-Generative';
@@ -2621,6 +2633,13 @@ function renderPage(){
       const kind   = parts.find(t => !/^(dnc|do not call)$/i.test(t)) || '';
       const isMob  = /mob|cell|wireless/i.test(kind);
       const kindCls = kind ? (isMob ? ' mob' : ' land') : '';
+      if(useMyPhone) return `
+      <a href="tel:${escapeHtml(ph.e164)}" class="phone${isDnc?' dnc':''}" data-tel-pid="${escapeHtml(p.id)}" style="text-decoration:none;background:#fef3c7;color:#78350f;border:1.5px solid #fde68a">
+        <span class="num">${escapeHtml(fmtPhone(ph.e164))}</span>
+        ${kind ? `<span class="badge${kindCls}">${escapeHtml(kind)}</span>` : ''}
+        ${isDnc ? `<span class="badge dnc-badge">⛔ DNC</span>` : ''}
+        <span class="badge" style="background:#d97706;color:#fff">📱 MY PHONE</span>
+      </a>`;
       return `
       <button class="phone${isDnc?' dnc':''}" data-call data-pid="${escapeHtml(p.id)}" data-phidx="${j}">
         <span class="num">${escapeHtml(fmtPhone(ph.e164))}</span>
@@ -3747,6 +3766,19 @@ document.addEventListener('click', e => {
     const ph = p?.phones?.[phidx];
     if(!p || !ph) return;
     placeCall(p, ph, callBtn, phidx);
+  }
+
+  // "Use my phone" tel: link — let the browser open the native dialer,
+  // but still log the lead as called so the counter stays honest.
+  const telBtn = e.target.closest('[data-tel-pid]');
+  if(telBtn){
+    const tp = properties.find(x => x.id === telBtn.dataset.telPid);
+    if(tp && !(tp.lead && tp.lead.called)){
+      tp.lead = tp.lead || {};
+      tp.lead.called = true;
+      api('update-lead', {method:'POST', body:{propertyId:tp.id, called:true}}).catch(()=>{});
+      setTimeout(() => { renderPage(); refreshCounter(); }, 150);
+    }
   }
 });
 document.addEventListener('change', e => {
@@ -4893,8 +4925,11 @@ $('exportCsv').addEventListener('click', () => {
 $('settingsSave').addEventListener('click', async () => {
   forwardPhone = toE164($('settingsForwardPhone').value.trim());
   backend = $('settingsBackendUrl').value.trim() || '/api';
+  useMyPhone = $('settingsUseMyPhone').checked;
   localStorage.setItem(LS.forward, forwardPhone);
   localStorage.setItem(LS.backend, backend);
+  localStorage.setItem('cb_use_my_phone', useMyPhone ? '1' : '0');
+  renderPage();
   localStorage.setItem(LS.vmMessage, $('settingsVmMessage').value.trim() || DEFAULT_VM_MESSAGE);
   localStorage.setItem(LS.vmMode, $('settingsVmMode').value);
   localStorage.setItem(LS.vmVoice, $('settingsVmVoice').value);
