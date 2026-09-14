@@ -429,6 +429,17 @@ const VM_DEFAULT_TEMPLATE =
   "Again, that's {your_name} at {callback}, or you can visit {website}. " +
   "Thanks, and have a great day.";
 
+// Spanish version of the auto voicemail drop. Used whenever the selected
+// voice is one of the Spanish Polly voices (see VM_VOICE_ALLOWLIST /
+// isSpanishVoice below). Same placeholders as the English template.
+const VM_DEFAULT_TEMPLATE_ES =
+  "Hola {first_name}, soy {your_name} de {company}. " +
+  "Le llamo por su propiedad en {address}. " +
+  "Le podemos hacer una oferta en efectivo rápida — sin obligación, sin reparaciones " +
+  "y sin comisiones. Puede regresarme la llamada al {callback}. " +
+  "De nuevo, soy {your_name}, al {callback}, o visite {website}. " +
+  "Gracias y que tenga un buen día.";
+
 // Two lines is the ceiling on purpose. The FCC caps abandoned calls at
 // 3% per campaign; at 3+ lines that rate is very hard to hold on a
 // wholesaling list, and the exposure isn't worth the extra contacts.
@@ -541,17 +552,34 @@ function renderVmSsml(template, ctx) {
   return out;
 }
 
-// The saved template, or the default if nothing has been customized.
-async function vmTemplate() {
+// The saved template, or the language-appropriate default if nothing has
+// been customized. Pass the voice being used so a Spanish voice gets the
+// Spanish default text instead of the English one.
+async function vmTemplate(voice) {
+  if (isSpanishVoice(voice)) {
+    return (await getAppConfig('vm_template_es')) || VM_DEFAULT_TEMPLATE_ES;
+  }
   return (await getAppConfig('vm_template')) || VM_DEFAULT_TEMPLATE;
 }
 
 const VM_VOICE_ALLOWLIST = [
   'Polly.Ruth-Generative', 'Polly.Matthew-Generative', 'Polly.Danielle-Generative',
   'Polly.Joanna-Neural', 'Polly.Matthew-Neural', 'Polly.Stephen-Neural', 'alice',
+  // Spanish voices (see isSpanishVoice / vmLanguageAttr below)
+  'Polly.Lupe-Neural', 'Polly.Pedro-Neural', 'Polly.Lucia-Neural', 'Polly.Sergio-Neural',
 ];
 function vmVoice(requested) {
   return VM_VOICE_ALLOWLIST.includes(requested) ? requested : 'Polly.Ruth-Generative';
+}
+// Spanish AI voicemail — which allow-listed voices are Spanish, and which
+// Twilio <Say language> locale each one needs so pronunciation is correct.
+function isSpanishVoice(voice) {
+  return /^Polly\.(Lupe|Pedro|Lucia|Sergio)/.test(voice || '');
+}
+function vmLanguageAttr(voice) {
+  if (/^Polly\.(Lupe|Pedro)-Neural$/.test(voice || ''))  return 'es-US';
+  if (/^Polly\.(Lucia|Sergio)-Neural$/.test(voice || '')) return 'es-ES';
+  return 'en-US';
 }
 
 // Redirect a live leg into a voicemail message and hang up.
@@ -1104,7 +1132,7 @@ async function autoDropVoicemail(callSid) {
   } else {
     const voice = vmVoice(await getAppConfig('vm_voice'));
     const ctx = await vmContext(row.property_id, row.profile_id, { fromNumber: row.from_number });
-    inner = `<Say voice="${escapeXml(voice)}">${renderVmSsml(await vmTemplate(), ctx)}</Say>`;
+    inner = `<Say voice="${escapeXml(voice)}" language="${vmLanguageAttr(voice)}">${renderVmSsml(await vmTemplate(voice), ctx)}</Say>`;
   }
   await dropVmOnLeg(callSid, inner);
   try {
@@ -1372,7 +1400,7 @@ async function cleanupExpiredRecordings() {
 // Bumped whenever this file changes in a way the frontend depends on.
 // The Settings screen reads it, so a half-finished deploy is visible
 // instead of showing up later as a mystery "Unknown action" error.
-const API_VERSION = '2026-09-08-email-blast';
+const API_VERSION = '2026-09-14-spanish-vm';
 
 // ── Main handler ──────────────────────────────────────────────
 exports.handler = async (event) => {
@@ -2245,11 +2273,13 @@ exports.handler = async (event) => {
           forwardTo:   await getAppConfig('default_voice_forward_number'),
           // ── Voicemail drop ──
           vmTemplate:  (await getAppConfig('vm_template')) || VM_DEFAULT_TEMPLATE,
+          vmTemplateEs: (await getAppConfig('vm_template_es')) || VM_DEFAULT_TEMPLATE_ES,
           vmCompany:   (await getAppConfig('vm_company_name')) || VM_COMPANY_DEFAULT,
           vmWebsite:   (await getAppConfig('vm_website')) || VM_WEBSITE_DEFAULT,
           vmRepName:   await getAppConfig('vm_rep_name'),
           vmCallback:  await getAppConfig('vm_callback_number'),
           vmVoice:     vmVoice(await getAppConfig('vm_voice')),
+          vmLanguage:  isSpanishVoice(await getAppConfig('vm_voice')) ? 'es' : 'en',
           vmPreferRecording: (await getAppConfig('vm_prefer_recording')) === '1',
           vmPlaceholders: ['{first_name}', '{address}', '{your_name}', '{callback}', '{company}', '{website}'],
           maxLines:    MAX_PD_LINES,
@@ -2263,11 +2293,17 @@ exports.handler = async (event) => {
         if (body.ringSeconds)                  await setAppConfig('voice_ring_seconds', String(parseInt(body.ringSeconds, 10) || 25));
         if (typeof body.forwardTo === 'string') await setAppConfig('default_voice_forward_number', body.forwardTo);
         if (typeof body.vmTemplate === 'string') await setAppConfig('vm_template', body.vmTemplate);
+        if (typeof body.vmTemplateEs === 'string') await setAppConfig('vm_template_es', body.vmTemplateEs);
         if (typeof body.vmCompany === 'string')  await setAppConfig('vm_company_name', body.vmCompany);
         if (typeof body.vmWebsite === 'string')  await setAppConfig('vm_website', body.vmWebsite);
         if (typeof body.vmRepName === 'string')  await setAppConfig('vm_rep_name', body.vmRepName);
         if (typeof body.vmCallback === 'string') await setAppConfig('vm_callback_number', body.vmCallback);
         if (typeof body.vmVoice === 'string')    await setAppConfig('vm_voice', vmVoice(body.vmVoice));
+        // vmLanguage is a convenience the front end can send instead of a
+        // specific voice — picks a sensible default voice per language.
+        if (typeof body.vmLanguage === 'string' && typeof body.vmVoice !== 'string') {
+          await setAppConfig('vm_voice', body.vmLanguage === 'es' ? 'Polly.Lupe-Neural' : 'Polly.Ruth-Generative');
+        }
         if (typeof body.vmPreferRecording === 'boolean') {
           await setAppConfig('vm_prefer_recording', body.vmPreferRecording ? '1' : '0');
         }
@@ -2284,7 +2320,7 @@ exports.handler = async (event) => {
           website:  body.website,
         });
         const tpl = (typeof body.template === 'string' && body.template.trim())
-          ? body.template : await vmTemplate();
+          ? body.template : await vmTemplate(body.voice);
         // Plain-text version for the screen; the call itself uses SSML.
         const spoken = tpl
           .replace(/\{first_name\}/g, ctx.firstName)
@@ -2423,7 +2459,7 @@ exports.handler = async (event) => {
         if (!playUrl) {
           const rawTemplate = (typeof body.message === 'string' && /\{\w+\}/.test(body.message))
             ? body.message
-            : await vmTemplate();
+            : await vmTemplate(voice);
           const ctx = await vmContext(body.propertyId, body.profileId, {
             yourName:   body.yourName,
             callback:   body.callbackNumber,
@@ -2431,7 +2467,7 @@ exports.handler = async (event) => {
             website:    body.website,
             fromNumber: body.from,
           });
-          vmSsml = `<Say voice="${escapeXml(voice)}">${renderVmSsml(rawTemplate, ctx)}</Say>`;
+          vmSsml = `<Say voice="${escapeXml(voice)}" language="${vmLanguageAttr(voice)}">${renderVmSsml(rawTemplate, ctx)}</Say>`;
         }
 
         // Which leg actually has the seller on it.
