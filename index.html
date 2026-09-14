@@ -35,7 +35,7 @@ a{color:#96751A}
 #login .err{color:#b91c1c;font-size:13px;margin-top:8px;min-height:18px}
 
 /* ── App shell ── */
-header{background:#0f0d0a;color:#fff;padding:12px 14px;position:sticky;top:0;z-index:10;overflow:hidden}
+header{background:#0f0d0a;color:#fff;padding:calc(12px + env(safe-area-inset-top)) 14px 12px;position:sticky;top:0;z-index:10;overflow:hidden}
 header::before{content:'';position:absolute;top:-14px;right:-16px;width:100px;height:83px;background-image:url('data:image/png;base64,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');background-size:contain;background-repeat:no-repeat;opacity:.08;pointer-events:none;z-index:0}
 header>*{position:relative;z-index:1}
 .title-row{display:flex;align-items:center;gap:8px}
@@ -1894,6 +1894,23 @@ main{max-width:100%}
         <textarea id="settingsVmMessage" rows="3" placeholder="Message played when you tap VM Drop"></textarea>
         <div style="font-size:11px;color:#6b7280;margin-top:4px">Placeholders: <code>{FirstName}</code>, <code>{Address}</code>, <code>{CallbackNumber}</code> — filled in per lead automatically when the voicemail is dropped.</div>
         <div style="font-size:11px;color:#6b7280;margin-top:4px">Only used if you haven't recorded a message above. Saved on this device only.</div>
+      </div>
+
+      <!-- Automatic voicemail (plays when a call isn't answered / hits a machine) -->
+      <div class="field" style="border-top:1px solid #e5e7eb;padding-top:14px;margin-top:6px">
+        <label>🤖 Automatic voicemail — language <span style="font-weight:400;color:#6b7280">(plays by itself when a call isn't answered)</span></label>
+        <select id="settingsVmAutoLang">
+          <option value="en">🇺🇸 English</option>
+          <option value="es">🇪🇸 Español (Spanish)</option>
+        </select>
+        <div style="font-size:11px;color:#6b7280;margin-top:4px">This is separate from the manual VM Drop message above — it's what plays automatically when answering-machine detection picks up voicemail on an unanswered call.</div>
+      </div>
+      <div class="field">
+        <label>Automatic voicemail — message</label>
+        <textarea id="settingsVmAutoMessage" rows="3" placeholder="Leave blank to use the built-in message for the selected language"></textarea>
+        <div style="font-size:11px;color:#6b7280;margin-top:4px">Placeholders: <code>{first_name}</code>, <code>{address}</code>, <code>{your_name}</code>, <code>{callback}</code>, <code>{company}</code>, <code>{website}</code>. Write this one in whichever language you picked above — leave blank to use the built-in default (Spanish default is a direct translation of the English message).</div>
+        <button type="button" id="settingsVmAutoSaveBtn" class="btn-secondary" style="margin-top:8px">Save automatic voicemail</button>
+        <span id="settingsVmAutoStatus" style="font-size:12px;margin-left:8px"></span>
       </div>
 
       <!-- SMS settings (shared across team) -->
@@ -4295,11 +4312,62 @@ $('voiceSettingsSave')?.addEventListener('click', async () => {
   btn.disabled = false; btn.textContent = 'Save call handling';
 });
 
+// ── Automatic voicemail language (plays when a call isn't answered) ──
+// Keeps the English and Spanish messages separate behind the scenes even
+// though only one textarea is shown at a time, so switching the dropdown
+// back and forth doesn't lose either draft.
+let _vmAutoDrafts = { en: '', es: '' };
+async function loadAutoVmSettings(){
+  const langSel = $('settingsVmAutoLang');
+  const msgBox  = $('settingsVmAutoMessage');
+  if (!langSel || !msgBox) return;
+  try {
+    const j = await api('get-voice-settings');
+    const lang = j.vmLanguage === 'es' ? 'es' : 'en';
+    // Only show a draft if it differs from the built-in default — otherwise
+    // leave the box blank so the placeholder text explains itself.
+    _vmAutoDrafts.en = j.vmTemplate || '';
+    _vmAutoDrafts.es = j.vmTemplateEs || '';
+    langSel.value = lang;
+    msgBox.value = _vmAutoDrafts[lang];
+  } catch(e){ /* older backend — leave fields at defaults */ }
+}
+$('settingsVmAutoLang')?.addEventListener('change', () => {
+  const langSel = $('settingsVmAutoLang');
+  const msgBox  = $('settingsVmAutoMessage');
+  if (!langSel || !msgBox) return;
+  // Stash whatever's currently typed under the language it belongs to,
+  // then swap in the other language's draft.
+  const prevLang = langSel.dataset.prev || 'en';
+  _vmAutoDrafts[prevLang] = msgBox.value;
+  msgBox.value = _vmAutoDrafts[langSel.value] || '';
+  langSel.dataset.prev = langSel.value;
+});
+$('settingsVmAutoSaveBtn')?.addEventListener('click', async () => {
+  const btn = $('settingsVmAutoSaveBtn');
+  const status = $('settingsVmAutoStatus');
+  const lang = $('settingsVmAutoLang').value;
+  const msg  = $('settingsVmAutoMessage').value.trim();
+  _vmAutoDrafts[lang] = msg;
+  btn.disabled = true; btn.textContent = 'Saving…';
+  try {
+    const payload = { vmLanguage: lang };
+    if (lang === 'en') payload.vmTemplate = msg; else payload.vmTemplateEs = msg;
+    // Explicit voice pick so the language switch takes effect immediately.
+    payload.vmVoice = lang === 'es' ? 'Polly.Lupe-Neural' : 'Polly.Ruth-Generative';
+    await api('save-voice-settings', {method:'POST', body: payload});
+    if (status) { status.textContent = '✅ Saved'; status.style.color = '#166534'; setTimeout(()=>status.textContent='',3000); }
+  } catch(e){
+    if (status) { status.textContent = '❌ ' + e.message; status.style.color = '#b91c1c'; }
+  }
+  btn.disabled = false; btn.textContent = 'Save automatic voicemail';
+});
+
 // Is the deployed api.js actually the one this page expects? Frontend and
 // backend ship as separate files, so it is easy to update one and not the
 // other — which surfaces later as "Unknown action" on a button that looks
 // like it should work.
-const EXPECTED_API_VERSION = '2026-09-08-email-blast';
+const EXPECTED_API_VERSION = '2026-09-14-spanish-vm';
 async function checkApiVersion(){
   const line = $('apiVersionLine');
   if(!line) return;
@@ -8026,6 +8094,7 @@ $('smsConfigSave')?.addEventListener('click', async () => {
 document.querySelector('[data-open="settingsModal"]')?.addEventListener('click', () => {
   checkApiVersion();
   loadVoiceSettings();
+  loadAutoVmSettings();
   setTimeout(() => loadSmsConfig(), 100);
 });
 
