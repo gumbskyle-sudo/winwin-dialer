@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,viewport-fit=cover">
 <meta name="theme-color" content="#0f0d0a">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -1077,6 +1077,23 @@ body:not(.view-dialer) header .callerid{display:none}
 /* --- Android: no element may push the page sideways --- */
 html,body{overflow-x:hidden;max-width:100%}
 main{max-width:100%}
+
+/* --- iPhone: fields under 16px make iOS zoom in when tapped, and a
+   home-screen web app stays zoomed (page runs off the right edge).
+   16px on every field stops the zoom. --- */
+@media (max-width:900px){
+  input,select,textarea{font-size:16px!important}
+}
+html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
+
+/* --- Add Lead form --- */
+#addLeadModal .al-row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+#addLeadModal .al-row .field{margin-bottom:14px;min-width:0}
+#addLeadModal select{display:block;width:100%;padding:10px 12px;background:#f9fafb;border:2px solid #d1d5db;border-radius:7px}
+#addLeadModal .al-check{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600;margin:4px 0 14px}
+#addLeadModal .al-check input{width:20px;height:20px}
+#addLeadModal .al-msg{font-size:13px;margin-top:10px;min-height:18px}
+@media (max-width:420px){#addLeadModal .al-row{grid-template-columns:1fr}}
 </style>
 </head>
 <body class="view-dialer">
@@ -1133,6 +1150,7 @@ main{max-width:100%}
     <button class="header-link" data-open="logModal">📊 Log</button>
     <button class="header-link" data-open="recModal">🎙 Recordings</button>
     <button class="header-link" data-open="uploadModal">⬆ Upload List</button>
+    <button class="header-link" data-open="addLeadModal">➕ Add Lead</button>
     <button class="header-link" data-open="settingsModal">⚙ Settings</button>
   </div>
   <div class="callerid">
@@ -1574,6 +1592,78 @@ main{max-width:100%}
   <div id="realtorResults"></div>
 </div>
 
+<div class="modal" id="addLeadModal">
+  <div class="modal-box">
+    <div class="modal-head">
+      <h3>➕ Add a lead</h3>
+      <button class="modal-close" data-close="addLeadModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="field">
+        <label>Owner name</label>
+        <input type="text" id="alOwners" placeholder="e.g. Chad Busch" autocomplete="off">
+      </div>
+      <div class="field">
+        <label>Property address *</label>
+        <input type="text" id="alAddress" placeholder="1000 Coddington Pl, Charlotte, NC 28211" autocomplete="off">
+      </div>
+      <div class="field">
+        <label>Mailing address (if different)</label>
+        <input type="text" id="alMailing" placeholder="Leave blank if same" autocomplete="off">
+      </div>
+      <div class="al-row">
+        <div class="field">
+          <label>Phone 1 *</label>
+          <input type="tel" id="alPhone1" placeholder="(704) 555-1234" autocomplete="off">
+        </div>
+        <div class="field">
+          <label>Phone 1 type</label>
+          <select id="alPhone1Type"><option value="Mobile">Mobile</option><option value="Landline">Landline</option><option value="">Unknown</option></select>
+        </div>
+      </div>
+      <div class="al-row">
+        <div class="field">
+          <label>Phone 2</label>
+          <input type="tel" id="alPhone2" placeholder="Optional" autocomplete="off">
+        </div>
+        <div class="field">
+          <label>Phone 3</label>
+          <input type="tel" id="alPhone3" placeholder="Optional" autocomplete="off">
+        </div>
+      </div>
+      <div class="field">
+        <label>Email</label>
+        <input type="email" id="alEmail" placeholder="Optional" autocomplete="off">
+      </div>
+      <div class="al-row">
+        <div class="field">
+          <label>List</label>
+          <input type="text" id="alList" list="alListOptions" placeholder="Manual Leads" autocomplete="off">
+          <datalist id="alListOptions"></datalist>
+        </div>
+        <div class="field">
+          <label>Lead source</label>
+          <select id="alSource">
+            <option value="Manual">Manual entry</option>
+            <option value="IMN Leads">IMN Leads</option>
+            <option value="Referral">Referral</option>
+            <option value="Driving for Dollars">Driving for Dollars</option>
+            <option value="Inbound call">Inbound call</option>
+            <option value="Other">Other</option>
+          </select>
+        </div>
+      </div>
+      <div class="field">
+        <label>Notes (motivation, asking price, timeline…)</label>
+        <textarea id="alNotes" rows="4" placeholder="e.g. Financial hardship, wants to sell in 30 days, asking $300k"></textarea>
+      </div>
+      <label class="al-check"><input type="checkbox" id="alHot" checked> 🔴 Highlight red (call ASAP)</label>
+      <button class="btn-primary" id="alSave" style="width:100%">➕ Add to dialer</button>
+      <div class="al-msg" id="alMsg"></div>
+    </div>
+  </div>
+</div>
+
 <div class="modal" id="manualDialModal">
   <div class="modal-box">
     <div class="modal-head">
@@ -2013,7 +2103,7 @@ const DEFAULT_WEBSITE = 'winwinproperties.net';
 const companyName = () => localStorage.getItem(LS.company) || DEFAULT_COMPANY;
 const companySite = () => localStorage.getItem(LS.website) || DEFAULT_WEBSITE;
 // Bump this on every deploy so you can see which build is actually live
-const BUILD_ID = 'build 2026-09-23-imn';
+const BUILD_ID = 'build 2026-09-23-addlead';
 const DEFAULT_VM_MESSAGE = "Hi {FirstName}, we are calling from Win Win Properties to give you a quick offer on your property at {Address}. Give us a call back at {CallbackNumber}, or find us online at win win properties dot net. That's W W W dot winwinproperties dot net. Thanks, and have a great day.";
 let backend  = localStorage.getItem(LS.backend) || '/api';
 let password = localStorage.getItem(LS.pwd) || '';
@@ -2317,6 +2407,7 @@ document.addEventListener('click', e => {
 });
 function openModal(id){
   $(id).classList.add('open');
+  if(id==='addLeadModal') prepAddLeadForm();
   if(id==='numbersModal') loadOwnedNumbers();
   if(id==='logModal')    loadLog();
   if(id==='recModal')    loadCallRecordings();
@@ -3451,6 +3542,89 @@ $('pdPrev').addEventListener('click', () => {
   }
   pdIndex = Math.max(0, pdIndex - 1);
   pdDialNext(pdQueue[pdIndex], pdSession.callerId, pdSession.agentPhone, pdSession.profileId);
+});
+
+// ── Add a lead manually ────────────────────────────────────────
+// Saves through the same import-properties action as CSV uploads
+// (replace:false, so nothing existing is ever wiped). An address that's
+// already in the dialer is skipped by the backend and reported here.
+function prepAddLeadForm(){
+  const lists = [...new Set(properties.map(p => (p.list_name||'').trim()).filter(Boolean))].sort();
+  $('alListOptions').innerHTML = lists.map(l => `<option value="${escapeHtml(l)}"></option>`).join('');
+  $('alMsg').textContent = '';
+  setTimeout(() => $('alOwners').focus(), 50);
+}
+function resetAddLeadForm(){
+  ['alOwners','alAddress','alMailing','alPhone1','alPhone2','alPhone3','alEmail','alNotes'].forEach(id => { $(id).value = ''; });
+  $('alPhone1Type').value = 'Mobile';
+  $('alHot').checked = true;
+}
+$('alSave').addEventListener('click', async () => {
+  const btn = $('alSave'), msg = $('alMsg');
+  const owners  = $('alOwners').value.trim();
+  const address = $('alAddress').value.trim();
+  const rawPhones = [
+    [$('alPhone1').value, $('alPhone1Type').value],
+    [$('alPhone2').value, ''],
+    [$('alPhone3').value, ''],
+  ];
+  const phones = [];
+  for(const [raw, type] of rawPhones){
+    if(!raw.trim()) continue;
+    const e164 = toE164(raw);
+    if(!e164){ msg.style.color = '#b91c1c'; msg.textContent = `"${raw}" doesn't look like a valid 10-digit phone number.`; return; }
+    if(!phones.some(p => p.e164 === e164)) phones.push({ e164, display: fmtPhone(e164), type });
+  }
+  if(!address){ msg.style.color = '#b91c1c'; msg.textContent = 'Property address is required.'; $('alAddress').focus(); return; }
+  if(!phones.length){ msg.style.color = '#b91c1c'; msg.textContent = 'Add at least one phone number so the lead can be dialed.'; $('alPhone1').focus(); return; }
+
+  const source = $('alSource').value;
+  const notes  = $('alNotes').value.trim();
+  const email  = $('alEmail').value.trim();
+  const vaNotes = [
+    `Source: ${source}`,
+    email ? `Email: ${email}` : '',
+    notes,
+  ].filter(Boolean).join('\n');
+
+  const id = 'manual-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7);
+  const prop = {
+    id,
+    owners,
+    property_address: address,
+    mailing_address: $('alMailing').value.trim(),
+    email,
+    va_notes: vaNotes,
+    highlight: $('alHot').checked ? 'red' : '',
+    list_name: $('alList').value.trim() || 'Manual Leads',
+    phones,
+  };
+
+  btn.disabled = true; btn.textContent = 'Saving…';
+  msg.style.color = '#6b7280'; msg.textContent = '';
+  try {
+    const r = await api('import-properties', { method:'POST', body:{ properties:[prop], replace:false } });
+    if(r && r.dupeAddressesSkipped && !r.imported){
+      msg.style.color = '#b45309';
+      msg.textContent = 'That address is already in the dialer — search for it instead of adding it again.';
+      return;
+    }
+    toast('➕ Lead added: ' + (owners || address), 'ok');
+    resetAddLeadForm();
+    $('addLeadModal').classList.remove('open');
+    await loadProperties();
+    // Jump straight to the new lead
+    $('leadSearch').value = address;
+    $('leadSearchClear').classList.remove('hide');
+    searchQuery = address;
+    page = 1;
+    renderPage();
+  } catch(e){
+    msg.style.color = '#b91c1c';
+    msg.textContent = 'Could not save: ' + e.message;
+  } finally {
+    btn.disabled = false; btn.textContent = '➕ Add to dialer';
+  }
 });
 
 // ── Search bar ────────────────────────────────────────────────
