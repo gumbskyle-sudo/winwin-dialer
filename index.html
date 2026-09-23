@@ -2109,7 +2109,7 @@ const DEFAULT_WEBSITE = 'winwinproperties.net';
 const companyName = () => localStorage.getItem(LS.company) || DEFAULT_COMPANY;
 const companySite = () => localStorage.getItem(LS.website) || DEFAULT_WEBSITE;
 // Bump this on every deploy so you can see which build is actually live
-const BUILD_ID = 'build 2026-09-23-fit2';
+const BUILD_ID = 'build 2026-09-23-imn-script';
 const DEFAULT_VM_MESSAGE = "Hi {FirstName}, we are calling from Win Win Properties to give you a quick offer on your property at {Address}. Give us a call back at {CallbackNumber}, or find us online at win win properties dot net. That's W W W dot winwinproperties dot net. Thanks, and have a great day.";
 let backend  = localStorage.getItem(LS.backend) || '/api';
 let password = localStorage.getItem(LS.pwd) || '';
@@ -8983,6 +8983,196 @@ api('d4d-list').then(j => {
   const fresh = (j.leads || []).filter(l => l.status === 'new').length;
   $('d4dBadge').textContent = fresh ? '· ' + fresh : '';
 }).catch(() => {});
+
+// ═══════════════════════════════════════════════════════════════
+// IMN QUALIFICATION SCRIPT  (added 2026-09-23)
+// ═══════════════════════════════════════════════════════════════
+
+// Lines can carry  if:'field'  (show only when the lead has it) or
+// ifNot:'field'  (show only when it's missing), so the script asks
+// cold when IMN sent nothing and confirms when IMN already told us.
+CALL_SCRIPTS.imn = {
+  name: '🔥 IMN Qualification',
+  sections: [
+    { t:'Intro', lines:[
+      { k:'sub', x:'Remember: Urgency · Motivation · Ballpark Price · Condition' },
+      { k:'say', x:'Hi {FirstName}, my name is {YourName}, how are you today?' },
+      { k:'note', x:'[PAUSE]' },
+      { k:'say', x:'I am calling to see if you are interested in selling your property at {StreetAddress} now or in the near future.' },
+      { k:'note', x:'[PAUSE]' },
+    ]},
+    { t:'Urgency / Now factor', lines:[
+      { k:'say', x:"So, I'm glad I got a hold of you today. We just sold a property close to your area and we are looking for another one to buy this week. With that being said, if we come to an agreement on a fair price for the property, YOU ARE DEFINITELY READY TO MAKE A DECISION… RIGHT?" },
+      { k:'note', if:'timeline', x:'IMN says their timeline is: {Timeline}' },
+    ]},
+    { t:'Price', lines:[
+      { k:'note', if:'askingPrice', x:'IMN says they want {AskingPrice} — confirm it instead of asking cold.' },
+      { k:'ask', if:'askingPrice', x:'I have you down at around {AskingPrice} — is that still about where you want to be?' },
+      { k:'ask', ifNot:'askingPrice', x:'How much are you looking to get for that property?' },
+      { k:'note', x:"Do not press if they don't have an asking price yet." },
+    ]},
+    { t:'Motivation', lines:[
+      { k:'note', if:'motivation', x:'IMN says: {Motivation} — let them tell it in their own words.' },
+      { k:'ask', x:"What's got you thinking about selling the property?" },
+      { k:'sub', x:'Open-ended questions — ask a minimum of 3' },
+      { k:'note', x:"1. Mirror the seller — repeat their last word or phrase with a questioning tone." },
+      { k:'ask', x:'How long have you been thinking about selling?' },
+      { k:'ask', x:"What's stopping you from fixing up the property yourself and listing it with an agent?" },
+      { k:'ask', x:"What would be your plan in the event that you're not able to get the home sold?" },
+      { k:'note', x:"5. Ask a fifth open-ended question relevant to the seller's situation." },
+      { k:'ask', x:'[Picture perfect] What does your picture perfect scenario look like after you have sold this home?' },
+    ]},
+    { t:'Condition', lines:[
+      { k:'note', if:'condition', x:'IMN says condition: {Condition} — confirm it.' },
+      { k:'note', if:'yearBuilt', x:'Built in {YearBuilt}.' },
+      { k:'ask', x:'Overall condition — On a scale of 1 to 10, how would you rate the overall condition of the property, with 10 being completely move-in ready?' },
+      { k:'note', x:'[PAUSE]' },
+      { k:'ask', x:'Recent updates — Has anything been updated or renovated in the last few years — things like the roof, HVAC, kitchen, or bathrooms?' },
+      { k:'ask', x:'Known issues — Are there any known repairs or issues the property needs right now — anything structural, electrical, plumbing, or cosmetic?' },
+      { k:'note', x:'[PAUSE]' },
+      { k:'note', if:'occupancy', x:'IMN says occupancy: {Occupancy} — confirm it.' },
+      { k:'ask', x:'Occupancy — Is the property currently occupied — is someone living there, or is it vacant?' },
+      { k:'ask', x:'If vacant — How long has it been sitting vacant?' },
+      { k:'note', x:'Ask only if vacant.' },
+    ]},
+    { t:'Setting expectations — for next call', lines:[
+      { k:'say', x:'Okay, I believe I have all the information I need right now.' },
+      { k:'say', x:"I'm going to take some time to talk with the partners to see what the property qualifies for. Then I will call you back. It usually takes about 5 minutes to let you know what it looks like to work with us and let you know what the property qualifies for. All I ask from you is that you make a confident yes or no decision, and NO is perfectly ok. With that being said, do you have any other questions for me?" },
+      { k:'ask', x:'Great, is there a good time for me to give you a call back?' },
+      { k:'say', x:'Perfect, talk with you soon.' },
+      { k:'note', x:'Log the callback time and their answers in the Live Notepad on the lead card.' },
+    ]},
+  ],
+};
+
+// Pull a "Key: value" detail out of the lead's notes (IMN intake,
+// Add Lead form, or anything typed that way). Handles "·"-joined lines.
+function leadDetail(text, ...keys){
+  const segs = String(text || '').split('\n')
+    .flatMap(line => line.split('·')).map(s => s.trim()).filter(Boolean);
+  for(const k of keys){
+    const safe = k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp('^' + safe + '\\s*[:=]\\s*(.+)$', 'i');
+    for(const seg of segs){
+      const m = seg.match(re);
+      if(m && m[1].trim()) return m[1].trim();
+    }
+  }
+  return '';
+}
+const LEAD_DETAIL_KEYS = {
+  askingPrice: ['asking price','asking','desired price','expected price','price wanted','price'],
+  motivation:  ['motivation','reason for selling','why selling','reason'],
+  condition:   ['condition','property condition'],
+  occupancy:   ['occupancy','occupancy status','occupied'],
+  timeline:    ['timeline','timeframe','time frame','how soon','when to sell'],
+};
+
+function isImnLead(prop){
+  if(!prop) return false;
+  const web = webLeadIndex[prop.id];
+  if(web && /imn/i.test(web.source || '')) return true;
+  if(/imn/i.test(prop.list_name || '')) return true;
+  return /source:\s*imn/i.test((prop.lead || {}).va_notes || '');
+}
+
+// IMN leads open the IMN script automatically; every other lead keeps
+// whatever script you picked. Switching mid-call still works.
+let callScriptKey = null;
+const _showDrawerBeforeImn = showDrawer;
+showDrawer = function(o, hasLead){
+  callScriptKey = isImnLead(o && o.prop) ? 'imn' : null;
+  _showDrawerBeforeImn(o, hasLead);
+};
+$('spSelect').addEventListener('change', e => {
+  callScriptKey = e.target.value;
+  renderScriptPanel();
+});
+
+// Add the seller-side details (price, motivation, condition…) to the
+// context the scripts are filled from.
+const _setScriptContextBeforeImn = setScriptContext;
+setScriptContext = function(o){
+  _setScriptContextBeforeImn(o);
+  const prop = (o && o.prop) || null;
+  const lead = (prop && prop.lead) || {};
+  const txt  = [lead.va_notes, lead.notes].filter(x => x && String(x).trim()).join('\n');
+  Object.entries(LEAD_DETAIL_KEYS).forEach(([field, keys]) => {
+    scriptCtx[field] = leadDetail(txt, ...keys);
+  });
+  // Whatever free text is left (not Key: value lines we already show)
+  const allKeys = Object.values(LEAD_DETAIL_KEYS).flat().concat(['source','email']);
+  const specRest = txt ? parseLeadSpecs(txt).rest : '';
+  scriptCtx.leadNotes = specRest.split('\n').filter(line => {
+    const l = line.trim().toLowerCase();
+    return l && !allKeys.some(k => l.startsWith(k + ':'));
+  }).join('\n').trim();
+  scriptCtx.leadSource = (prop && webLeadIndex[prop.id] && webLeadIndex[prop.id].source)
+    || leadDetail(txt, 'source') || '';
+};
+
+// New placeholders: {AskingPrice} {Motivation} {Condition} {Occupancy} {Timeline}
+const _fillScriptBeforeImn = fillScript;
+fillScript = function(text, ctx, forCopy){
+  const extra = {
+    AskingPrice: ctx.askingPrice, Motivation: ctx.motivation,
+    Condition: ctx.condition, Occupancy: ctx.occupancy, Timeline: ctx.timeline,
+  };
+  const pre = String(text).replace(/\{(AskingPrice|Motivation|Condition|Occupancy|Timeline)\}/g, (m, k) => {
+    const v = extra[k];
+    if(!v) return m;                       // base renders the red [BLANK]
+    return forCopy ? v : `<span class="sp-fill">${escapeHtml(v)}</span>`;
+  });
+  return _fillScriptBeforeImn(pre, ctx, forCopy);
+};
+
+// What the seller already told IMN, shown under the owner/property facts
+function leadIntelHtml(){
+  const c = scriptCtx || {};
+  const row = (k, v) => v ? `<div class="sf-row"><span class="sf-k">${escapeHtml(k)}</span><span class="sf-v">${escapeHtml(v)}</span></div>` : '';
+  const rows = [
+    row('Asking',    c.askingPrice),
+    row('Why',       c.motivation),
+    row('Condition', c.condition),
+    row('Occupancy', c.occupancy),
+    row('Timeline',  c.timeline),
+  ].join('');
+  const notes = c.leadNotes
+    ? `<div class="sf-row"><span class="sf-k">Notes</span><span class="sf-v" style="white-space:pre-wrap;font-weight:500">${escapeHtml(c.leadNotes)}</span></div>` : '';
+  if(!rows && !notes) return '';
+  const src = c.leadSource ? escapeHtml(c.leadSource) : 'the lead';
+  return `<div class="sp-facts" style="grid-template-columns:1fr">
+    <div class="sf-col" style="border-color:#fca5a5;background:#fffafa">
+      <div class="sf-h" style="color:#b91c1c">🔥 What they told ${src}</div>${rows}${notes}
+    </div>
+  </div>`;
+}
+
+renderScriptPanel = function(){
+  const key = (callScriptKey && CALL_SCRIPTS[callScriptKey]) ? callScriptKey : activeScriptKey;
+  const sc  = CALL_SCRIPTS[key] || CALL_SCRIPTS[Object.keys(CALL_SCRIPTS)[0]];
+  $('spSelect').innerHTML = Object.entries(CALL_SCRIPTS)
+    .map(([k,v]) => `<option value="${escapeHtml(k)}"${k===key?' selected':''}>${escapeHtml(v.name)}</option>`).join('');
+  $('spSub').textContent = [scriptCtx.firstName, scriptCtx.streetName].filter(Boolean).join(' · ') || 'No lead attached';
+  $('spBody').innerHTML = scriptFactsHtml() + leadIntelHtml() + sc.sections.map((sec, i) => {
+    const body = sec.lines.map(l => {
+      if(l.if && !scriptCtx[l.if]) return '';
+      if(l.ifNot && scriptCtx[l.ifNot]) return '';
+      const html = fillScript(l.x, scriptCtx, false);
+      if(l.k === 'say')  return `<div class="sp-say">${html}</div>`;
+      if(l.k === 'ask')  return `<div class="sp-ask">${html}</div>`;
+      if(l.k === 'note') return `<div class="sp-note">${html}</div>`;
+      if(l.k === 'warn') return `<div class="sp-warn">${escapeHtml(l.x)}</div>`;
+      if(l.k === 'sub')  return `<div class="sp-sub">${escapeHtml(l.x)}</div>`;
+      if(l.k === 'li')   return `<div class="sp-li">${html}</div>`;
+      if(l.k === 'copy') return `<div class="sp-say" style="white-space:pre-wrap">${html}</div>`
+        + `<button class="sp-copy" data-script-copy="${escapeHtml(encodeURIComponent(fillScript(l.x, scriptCtx, true)))}">⧉ Copy to send</button>`;
+      return '';
+    }).join('');
+    return `<details class="sp-sec"${i===0?' open':''}><summary><span class="sp-n">${i+1}</span>${escapeHtml(sec.t)}</summary><div class="sp-in">${body}</div></details>`;
+  }).join('');
+};
+// ═══ end IMN qualification script ═══════════════════════════════
 
 // Start
 if(password){ showApp(); boot(); }
