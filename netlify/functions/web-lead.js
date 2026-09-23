@@ -106,7 +106,11 @@ async function handleImn(event) {
   const secret = process.env.IMN_WEBHOOK_SECRET;
   if (!secret) return json({ error: 'IMN_WEBHOOK_SECRET not set' }, 500);
   const got = event.headers['x-webhook-secret'] || event.headers['X-Webhook-Secret'];
-  if (!safeEqual(got, secret)) return json({ error: 'Unauthorized' }, 401);
+  if (!safeEqual(got, secret)) {
+    console.warn('IMN rejected: ' + (got ? 'x-webhook-secret does not match IMN_WEBHOOK_SECRET' : 'no x-webhook-secret header sent (check IMN auth settings)'));
+    return json({ error: 'Unauthorized' }, 401);
+  }
+  console.log('IMN lead received, fields: ' + Object.keys((() => { try { return JSON.parse(event.body || '{}'); } catch { return {}; } })()).join(', '));
 
   let body;
   try { body = JSON.parse(event.body || '{}'); } catch { return json({ error: 'Invalid JSON' }, 400); }
@@ -115,7 +119,7 @@ async function handleImn(event) {
   const last  = pick(body, ['last_name', 'lastName']);
   const owners = String(pick(body, ['name', 'full_name', 'fullName', 'owner', 'owners']) || `${first} ${last}`).trim();
 
-  const street = pick(body, ['property_address', 'propertyAddress', 'address', 'street', 'street_address']);
+  const street = pick(body, ['property_address', 'propertyAddress', 'address_1', 'address1', 'address', 'street', 'street_address']);
   const city   = pick(body, ['city']);
   const state  = pick(body, ['state']);
   const zip    = pick(body, ['zip', 'zipcode', 'zip_code', 'postal_code']);
@@ -132,7 +136,7 @@ async function handleImn(event) {
 
   // Anything else IMN sends (motivation, timeline, asking price…) goes into notes
   const known = new Set(['first_name','firstName','last_name','lastName','name','full_name','fullName','owner','owners',
-    'property_address','propertyAddress','address','street','street_address','city','state','zip','zipcode','zip_code',
+    'property_address','propertyAddress','address_1','address1','address_2','address','street','street_address','event','scope','city','state','zip','zipcode','zip_code',
     'postal_code','email','email_address','phones','phone','phone_number','phoneNumber','mobile','cell']);
   const extras = Object.entries(body)
     .filter(([k, v]) => !known.has(k) && v !== null && v !== '' && typeof v !== 'object')
@@ -201,6 +205,30 @@ exports.handler = async (event) => {
   const action = (event.queryStringParameters || {}).action || '';
 
   try {
+    // Health check — open in any browser:
+    //   /.netlify/functions/web-lead?action=ping
+    // Reports what's set up without revealing any secrets.
+    if (action === 'ping' || (action === 'imn' && event.httpMethod === 'GET')) {
+      const report = {
+        function_deployed: true,
+        IMN_WEBHOOK_SECRET_set: !!process.env.IMN_WEBHOOK_SECRET,
+        SUPABASE_env_set: !!(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY),
+        web_leads_table_ok: false,
+        imn_leads_received: 0,
+        last_imn_lead_at: null,
+      };
+      try {
+        const rows = await supa('/web_leads?source=eq.IMN&select=web_lead_at&order=web_lead_at.desc&limit=1000');
+        report.web_leads_table_ok = true;
+        report.imn_leads_received = (rows || []).length;
+        report.last_imn_lead_at = rows && rows[0] ? rows[0].web_lead_at : null;
+      } catch (e) {
+        report.web_leads_table_error = e.message;
+      }
+      report.ready = report.IMN_WEBHOOK_SECRET_set && report.SUPABASE_env_set && report.web_leads_table_ok;
+      return json(report);
+    }
+
     if (action === 'imn') {
       if (event.httpMethod !== 'POST') return json({ error: 'POST only' }, 405);
       return await handleImn(event);
