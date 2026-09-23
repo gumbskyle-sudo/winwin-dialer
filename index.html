@@ -1077,8 +1077,6 @@ body:not(.view-dialer) header .callerid{display:none}
 /* --- Android: no element may push the page sideways --- */
 html,body{overflow-x:hidden;max-width:100%}
 main{max-width:100%}
-/* IMN Leads: urgent red highlight on dialer cards */
-.card.imn-urgent{border:2px solid #ef4444!important;background:#fef2f2!important;box-shadow:0 0 0 3px rgba(239,68,68,.15)}
 </style>
 </head>
 <body class="view-dialer">
@@ -8233,8 +8231,7 @@ renderPage = function(){
     if(!owners) return;
     const src = webLeadIndex[id].source || 'Website';
     const isImn = /imn/i.test(src);
-    // IMN leads: whole card red + CALL ASAP tag so they get called first
-    if(isImn) card.classList.add('imn-urgent');
+    // IMN leads arrive with the built-in red highlight; tag says CALL ASAP
     owners.insertAdjacentHTML('beforeend',
       ' <span class="web-lead-tag" style="display:inline-block;background:#ef4444;color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;margin-left:6px;vertical-align:middle;letter-spacing:.4px">' +
       (isImn ? '🔥 IMN · CALL ASAP' : '🌐 ' + escapeHtml(src.toUpperCase())) + '</span>');
