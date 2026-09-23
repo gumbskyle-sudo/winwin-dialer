@@ -103,11 +103,16 @@ function lastName(owners) {
 
 // ── IMN intake ──────────────────────────────────────────────────
 async function handleImn(event) {
-  const secret = process.env.IMN_WEBHOOK_SECRET;
+  const secret = String(process.env.IMN_WEBHOOK_SECRET || '').trim();
   if (!secret) return json({ error: 'IMN_WEBHOOK_SECRET not set' }, 500);
-  const got = event.headers['x-webhook-secret'] || event.headers['X-Webhook-Secret'];
+  // Accept the secret from the header OR from ?key= in the URL, ignoring
+  // stray spaces/line breaks that sneak in when pasting on a phone.
+  const h = event.headers || {};
+  const q = event.queryStringParameters || {};
+  const got = String(h['x-webhook-secret'] || h['X-Webhook-Secret'] || h['imn_webhook_secret'] || q.key || '').trim();
   if (!safeEqual(got, secret)) {
-    console.warn('IMN rejected: ' + (got ? 'x-webhook-secret does not match IMN_WEBHOOK_SECRET' : 'no x-webhook-secret header sent (check IMN auth settings)'));
+    const hint = s => s ? `length ${s.length}, starts "${s.slice(0, 3)}", ends "${s.slice(-2)}"` : 'empty';
+    console.warn(`IMN rejected: secret mismatch. Received ${hint(got)}; Netlify has ${hint(secret)}. Header names seen: ${Object.keys(h).join(', ')}`);
     return json({ error: 'Unauthorized' }, 401);
   }
   console.log('IMN lead received, fields: ' + Object.keys((() => { try { return JSON.parse(event.body || '{}'); } catch { return {}; } })()).join(', '));
@@ -212,6 +217,8 @@ exports.handler = async (event) => {
       const report = {
         function_deployed: true,
         IMN_WEBHOOK_SECRET_set: !!process.env.IMN_WEBHOOK_SECRET,
+        secret_length: String(process.env.IMN_WEBHOOK_SECRET || '').length,
+        secret_length_trimmed: String(process.env.IMN_WEBHOOK_SECRET || '').trim().length,
         SUPABASE_env_set: !!(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY),
         web_leads_table_ok: false,
         imn_leads_received: 0,
