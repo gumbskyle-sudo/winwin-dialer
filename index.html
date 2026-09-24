@@ -9,7 +9,9 @@
 <title>Win-Win CRM Dialer</title>
 <style>
 *{box-sizing:border-box}
-html,body{margin:0;padding:0;height:100%}
+html,body{margin:0;padding:0}
+html{min-height:100%}
+body{min-height:100%}
 body{
   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
   background:#fdfbf6;color:#0f0d0a;line-height:1.4;
@@ -1100,6 +1102,31 @@ html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
 #addLeadModal .al-check input{width:20px;height:20px}
 #addLeadModal .al-msg{font-size:13px;margin-top:10px;min-height:18px}
 @media (max-width:420px){#addLeadModal .al-row{grid-template-columns:1fr}}
+
+/* --- iPhone home-screen app: keep every screen's top below the clock/battery bar ---
+   (Deal detail, text threads and pop-up windows used to slide their
+   Back / Close buttons under the status bar, trapping you on that screen.) */
+.dd-head{padding-top:calc(12px + env(safe-area-inset-top,0px))}
+.st-head{padding-top:calc(12px + env(safe-area-inset-top,0px))}
+.modal{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+.modal-box{max-height:calc(100vh - 60px - env(safe-area-inset-top,0px) - env(safe-area-inset-bottom,0px))}
+@supports (height:100dvh){
+  .modal-box{max-height:calc(100dvh - 60px - env(safe-area-inset-top,0px) - env(safe-area-inset-bottom,0px))}
+}
+#login,#profilePicker{padding-top:calc(20px + env(safe-area-inset-top,0px))}
+.toast-stack{bottom:calc(18px + env(safe-area-inset-bottom,0px))}
+
+/* --- Call with: My phone / Dialer switch --- */
+.dial-mode-btn{margin-left:auto;display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border-radius:999px;
+  border:1px solid rgba(255,255,255,.25);background:#2a2e36;color:#fff;font-size:11px;font-weight:700;font-family:inherit;cursor:pointer}
+.dial-mode-btn .dm-opt{opacity:.5;font-weight:600}
+.dial-mode-btn .dm-opt.on{opacity:1}
+.dial-mode-btn .dm-sep{opacity:.35}
+body.my-phone-mode .dial-mode-btn{background:#c2410c;border-color:#fb923c}
+body.my-phone-mode #cidSelect,body.my-phone-mode #cidLabel,body.my-phone-mode #cidDot{display:none}
+#myPhoneNote{display:none;font-size:11px;color:#fed7aa}
+body.my-phone-mode #myPhoneNote{display:inline}
+body.my-phone-mode .phone .badge:last-child{background:#ffedd5;color:#9a3412}
 </style>
 </head>
 <body class="view-dialer">
@@ -1161,8 +1188,12 @@ html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
   </div>
   <div class="callerid">
     <span class="dot warn" id="cidDot"></span>
-    <span>Caller ID:</span>
+    <span id="cidLabel">Caller ID:</span>
     <select id="cidSelect"><option value="">— not configured —</option></select>
+    <span id="myPhoneNote">Calls open your phone app · seller sees your cell</span>
+    <button type="button" id="dialModeBtn" class="dial-mode-btn" aria-pressed="false" title="Switch between calling from your own phone and calling through the dialer">
+      <span class="dm-opt" data-m="dialer">☎️ Dialer</span><span class="dm-sep">|</span><span class="dm-opt" data-m="mine">📱 My phone</span>
+    </button>
   </div>
 </header>
 
@@ -2109,12 +2140,15 @@ const DEFAULT_WEBSITE = 'winwinproperties.net';
 const companyName = () => localStorage.getItem(LS.company) || DEFAULT_COMPANY;
 const companySite = () => localStorage.getItem(LS.website) || DEFAULT_WEBSITE;
 // Bump this on every deploy so you can see which build is actually live
-const BUILD_ID = 'build 2026-09-23-imn-script';
+const BUILD_ID = 'build 2026-09-24-myphone';
 const DEFAULT_VM_MESSAGE = "Hi {FirstName}, we are calling from Win Win Properties to give you a quick offer on your property at {Address}. Give us a call back at {CallbackNumber}, or find us online at win win properties dot net. That's W W W dot winwinproperties dot net. Thanks, and have a great day.";
 let backend  = localStorage.getItem(LS.backend) || '/api';
 let password = localStorage.getItem(LS.pwd) || '';
 let forwardPhone   = localStorage.getItem(LS.forward) || '';
 let activeCallerId = localStorage.getItem(LS.active)  || '';
+// "My phone" mode: calls open the phone's own dialer (tel:) instead of Twilio.
+let useMyPhone = false;
+try { useMyPhone = localStorage.getItem('ww_use_my_phone') === '1'; } catch {}
 
 // ── Tiny DOM helpers ────────────────────────────────────────────
 const $  = id => document.getElementById(id);
@@ -2476,6 +2510,45 @@ $('cidSelect').addEventListener('change', e => {
   refreshCallerStrip();
   toast('Caller ID set to '+fmtPhone(activeCallerId),'ok');
 });
+function applyDialMode(){
+  document.body.classList.toggle('my-phone-mode', useMyPhone);
+  const b = $('dialModeBtn');
+  if(b){
+    b.setAttribute('aria-pressed', useMyPhone ? 'true' : 'false');
+    b.querySelectorAll('.dm-opt').forEach(o => o.classList.toggle('on', (o.dataset.m === 'mine') === useMyPhone));
+  }
+}
+$('dialModeBtn').addEventListener('click', () => {
+  if(activeCall){ toast('Finish the current call before switching','err'); return; }
+  useMyPhone = !useMyPhone;
+  try { localStorage.setItem('ww_use_my_phone', useMyPhone ? '1' : '0'); } catch {}
+  applyDialMode();
+  toast(useMyPhone ? 'Calling from your phone. Numbers open your phone app.' : 'Calling through the dialer', 'ok');
+});
+applyDialMode();
+
+// Open the phone's own dialer for a number and mark the lead called.
+function callFromMyPhone(e164, p){
+  const num = toE164(e164) || String(e164||'').replace(/[^\d+]/g,'');
+  if(!num){ toast('That number is not dialable','err'); return; }
+  if(p && p.lead && !p.lead.called){
+    p.lead.called = true;
+    api('update-lead', {method:'POST', body:{propertyId:p.id, called:true}}).catch(err=>toast(err.message,'err'));
+    renderPage(); refreshCounter();
+  }
+  window.location.href = 'tel:' + num;
+}
+
+// iPhone home-screen apps can stay shifted up after the keyboard closes,
+// which hides the top of the screen. Nudge the page back when typing ends.
+document.addEventListener('focusout', () => {
+  setTimeout(() => {
+    const a = document.activeElement;
+    if(a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) return;
+    window.scrollTo(window.scrollX, window.scrollY);
+  }, 60);
+});
+
 function refreshCounter(){
   let called=0,hot=0,warm=0,callback=0;
   for(const p of properties){
@@ -3136,6 +3209,7 @@ function pdGetList(){
 
 // Show setup screen
 $('pdStartBtn').addEventListener('click', () => {
+  if(useMyPhone){ toast('Power dialing runs through the dialer. Tap ☎️ Dialer at the top to switch.','err'); return; }
   $('pdStartWrap').classList.add('hide');
   $('pdSetupScreen').classList.remove('hide');
 
@@ -3833,14 +3907,17 @@ document.addEventListener('click', e => {
   if(callBtn){
     e.preventDefault();
     if(callBtn.classList.contains('dialing')) return;
-    if(activeCall){ toast('A call is already in progress','err'); return; }
-    if(!forwardPhone){ toast('Set your phone in Settings first','err'); openModal('settingsModal'); return; }
-    if(!activeCallerId){ toast('Buy a phone number first','err'); openModal('numbersModal'); return; }
+    if(!useMyPhone){
+      if(activeCall){ toast('A call is already in progress','err'); return; }
+      if(!forwardPhone){ toast('Set your phone in Settings first','err'); openModal('settingsModal'); return; }
+      if(!activeCallerId){ toast('Buy a phone number first','err'); openModal('numbersModal'); return; }
+    }
     const pid = callBtn.dataset.pid;
     const phidx = parseInt(callBtn.dataset.phidx,10);
     const p = properties.find(x => x.id === pid);
     const ph = p?.phones?.[phidx];
     if(!p || !ph) return;
+    if(useMyPhone){ callFromMyPhone(ph.e164, p); return; }
     placeCall(p, ph, callBtn, phidx);
   }
 });
@@ -3928,6 +4005,14 @@ async function placeCall(p, ph, btn, phidx){
 }
 // ── Manual "dial a number" (not tied to a lead card) ─────────────
 async function placeManualCall(toNumber, label){
+  if(useMyPhone){
+    const n = toE164(toNumber);
+    if(!n){ toast('Enter a valid phone number','err'); return; }
+    $('manualDialModal').classList.remove('open');
+    $('manualDialNumber').value = ''; $('manualDialLabel').value = '';
+    callFromMyPhone(n, null);
+    return;
+  }
   if(activeCall){ toast('A call is already in progress','err'); return; }
   if(!forwardPhone){ toast('Set your phone in Settings first','err'); openModal('settingsModal'); return; }
   if(!activeCallerId){ toast('Buy a phone number first','err'); openModal('numbersModal'); return; }
