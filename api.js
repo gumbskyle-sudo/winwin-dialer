@@ -778,10 +778,15 @@ async function _handleTwilioVoiceInboundInner(event) {
   if (!forwardTo) return xml(voicemailXml());
 
   const ringSecs = parseInt(await getAppConfig('voice_ring_seconds'), 10) || 25;
+  // Show the SELLER's number on the team member's phone (and in iPhone
+  // Recents), not our own Twilio number. Twilio allows passing the inbound
+  // caller's number through on a forwarded call. Blocked / anonymous
+  // callers have no usable number, so those still show the Twilio line.
+  const showNumber = /^\+\d{10,15}$/.test(from) ? from : to;
   // action= is what makes the voicemail box work: when this Dial ends
   // unanswered, Twilio comes back to us instead of hanging up on them.
   return xml(
-    `<Dial callerId="${escapeXml(to)}" timeout="${ringSecs}" answerOnBridge="true" ` +
+    `<Dial callerId="${escapeXml(showNumber)}" timeout="${ringSecs}" answerOnBridge="true" ` +
     `action="${selfUrl('after')}" method="POST">` +
     `<Number>${escapeXml(forwardTo)}</Number>` +
     `</Dial>`
