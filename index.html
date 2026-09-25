@@ -6455,7 +6455,7 @@ function recalcFinancials(){
 // ── RentCast comparables (with adjustable filters) ───────────────
 const compsCache = {};   // cacheKey -> server response
 const compSubject = {};  // address -> {beds, baths, sqft} typed in for this property
-const COMP_DEFAULTS = { radius:'0.5', days:'180', count:'15', type:'', status:'all', size:'any', sort:'match' };
+const COMP_DEFAULTS = { radius:'0.5', days:'180', count:'25', type:'', size:'any', sort:'recent' };
 function getCompFilters(){
   try { return { ...COMP_DEFAULTS, ...JSON.parse(localStorage.getItem('compFilters') || '{}') }; }
   catch { return { ...COMP_DEFAULTS }; }
@@ -6486,12 +6486,11 @@ async function loadComps(container, address){
         <summary style="font-size:12px;font-weight:600;cursor:pointer">⚙️ Comp filters</summary>
         <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin-top:8px">
           ${compSelect('radius', f.radius, {label:'Radius', opts:[['0.25','¼ mi'],['0.5','½ mi'],['1','1 mi'],['2','2 mi'],['5','5 mi']]})}
-          ${compSelect('days', f.days, {label:'Seen within', opts:[['90','90 days'],['180','6 months'],['365','12 months'],['730','24 months']]})}
-          ${compSelect('count', f.count, {label:'# of comps', opts:[['5','5'],['10','10'],['15','15'],['20','20'],['25','25']]})}
+          ${compSelect('days', f.days, {label:'Sold within', opts:[['90','90 days'],['180','6 months'],['365','12 months'],['730','24 months']]})}
+          ${compSelect('count', f.count, {label:'Max comps', opts:[['10','10'],['25','25'],['50','50'],['100','100']]})}
           ${compSelect('type', f.type, {label:'Property type', opts:[['','Any'],['Single Family','Single family'],['Townhouse','Townhouse'],['Multi-Family','Multi-family'],['Condo','Condo']]})}
-          ${compSelect('status', f.status, {label:'Show', opts:[['all','All'],['off','Off market'],['active','Active']]})}
           ${compSelect('size', f.size, {label:'Size match', opts:[['any','Any'],['20','±20% sqft'],['30','±30% sqft']]})}
-          ${compSelect('sort', f.sort, {label:'Sort by', opts:[['match','Best match'],['distance','Closest'],['price_desc','Price ↓'],['price_asc','Price ↑'],['ppsf','$/sqft ↓']]})}
+          ${compSelect('sort', f.sort, {label:'Sort by', opts:[['recent','Most recent'],['distance','Closest'],['size','Closest size'],['price_desc','Price ↓'],['price_asc','Price ↑'],['ppsf','$/sqft ↓']]})}
         </div>
         <div style="font-size:10px;color:#6b7280;font-weight:600;margin:8px 0 4px">THIS PROPERTY (optional — sharpens the estimate)</div>
         <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px">
@@ -6509,7 +6508,7 @@ async function loadComps(container, address){
       const sel = e.target.closest('[data-cf]');
       if(!sel) return;
       const f = getCompFilters(); f[sel.dataset.cf] = sel.value; saveCompFilters(f);
-      if(['status','size','sort'].includes(sel.dataset.cf)) loadComps(container, address);
+      if(['size','sort'].includes(sel.dataset.cf)) loadComps(container, address);
     });
     filterBox.querySelector('.comp-apply').addEventListener('click', () => {
       const subj = {};
@@ -6549,15 +6548,13 @@ async function loadComps(container, address){
         <div style="padding:8px 10px;margin-bottom:8px;border-radius:8px;background:#f0fdf4;border:1px solid #bbf7d0">
           <div style="font-size:11px;color:#166534;font-weight:600">RENTCAST VALUE ESTIMATE</div>
           <div style="font-size:18px;font-weight:700;color:#0f0d0a">${money(est.value)}</div>${range}
-          <div style="font-size:10px;color:#6b7280;margin-top:2px">Based on nearby listings — likely as-is value, not ARV. Check renovated comps below.</div>
+          <div style="font-size:10px;color:#6b7280;margin-top:2px">RentCast's as-is estimate, not ARV. Use the renovated sales below for ARV.</div>
         </div>`);
     }
 
     // Client-side filters
     const subjSqft = Number(subj.sqft) || (data.subject && data.subject.squareFeet) || 0;
     let props = (data.properties || []).slice();
-    if(f.status === 'off') props = props.filter(p => !p.onMarket);
-    if(f.status === 'active') props = props.filter(p => p.onMarket);
     let sizeNote = '';
     if(f.size !== 'any'){
       if(subjSqft){
@@ -6572,17 +6569,18 @@ async function loadComps(container, address){
       price_desc: (a,b) => (b.price || 0) - (a.price || 0),
       price_asc:  (a,b) => (a.price || 1e12) - (b.price || 1e12),
       ppsf:       (a,b) => (b.pricePerSquareFoot || 0) - (a.pricePerSquareFoot || 0),
-      match:      (a,b) => (b.correlation ?? 0) - (a.correlation ?? 0),
+      recent:     (a,b) => String(b.soldDate||'').localeCompare(String(a.soldDate||'')),
+      size:       (a,b) => Math.abs((a.squareFeet||1e9) - subjSqft) - Math.abs((b.squareFeet||1e9) - subjSqft),
     };
-    props.sort(sorters[f.sort] || sorters.match);
+    props.sort(sorters[f.sort] || sorters.recent);
 
     const sr = data.searched || {};
     const widened = sr.widened ? ' · search widened (few comps nearby)' : '';
     if(!props.length){
-      results.insertAdjacentHTML('beforeend', `<div class="muted" style="font-size:12px;padding:6px 0">No comparables match these filters (searched ${escapeHtml(String(sr.radiusMiles||''))} mi / ${escapeHtml(String(sr.daysOld||''))} days${widened})${sizeNote}</div>`);
+      results.insertAdjacentHTML('beforeend', `<div class="muted" style="font-size:12px;padding:6px 0">No sold comps match these filters (searched ${escapeHtml(String(sr.radiusMiles||''))} mi / ${escapeHtml(String(sr.daysOld||''))} days${widened})${sizeNote}</div>`);
       return;
     }
-    results.insertAdjacentHTML('beforeend', `<div style="font-size:11px;color:#6b7280;font-weight:600;margin-bottom:6px">📊 ${props.length} COMPARABLE${props.length===1?'':'S'} · list prices · ${escapeHtml(String(sr.radiusMiles||''))} mi / ${escapeHtml(String(sr.daysOld||''))} days${widened}${sizeNote}</div>`);
+    results.insertAdjacentHTML('beforeend', `<div style="font-size:11px;color:#6b7280;font-weight:600;margin-bottom:6px">📊 ${props.length} SOLD COMP${props.length===1?'':'S'} · sale prices · ${escapeHtml(String(sr.radiusMiles||''))} mi / ${escapeHtml(String(sr.daysOld||''))} days${widened}${sizeNote}</div>`);
     props.forEach(p => {
       const price = p.price ? money(p.price) : '—';
       const ppsf = p.pricePerSquareFoot ? '$'+Math.round(p.pricePerSquareFoot)+'/sqft' : '';
@@ -6590,9 +6588,7 @@ async function loadComps(container, address){
       const baths = p.bathrooms!=null ? p.bathrooms+'ba' : '';
       const sqft = p.squareFeet ? Number(p.squareFeet).toLocaleString()+'sqft' : '';
       const dist = p.distance!=null ? Number(p.distance).toFixed(2)+'mi' : '';
-      const statusTag = p.onMarket
-        ? '<span style="color:#059669;font-weight:600">Active</span>'
-        : (p.offMarketDate ? 'Off market '+escapeHtml(p.offMarketDate) : 'Off market');
+      const statusTag = p.soldDate ? '<span style="color:#1d4ed8;font-weight:600">Sold '+escapeHtml(p.soldDate)+'</span>' : 'Sold';
       results.insertAdjacentHTML('beforeend', `
         <div class="pr-comp-row" style="display:flex;gap:10px;padding:8px 0;border-bottom:1px solid #f3f4f6;align-items:center">
           <div style="flex:1;min-width:0">
