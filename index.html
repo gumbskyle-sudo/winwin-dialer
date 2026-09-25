@@ -6452,11 +6452,11 @@ function recalcFinancials(){
   }
 }
 
-// ── PropertyReach comparables ────────────────────────────────────
-const compsCache = {}; // address -> {properties, resultCount}
-async function loadPropertyReachComps(container, address){
+// ── RentCast comparables ─────────────────────────────────────────
+const compsCache = {}; // address -> {estimate, properties, resultCount}
+async function loadComps(container, address){
   if(!container || !address) return;
-  container.innerHTML = '<div class="muted" style="font-size:12px;padding:6px 0">Loading comparable sales…</div>';
+  container.innerHTML = '<div class="muted" style="font-size:12px;padding:6px 0">Loading comparables…</div>';
   try {
     let data = compsCache[address];
     if(!data){
@@ -6464,26 +6464,40 @@ async function loadPropertyReachComps(container, address){
       compsCache[address] = data;
     }
     const props = data.properties || [];
+    const est = data.estimate;
+    container.innerHTML = '';
+    if(est && est.value){
+      const money = n => '$' + Number(n).toLocaleString();
+      const range = (est.low && est.high) ? `<div style="font-size:11px;color:#6b7280">Range ${money(est.low)} – ${money(est.high)}</div>` : '';
+      const box = document.createElement('div');
+      box.style.cssText = 'padding:8px 10px;margin-bottom:8px;border-radius:8px;background:#f0fdf4;border:1px solid #bbf7d0';
+      box.innerHTML = `<div style="font-size:11px;color:#166534;font-weight:600">RENTCAST VALUE ESTIMATE</div>
+        <div style="font-size:18px;font-weight:700;color:#0f0d0a">${money(est.value)}</div>${range}
+        <div style="font-size:10px;color:#6b7280;margin-top:2px">Based on nearby listings — likely as-is value, not ARV. Check renovated comps below.</div>`;
+      container.appendChild(box);
+    }
     if(!props.length){
-      container.innerHTML = '<div class="muted" style="font-size:12px;padding:6px 0">No comparable sales found nearby</div>';
+      container.insertAdjacentHTML('beforeend', '<div class="muted" style="font-size:12px;padding:6px 0">No comparables found nearby</div>');
       return;
     }
-    container.innerHTML = `<div style="font-size:11px;color:#6b7280;font-weight:600;margin-bottom:6px">📊 ${props.length} NEARBY COMPARABLE${props.length===1?'':'S'}</div>`;
-    props.slice(0, 8).forEach(p => {
-      const price = p.lastSaleAmount ? '$'+Number(p.lastSaleAmount).toLocaleString() : (p.estimatedValue ? '~$'+Number(p.estimatedValue).toLocaleString() : '—');
+    container.insertAdjacentHTML('beforeend', `<div style="font-size:11px;color:#6b7280;font-weight:600;margin-bottom:6px">📊 ${props.length} NEARBY COMPARABLE${props.length===1?'':'S'} · list prices</div>`);
+    props.slice(0, 10).forEach(p => {
+      const price = p.price ? '$'+Number(p.price).toLocaleString() : '—';
       const ppsf = p.pricePerSquareFoot ? '$'+Math.round(p.pricePerSquareFoot)+'/sqft' : '';
       const beds = p.bedrooms!=null ? p.bedrooms+'bd' : '';
       const baths = p.bathrooms!=null ? p.bathrooms+'ba' : '';
       const sqft = p.squareFeet ? Number(p.squareFeet).toLocaleString()+'sqft' : '';
-      const statusTag = p.onMarket ? '<span style="color:#059669;font-weight:600">On market</span>' : (p.lastSaleDate ? 'Sold '+p.lastSaleDate : '');
+      const dist = p.distance!=null ? Number(p.distance).toFixed(2)+'mi' : '';
+      const statusTag = p.onMarket
+        ? '<span style="color:#059669;font-weight:600">Active</span>'
+        : (p.offMarketDate ? 'Off market '+escapeHtml(p.offMarketDate) : 'Off market');
       const row = document.createElement('div');
       row.className = 'pr-comp-row';
       row.innerHTML = `
         <div style="display:flex;gap:10px;padding:8px 0;border-bottom:1px solid #f3f4f6;align-items:center">
-          ${p.photoUrl ? `<img src="${escapeHtml(p.photoUrl)}" style="width:48px;height:48px;border-radius:6px;object-fit:cover;flex-shrink:0" onerror="this.style.display='none'">` : ''}
           <div style="flex:1;min-width:0">
             <div style="font-size:13px;font-weight:600;color:#0f0d0a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(p.streetAddress||'')}</div>
-            <div style="font-size:11px;color:#6b7280">${[beds,baths,sqft].filter(Boolean).join(' · ')} ${statusTag?'· '+statusTag:''}</div>
+            <div style="font-size:11px;color:#6b7280">${[beds,baths,sqft,dist].filter(Boolean).join(' · ')} · ${statusTag}</div>
           </div>
           <div style="text-align:right;flex-shrink:0">
             <div style="font-size:13px;font-weight:700;color:#0f0d0a">${price}</div>
@@ -6522,8 +6536,8 @@ function renderComps(comps, deal){
       <a href="https://www.zillow.com/homes/${encodeURIComponent(propAddr)}_rb/" target="_blank" rel="noopener">Zillow page for this property →</a>
     </div>`);
     list.appendChild(z);
-    // Pull live comparable sales from PropertyReach
-    loadPropertyReachComps(card.querySelector('#prComps'), propAddr);
+    // Pull live comparables from RentCast
+    loadComps(card.querySelector('#prComps'), propAddr);
   }
   if(!comps.length && !propAddr){
     list.innerHTML = '<div class="muted" style="font-size:12px;padding:4px 0">No comps yet</div>';
@@ -7647,7 +7661,7 @@ document.addEventListener('click', e => {
   panel.classList.toggle('hide');
   if(willShow && !panel.dataset.loaded){
     panel.dataset.loaded = '1';
-    loadPropertyReachComps(panel, addr);
+    loadComps(panel, addr);
   }
 });
 
