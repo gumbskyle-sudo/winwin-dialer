@@ -429,17 +429,6 @@ const VM_DEFAULT_TEMPLATE =
   "Again, that's {your_name} at {callback}, or you can visit {website}. " +
   "Thanks, and have a great day.";
 
-// Spanish version of the auto voicemail drop. Used whenever the selected
-// voice is one of the Spanish Polly voices (see VM_VOICE_ALLOWLIST /
-// isSpanishVoice below). Same placeholders as the English template.
-const VM_DEFAULT_TEMPLATE_ES =
-  "Hola {first_name}, soy {your_name} de {company}. " +
-  "Le llamo por su propiedad en {address}. " +
-  "Le podemos hacer una oferta en efectivo rápida — sin obligación, sin reparaciones " +
-  "y sin comisiones. Puede regresarme la llamada al {callback}. " +
-  "De nuevo, soy {your_name}, al {callback}, o visite {website}. " +
-  "Gracias y que tenga un buen día.";
-
 // Two lines is the ceiling on purpose. The FCC caps abandoned calls at
 // 3% per campaign; at 3+ lines that rate is very hard to hold on a
 // wholesaling list, and the exposure isn't worth the extra contacts.
@@ -552,34 +541,17 @@ function renderVmSsml(template, ctx) {
   return out;
 }
 
-// The saved template, or the language-appropriate default if nothing has
-// been customized. Pass the voice being used so a Spanish voice gets the
-// Spanish default text instead of the English one.
-async function vmTemplate(voice) {
-  if (isSpanishVoice(voice)) {
-    return (await getAppConfig('vm_template_es')) || VM_DEFAULT_TEMPLATE_ES;
-  }
+// The saved template, or the default if nothing has been customized.
+async function vmTemplate() {
   return (await getAppConfig('vm_template')) || VM_DEFAULT_TEMPLATE;
 }
 
 const VM_VOICE_ALLOWLIST = [
   'Polly.Ruth-Generative', 'Polly.Matthew-Generative', 'Polly.Danielle-Generative',
   'Polly.Joanna-Neural', 'Polly.Matthew-Neural', 'Polly.Stephen-Neural', 'alice',
-  // Spanish voices (see isSpanishVoice / vmLanguageAttr below)
-  'Polly.Lupe-Neural', 'Polly.Pedro-Neural', 'Polly.Lucia-Neural', 'Polly.Sergio-Neural',
 ];
 function vmVoice(requested) {
   return VM_VOICE_ALLOWLIST.includes(requested) ? requested : 'Polly.Ruth-Generative';
-}
-// Spanish AI voicemail — which allow-listed voices are Spanish, and which
-// Twilio <Say language> locale each one needs so pronunciation is correct.
-function isSpanishVoice(voice) {
-  return /^Polly\.(Lupe|Pedro|Lucia|Sergio)/.test(voice || '');
-}
-function vmLanguageAttr(voice) {
-  if (/^Polly\.(Lupe|Pedro)-Neural$/.test(voice || ''))  return 'es-US';
-  if (/^Polly\.(Lucia|Sergio)-Neural$/.test(voice || '')) return 'es-ES';
-  return 'en-US';
 }
 
 // Redirect a live leg into a voicemail message and hang up.
@@ -806,10 +778,15 @@ async function _handleTwilioVoiceInboundInner(event) {
   if (!forwardTo) return xml(voicemailXml());
 
   const ringSecs = parseInt(await getAppConfig('voice_ring_seconds'), 10) || 25;
+  // Show the SELLER's number on the team member's phone (and in iPhone
+  // Recents), not our own Twilio number. Twilio allows passing the inbound
+  // caller's number through on a forwarded call. Blocked / anonymous
+  // callers have no usable number, so those still show the Twilio line.
+  const showNumber = /^\+\d{10,15}$/.test(from) ? from : to;
   // action= is what makes the voicemail box work: when this Dial ends
   // unanswered, Twilio comes back to us instead of hanging up on them.
   return xml(
-    `<Dial callerId="${escapeXml(to)}" timeout="${ringSecs}" answerOnBridge="true" ` +
+    `<Dial callerId="${escapeXml(showNumber)}" timeout="${ringSecs}" answerOnBridge="true" ` +
     `action="${selfUrl('after')}" method="POST">` +
     `<Number>${escapeXml(forwardTo)}</Number>` +
     `</Dial>`
@@ -1132,7 +1109,7 @@ async function autoDropVoicemail(callSid) {
   } else {
     const voice = vmVoice(await getAppConfig('vm_voice'));
     const ctx = await vmContext(row.property_id, row.profile_id, { fromNumber: row.from_number });
-    inner = `<Say voice="${escapeXml(voice)}" language="${vmLanguageAttr(voice)}">${renderVmSsml(await vmTemplate(voice), ctx)}</Say>`;
+    inner = `<Say voice="${escapeXml(voice)}">${renderVmSsml(await vmTemplate(), ctx)}</Say>`;
   }
   await dropVmOnLeg(callSid, inner);
   try {
@@ -1237,59 +1214,27 @@ async function sendEmail({ to, subject, html, text, replyTo }) {
 
 // ════════════════════════════════════════════════════════════════
 // SPACEMAIL (branded email — SMTP send + IMAP inbox)
-// All mailbox settings come from Netlify environment variables.
-// Change the mailbox in Netlify; no code edit is required.
-//
-// Preferred variables:
-//   SPACEMAIL_EMAIL, SPACEMAIL_PASSWORD, SPACEMAIL_FROM_NAME
-//   SPACEMAIL_SMTP_HOST, SPACEMAIL_SMTP_PORT, SPACEMAIL_SMTP_SECURE
-//   SPACEMAIL_IMAP_HOST, SPACEMAIL_IMAP_PORT, SPACEMAIL_IMAP_SECURE
-//
-// Backward compatibility: SPACEMAIL_USER and SPACEMAIL_PASS still work.
-// Host/port defaults match the current Spacemail configuration used by this app.
+// Credentials come ONLY from Netlify env vars, never hardcoded:
+//   SPACEMAIL_USER = kyleg@winwinproperties.net
+//   SPACEMAIL_PASS = <mailbox password>   (or app password if 2FA on)
+//   SPACEMAIL_FROM_NAME (optional display name)
 // ════════════════════════════════════════════════════════════════
 
-function envBool(name, fallback) {
-  const raw = process.env[name];
-  if (raw === undefined || raw === null || String(raw).trim() === '') return fallback;
-  return !/^(0|false|no|off)$/i.test(String(raw).trim());
-}
-function envPort(name, fallback) {
-  const n = parseInt(process.env[name], 10);
-  return Number.isFinite(n) && n > 0 ? n : fallback;
-}
-function spacemailConfig() {
-  const email = String(process.env.SPACEMAIL_EMAIL || process.env.SPACEMAIL_USER || '').trim();
-  const password = String(process.env.SPACEMAIL_PASSWORD || process.env.SPACEMAIL_PASS || '');
-  return {
-    email,
-    password,
-    fromName: String(process.env.SPACEMAIL_FROM_NAME || 'Win Win Property Solutions NY').trim(),
-    smtpHost: String(process.env.SPACEMAIL_SMTP_HOST || 'mail.spacemail.com').trim(),
-    smtpPort: envPort('SPACEMAIL_SMTP_PORT', 465),
-    smtpSecure: envBool('SPACEMAIL_SMTP_SECURE', true),
-    imapHost: String(process.env.SPACEMAIL_IMAP_HOST || 'mail.spacemail.com').trim(),
-    imapPort: envPort('SPACEMAIL_IMAP_PORT', 993),
-    imapSecure: envBool('SPACEMAIL_IMAP_SECURE', true),
-  };
-}
 function spacemailReady() {
-  const cfg = spacemailConfig();
-  return !!(cfg.email && cfg.password);
+  return !!(process.env.SPACEMAIL_USER && process.env.SPACEMAIL_PASS);
 }
 function spacemailFrom() {
-  const cfg = spacemailConfig();
-  return cfg.fromName ? `${cfg.fromName} <${cfg.email}>` : cfg.email;
+  const name = process.env.SPACEMAIL_FROM_NAME || 'Win Win Property Solutions NY';
+  return `${name} <${process.env.SPACEMAIL_USER}>`;
 }
 async function sendViaSpacemail({ to, subject, html, text, replyTo, cc }) {
-  const cfg = spacemailConfig();
-  if (!cfg.email || !cfg.password) return { error: 'SPACEMAIL_EMAIL / SPACEMAIL_PASSWORD not set in Netlify env vars' };
+  if (!spacemailReady()) return { error: 'SPACEMAIL_USER / SPACEMAIL_PASS not set in Netlify env vars' };
   const nodemailer = require('nodemailer');
   const transporter = nodemailer.createTransport({
-    host: cfg.smtpHost,
-    port: cfg.smtpPort,
-    secure: cfg.smtpSecure,
-    auth: { user: cfg.email, pass: cfg.password },
+    host: 'mail.spacemail.com',
+    port: 465,
+    secure: true,
+    auth: { user: process.env.SPACEMAIL_USER, pass: process.env.SPACEMAIL_PASS },
   });
   const info = await transporter.sendMail({
     from: spacemailFrom(),
@@ -1305,27 +1250,13 @@ async function sendViaSpacemail({ to, subject, html, text, replyTo, cc }) {
 
 function spacemailImapClient() {
   const { ImapFlow } = require('imapflow');
-  const cfg = spacemailConfig();
   return new ImapFlow({
-    host: cfg.imapHost,
-    port: cfg.imapPort,
-    secure: cfg.imapSecure,
-    auth: { user: cfg.email, pass: cfg.password },
+    host: 'mail.spacemail.com',
+    port: 993,
+    secure: true,
+    auth: { user: process.env.SPACEMAIL_USER, pass: process.env.SPACEMAIL_PASS },
     logger: false,
   });
-}
-
-// IMAP servers can close an otherwise healthy session before/while LOGOUT is
-// acknowledged. Cleanup errors should never turn a successful mailbox action
-// into a 502 response.
-async function safelyCloseImap(client) {
-  if (!client) return;
-  try {
-    if (client.usable) await client.logout();
-  } catch (e) {
-    console.warn('IMAP cleanup warning:', e && e.message ? e.message : e);
-    try { client.close(); } catch {}
-  }
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -1400,7 +1331,7 @@ async function cleanupExpiredRecordings() {
 // Bumped whenever this file changes in a way the frontend depends on.
 // The Settings screen reads it, so a half-finished deploy is visible
 // instead of showing up later as a mystery "Unknown action" error.
-const API_VERSION = '2026-09-14-spanish-vm';
+const API_VERSION = '2026-09-08-lux-teardown';
 
 // ── Main handler ──────────────────────────────────────────────
 exports.handler = async (event) => {
@@ -2273,13 +2204,11 @@ exports.handler = async (event) => {
           forwardTo:   await getAppConfig('default_voice_forward_number'),
           // ── Voicemail drop ──
           vmTemplate:  (await getAppConfig('vm_template')) || VM_DEFAULT_TEMPLATE,
-          vmTemplateEs: (await getAppConfig('vm_template_es')) || VM_DEFAULT_TEMPLATE_ES,
           vmCompany:   (await getAppConfig('vm_company_name')) || VM_COMPANY_DEFAULT,
           vmWebsite:   (await getAppConfig('vm_website')) || VM_WEBSITE_DEFAULT,
           vmRepName:   await getAppConfig('vm_rep_name'),
           vmCallback:  await getAppConfig('vm_callback_number'),
           vmVoice:     vmVoice(await getAppConfig('vm_voice')),
-          vmLanguage:  isSpanishVoice(await getAppConfig('vm_voice')) ? 'es' : 'en',
           vmPreferRecording: (await getAppConfig('vm_prefer_recording')) === '1',
           vmPlaceholders: ['{first_name}', '{address}', '{your_name}', '{callback}', '{company}', '{website}'],
           maxLines:    MAX_PD_LINES,
@@ -2293,17 +2222,11 @@ exports.handler = async (event) => {
         if (body.ringSeconds)                  await setAppConfig('voice_ring_seconds', String(parseInt(body.ringSeconds, 10) || 25));
         if (typeof body.forwardTo === 'string') await setAppConfig('default_voice_forward_number', body.forwardTo);
         if (typeof body.vmTemplate === 'string') await setAppConfig('vm_template', body.vmTemplate);
-        if (typeof body.vmTemplateEs === 'string') await setAppConfig('vm_template_es', body.vmTemplateEs);
         if (typeof body.vmCompany === 'string')  await setAppConfig('vm_company_name', body.vmCompany);
         if (typeof body.vmWebsite === 'string')  await setAppConfig('vm_website', body.vmWebsite);
         if (typeof body.vmRepName === 'string')  await setAppConfig('vm_rep_name', body.vmRepName);
         if (typeof body.vmCallback === 'string') await setAppConfig('vm_callback_number', body.vmCallback);
         if (typeof body.vmVoice === 'string')    await setAppConfig('vm_voice', vmVoice(body.vmVoice));
-        // vmLanguage is a convenience the front end can send instead of a
-        // specific voice — picks a sensible default voice per language.
-        if (typeof body.vmLanguage === 'string' && typeof body.vmVoice !== 'string') {
-          await setAppConfig('vm_voice', body.vmLanguage === 'es' ? 'Polly.Lupe-Neural' : 'Polly.Ruth-Generative');
-        }
         if (typeof body.vmPreferRecording === 'boolean') {
           await setAppConfig('vm_prefer_recording', body.vmPreferRecording ? '1' : '0');
         }
@@ -2320,7 +2243,7 @@ exports.handler = async (event) => {
           website:  body.website,
         });
         const tpl = (typeof body.template === 'string' && body.template.trim())
-          ? body.template : await vmTemplate(body.voice);
+          ? body.template : await vmTemplate();
         // Plain-text version for the screen; the call itself uses SSML.
         const spoken = tpl
           .replace(/\{first_name\}/g, ctx.firstName)
@@ -2459,7 +2382,7 @@ exports.handler = async (event) => {
         if (!playUrl) {
           const rawTemplate = (typeof body.message === 'string' && /\{\w+\}/.test(body.message))
             ? body.message
-            : await vmTemplate(voice);
+            : await vmTemplate();
           const ctx = await vmContext(body.propertyId, body.profileId, {
             yourName:   body.yourName,
             callback:   body.callbackNumber,
@@ -2467,7 +2390,7 @@ exports.handler = async (event) => {
             website:    body.website,
             fromNumber: body.from,
           });
-          vmSsml = `<Say voice="${escapeXml(voice)}" language="${vmLanguageAttr(voice)}">${renderVmSsml(rawTemplate, ctx)}</Say>`;
+          vmSsml = `<Say voice="${escapeXml(voice)}">${renderVmSsml(rawTemplate, ctx)}</Say>`;
         }
 
         // Which leg actually has the seller on it.
@@ -3537,28 +3460,8 @@ exports.handler = async (event) => {
       // SPACEMAIL — pull recent inbox messages via IMAP
       // Optional body.search filters by sender address or subject.
       // ════════════════════════════════════════════════════════
-
-      // Lead email blast — deliberately one recipient per request.
-      // The browser handles pacing so a campaign never exposes recipient addresses
-      // to one another and a long-running Netlify invocation is avoided.
-      case 'send-email-blast': {
-        const to = String(body.to || '').trim();
-        if (!to) return err('to (recipient) required');
-        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) return err('Invalid recipient email');
-        if (!body.subject || !String(body.subject).trim()) return err('subject required');
-        if (!body.text && !body.html) return err('message required');
-        const res = await sendViaSpacemail({
-          to,
-          subject: String(body.subject).slice(0, 250),
-          html: body.html,
-          text: body.text,
-        });
-        if (res.error) return err(res.error, 500);
-        return ok({ sent: true, id: res.id, propertyId: body.propertyId || null, campaignName: body.campaignName || '' });
-      }
-
       case 'fetch-inbox': {
-        if (!spacemailReady()) return err('SPACEMAIL_EMAIL / SPACEMAIL_PASSWORD not set in Netlify env vars', 500);
+        if (!spacemailReady()) return err('SPACEMAIL_USER / SPACEMAIL_PASS not set in Netlify env vars', 500);
         const limit  = Math.min(parseInt(body.limit, 10) || 30, 50);
         const search = (body.search || '').trim().toLowerCase();
         const client = spacemailImapClient();
@@ -3594,9 +3497,9 @@ exports.handler = async (event) => {
               }
             }
           } finally { lock.release(); }
-          await safelyCloseImap(client);
+          await client.logout();
         } catch (e) {
-          try { client.close(); } catch {}
+          try { await client.close(); } catch {}
           return err('IMAP error: ' + (e.message || e), 502);
         }
         messages.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
@@ -3609,7 +3512,7 @@ exports.handler = async (event) => {
       case 'fetch-email': {
         const uid = parseInt(body.uid, 10);
         if (!uid) return err('uid required');
-        if (!spacemailReady()) return err('SPACEMAIL_EMAIL / SPACEMAIL_PASSWORD not set', 500);
+        if (!spacemailReady()) return err('SPACEMAIL_USER / SPACEMAIL_PASS not set', 500);
         const { simpleParser } = require('mailparser');
         const client = spacemailImapClient();
         let result = null;
@@ -3635,9 +3538,9 @@ exports.handler = async (event) => {
               try { await client.messageFlagsAdd(String(uid), ['\\Seen'], { uid: true }); } catch {}
             }
           } finally { lock.release(); }
-          await safelyCloseImap(client);
+          await client.logout();
         } catch (e) {
-          try { client.close(); } catch {}
+          try { await client.close(); } catch {}
           return err('IMAP error: ' + (e.message || e), 502);
         }
         if (result && result.error) return err(result.error, 404);
@@ -3703,69 +3606,85 @@ exports.handler = async (event) => {
       }
 
       // ════════════════════════════════════════════════════════
-      // COMPARABLES — PropertyReach
+      // COMPARABLES — RentCast (/v1/avm/value)
+      // Returns RentCast's value estimate (ARV) + the comparable
+      // listings it used. Requires RENTCAST_API_KEY in Netlify env.
       // ════════════════════════════════════════════════════════
 
       case 'get-comparables': {
         if (!body.address) return err('address required');
 
-        const PROPERTYREACH_KEY = process.env.PROPERTYREACH_API_KEY || 'test_Od67q03Md5PMJ1xykK9UBhKZbEQe3YlfTk6';
+        const RENTCAST_KEY = process.env.RENTCAST_API_KEY;
+        if (!RENTCAST_KEY) return err('Comps not configured: set RENTCAST_API_KEY in Netlify environment variables', 500);
 
-        // Parse "123 Main St, Springfield, NY 11735" into street/city/state/zip.
-        // PropertyReach's target object accepts these as separate fields.
-        const parts = String(body.address).split(',').map(s => s.trim()).filter(Boolean);
-        const target = {};
-        if (parts.length >= 3) {
-          target.streetAddress = parts[0];
-          target.city = parts[1];
-          const stateZip = parts.slice(2).join(' ').trim();
-          const m = stateZip.match(/^([A-Za-z]{2})\s*([0-9]{5})?/);
-          if (m) {
-            target.state = m[1].toUpperCase();
-            if (m[2]) target.zip = m[2];
-          } else {
-            target.state = stateZip;
-          }
-        } else {
-          target.streetAddress = body.address;
-        }
-
-        const reqBody = {
-          target,
-          filter: {
-            distanceFromSubject: body.radiusMiles || 0.5,
-            comparableSource: 'Both',
-          },
+        // Ask RentCast for comps; if the area is thin, widen the search once.
+        const callRentCast = async (radius, days) => {
+          const qs = new URLSearchParams({
+            address: String(body.address).trim(),
+            maxRadius: String(radius),
+            daysOld: String(days),
+            compCount: String(body.compCount || 15),   // RentCast allows 5–25
+          });
+          if (body.propertyType)  qs.set('propertyType', body.propertyType);
+          if (body.bedrooms)      qs.set('bedrooms', String(body.bedrooms));
+          if (body.bathrooms)     qs.set('bathrooms', String(body.bathrooms));
+          if (body.squareFootage) qs.set('squareFootage', String(body.squareFootage));
+          const resp = await fetch('https://api.rentcast.io/v1/avm/value?' + qs.toString(), {
+            headers: { 'X-Api-Key': RENTCAST_KEY, 'Accept': 'application/json' },
+          });
+          const rawText = await resp.text();
+          let json = null;
+          try { json = rawText ? JSON.parse(rawText) : null; } catch (_) {}
+          return { resp, rawText, json };
         };
 
-        const resp = await fetch('https://api.propertyreach.com/v1/comparables', {
-          method: 'POST',
-          headers: {
-            'x-api-key': PROPERTYREACH_KEY,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(reqBody),
-        });
-        const rawText = await resp.text();
-        let json2 = null;
-        if (rawText) {
-          try { json2 = JSON.parse(rawText); }
-          catch (parseErr) {
-            // PropertyReach returned something that isn't JSON (e.g. an HTML
-            // error page, plain text, or a truncated/empty body). Surface a
-            // useful message instead of crashing on .json().
-            return err(
-              'PropertyReach returned an unexpected response (status ' + resp.status + '): ' +
-              rawText.slice(0, 200),
-              resp.status >= 400 ? resp.status : 502
-            );
-          }
+        let radiusUsed = body.radiusMiles || 0.5, daysUsed = body.daysOld || 180;
+        let { resp, rawText, json: rc } = await callRentCast(radiusUsed, daysUsed);
+        if (resp.ok && rc && (!rc.comparables || rc.comparables.length < 3)) {
+          radiusUsed = 1.5; daysUsed = 365;
+          const retry = await callRentCast(radiusUsed, daysUsed);
+          if (retry.resp.ok && retry.json) ({ resp, rawText, json: rc } = retry);
         }
-        if (!resp.ok) return err((json2 && json2.meta && json2.meta.message) || ('Comparables request failed (status ' + resp.status + ')'), resp.status);
+        if (!resp.ok || !rc) {
+          const msg = (rc && (rc.message || rc.error)) ||
+            ('RentCast error (status ' + resp.status + '): ' + String(rawText || '').slice(0, 200));
+          return err(msg, resp.ok ? 502 : resp.status);
+        }
+
+        // Map RentCast comparables into the shape the front end already renders.
+        // NOTE: RentCast comps are LISTINGS. `price` is the last list price;
+        // status 'Inactive' means it came off the market (usually sold, sometimes withdrawn).
+        const properties = ((rc && rc.comparables) || []).map(c => {
+          const sqft = c.squareFootage || null;
+          return {
+            streetAddress: c.addressLine1 || c.formattedAddress || '',
+            formattedAddress: c.formattedAddress || '',
+            bedrooms: c.bedrooms != null ? c.bedrooms : null,
+            bathrooms: c.bathrooms != null ? c.bathrooms : null,
+            squareFeet: sqft,
+            yearBuilt: c.yearBuilt || null,
+            propertyType: c.propertyType || '',
+            price: c.price || null,
+            pricePerSquareFoot: (c.price && sqft) ? c.price / sqft : null,
+            onMarket: c.status === 'Active',
+            offMarketDate: c.removedDate ? String(c.removedDate).slice(0, 10) : null,
+            listedDate: c.listedDate ? String(c.listedDate).slice(0, 10) : null,
+            daysOnMarket: c.daysOnMarket != null ? c.daysOnMarket : null,
+            distance: c.distance != null ? c.distance : null,
+            correlation: c.correlation != null ? c.correlation : null,
+          };
+        });
 
         return ok({
-          properties: (json2 && json2.properties) || [],
-          resultCount: (json2 && json2.meta && json2.meta.resultCount) || 0,
+          estimate: rc && rc.price ? {
+            value: rc.price,
+            low: rc.priceRangeLow || null,
+            high: rc.priceRangeHigh || null,
+          } : null,
+          properties,
+          resultCount: properties.length,
+          source: 'rentcast',
+          searched: { address: String(body.address).trim(), radiusMiles: radiusUsed, daysOld: daysUsed },
         });
       }
 
