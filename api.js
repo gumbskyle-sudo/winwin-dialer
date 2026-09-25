@@ -3606,69 +3606,80 @@ exports.handler = async (event) => {
       }
 
       // ════════════════════════════════════════════════════════
-      // COMPARABLES — PropertyReach
+      // COMPARABLES — RentCast (/v1/avm/value)
+      // Returns RentCast's value estimate (ARV) + the comparable
+      // listings it used. Requires RENTCAST_API_KEY in Netlify env.
       // ════════════════════════════════════════════════════════
 
       case 'get-comparables': {
         if (!body.address) return err('address required');
 
-        const PROPERTYREACH_KEY = process.env.PROPERTYREACH_API_KEY || 'test_Od67q03Md5PMJ1xykK9UBhKZbEQe3YlfTk6';
+        const RENTCAST_KEY = process.env.RENTCAST_API_KEY;
+        if (!RENTCAST_KEY) return err('Comps not configured: set RENTCAST_API_KEY in Netlify environment variables', 500);
 
-        // Parse "123 Main St, Springfield, NY 11735" into street/city/state/zip.
-        // PropertyReach's target object accepts these as separate fields.
-        const parts = String(body.address).split(',').map(s => s.trim()).filter(Boolean);
-        const target = {};
-        if (parts.length >= 3) {
-          target.streetAddress = parts[0];
-          target.city = parts[1];
-          const stateZip = parts.slice(2).join(' ').trim();
-          const m = stateZip.match(/^([A-Za-z]{2})\s*([0-9]{5})?/);
-          if (m) {
-            target.state = m[1].toUpperCase();
-            if (m[2]) target.zip = m[2];
-          } else {
-            target.state = stateZip;
-          }
-        } else {
-          target.streetAddress = body.address;
-        }
+        const qs = new URLSearchParams({
+          address: String(body.address).trim(),
+          maxRadius: String(body.radiusMiles || 0.5),   // miles
+          daysOld: String(body.daysOld || 180),         // only comps seen on market in last ~6 months
+          compCount: String(body.compCount || 15),      // RentCast allows 5–25
+        });
+        // Optional subject details — sharpen the estimate when we know them
+        if (body.propertyType)  qs.set('propertyType', body.propertyType);   // e.g. 'Single Family', 'Townhouse'
+        if (body.bedrooms)      qs.set('bedrooms', String(body.bedrooms));
+        if (body.bathrooms)     qs.set('bathrooms', String(body.bathrooms));
+        if (body.squareFootage) qs.set('squareFootage', String(body.squareFootage));
 
-        const reqBody = {
-          target,
-          filter: {
-            distanceFromSubject: body.radiusMiles || 0.5,
-            comparableSource: 'Both',
-          },
-        };
-
-        const resp = await fetch('https://api.propertyreach.com/v1/comparables', {
-          method: 'POST',
-          headers: {
-            'x-api-key': PROPERTYREACH_KEY,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(reqBody),
+        const resp = await fetch('https://api.rentcast.io/v1/avm/value?' + qs.toString(), {
+          headers: { 'X-Api-Key': RENTCAST_KEY, 'Accept': 'application/json' },
         });
         const rawText = await resp.text();
-        let json2 = null;
+        let rc = null;
         if (rawText) {
-          try { json2 = JSON.parse(rawText); }
+          try { rc = JSON.parse(rawText); }
           catch (parseErr) {
-            // PropertyReach returned something that isn't JSON (e.g. an HTML
-            // error page, plain text, or a truncated/empty body). Surface a
-            // useful message instead of crashing on .json().
             return err(
-              'PropertyReach returned an unexpected response (status ' + resp.status + '): ' +
-              rawText.slice(0, 200),
+              'RentCast returned an unexpected response (status ' + resp.status + '): ' + rawText.slice(0, 200),
               resp.status >= 400 ? resp.status : 502
             );
           }
         }
-        if (!resp.ok) return err((json2 && json2.meta && json2.meta.message) || ('Comparables request failed (status ' + resp.status + ')'), resp.status);
+        if (!resp.ok) {
+          const msg = (rc && (rc.message || rc.error)) || ('Comparables request failed (status ' + resp.status + ')');
+          return err(msg, resp.status);
+        }
+
+        // Map RentCast comparables into the shape the front end already renders.
+        // NOTE: RentCast comps are LISTINGS. `price` is the last list price;
+        // status 'Inactive' means it came off the market (usually sold, sometimes withdrawn).
+        const properties = ((rc && rc.comparables) || []).map(c => {
+          const sqft = c.squareFootage || null;
+          return {
+            streetAddress: c.addressLine1 || c.formattedAddress || '',
+            formattedAddress: c.formattedAddress || '',
+            bedrooms: c.bedrooms != null ? c.bedrooms : null,
+            bathrooms: c.bathrooms != null ? c.bathrooms : null,
+            squareFeet: sqft,
+            yearBuilt: c.yearBuilt || null,
+            propertyType: c.propertyType || '',
+            price: c.price || null,
+            pricePerSquareFoot: (c.price && sqft) ? c.price / sqft : null,
+            onMarket: c.status === 'Active',
+            offMarketDate: c.removedDate ? String(c.removedDate).slice(0, 10) : null,
+            listedDate: c.listedDate ? String(c.listedDate).slice(0, 10) : null,
+            daysOnMarket: c.daysOnMarket != null ? c.daysOnMarket : null,
+            distance: c.distance != null ? c.distance : null,
+            correlation: c.correlation != null ? c.correlation : null,
+          };
+        });
 
         return ok({
-          properties: (json2 && json2.properties) || [],
-          resultCount: (json2 && json2.meta && json2.meta.resultCount) || 0,
+          estimate: rc && rc.price ? {
+            value: rc.price,
+            low: rc.priceRangeLow || null,
+            high: rc.priceRangeHigh || null,
+          } : null,
+          properties,
+          resultCount: properties.length,
         });
       }
 
