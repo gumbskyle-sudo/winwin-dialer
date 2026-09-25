@@ -3638,10 +3638,15 @@ exports.handler = async (event) => {
           return { resp, rawText, json };
         };
 
-        let radiusUsed = body.radiusMiles || 0.5, daysUsed = body.daysOld || 180;
+        const clamp = (n, lo, hi, dflt) => { n = Number(n); return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : dflt; };
+        body.compCount = clamp(body.compCount, 5, 25, 15);
+        let radiusUsed = clamp(body.radiusMiles, 0.1, 25, 0.5);
+        let daysUsed = clamp(body.daysOld, 1, 3650, 180);
+        let widened = false;
         let { resp, rawText, json: rc } = await callRentCast(radiusUsed, daysUsed);
-        if (resp.ok && rc && (!rc.comparables || rc.comparables.length < 3)) {
-          radiusUsed = 1.5; daysUsed = 365;
+        // Only auto-widen when the search is thin AND it's already fairly tight
+        if (resp.ok && rc && (!rc.comparables || rc.comparables.length < 3) && (radiusUsed < 1.5 || daysUsed < 365)) {
+          radiusUsed = Math.max(radiusUsed, 1.5); daysUsed = Math.max(daysUsed, 365); widened = true;
           const retry = await callRentCast(radiusUsed, daysUsed);
           if (retry.resp.ok && retry.json) ({ resp, rawText, json: rc } = retry);
         }
@@ -3684,7 +3689,13 @@ exports.handler = async (event) => {
           properties,
           resultCount: properties.length,
           source: 'rentcast',
-          searched: { address: String(body.address).trim(), radiusMiles: radiusUsed, daysOld: daysUsed },
+          searched: { address: String(body.address).trim(), radiusMiles: radiusUsed, daysOld: daysUsed, widened },
+          subject: (rc && rc.subjectProperty) ? {
+            bedrooms: rc.subjectProperty.bedrooms ?? null,
+            bathrooms: rc.subjectProperty.bathrooms ?? null,
+            squareFeet: rc.subjectProperty.squareFootage ?? null,
+            propertyType: rc.subjectProperty.propertyType || '',
+          } : null,
         });
       }
 
