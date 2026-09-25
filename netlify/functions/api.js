@@ -3606,96 +3606,111 @@ exports.handler = async (event) => {
       }
 
       // ════════════════════════════════════════════════════════
-      // COMPARABLES — RentCast (/v1/avm/value)
-      // Returns RentCast's value estimate (ARV) + the comparable
-      // listings it used. Requires RENTCAST_API_KEY in Netlify env.
+      // COMPARABLES — RentCast
+      //  1) /avm/value  → value estimate + subject lat/lng
+      //  2) /properties → SOLD comps from public records (lastSalePrice/lastSaleDate)
+      // Uses 2 RentCast requests per lookup. Needs RENTCAST_API_KEY.
       // ════════════════════════════════════════════════════════
 
       case 'get-comparables': {
         if (!body.address) return err('address required');
-
         const RENTCAST_KEY = process.env.RENTCAST_API_KEY;
         if (!RENTCAST_KEY) return err('Comps not configured: set RENTCAST_API_KEY in Netlify environment variables', 500);
 
-        // Ask RentCast for comps; if the area is thin, widen the search once.
-        const callRentCast = async (radius, days) => {
-          const qs = new URLSearchParams({
-            address: String(body.address).trim(),
-            maxRadius: String(radius),
-            daysOld: String(days),
-            compCount: String(body.compCount || 15),   // RentCast allows 5–25
-          });
-          if (body.propertyType)  qs.set('propertyType', body.propertyType);
-          if (body.bedrooms)      qs.set('bedrooms', String(body.bedrooms));
-          if (body.bathrooms)     qs.set('bathrooms', String(body.bathrooms));
-          if (body.squareFootage) qs.set('squareFootage', String(body.squareFootage));
-          const resp = await fetch('https://api.rentcast.io/v1/avm/value?' + qs.toString(), {
+        const clamp = (n, lo, hi, dflt) => { n = Number(n); return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : dflt; };
+        const address  = String(body.address).trim();
+        const limit    = clamp(body.compCount, 5, 100, 25);
+        let radius     = clamp(body.radiusMiles, 0.1, 25, 0.5);
+        let days       = clamp(body.daysOld, 1, 3650, 180);
+        const minPrice = clamp(body.minSalePrice, 0, 1e9, 10000); // drops $1 / family transfers
+
+        const rcGet = async (path, params) => {
+          const r = await fetch('https://api.rentcast.io/v1' + path + '?' + new URLSearchParams(params).toString(), {
             headers: { 'X-Api-Key': RENTCAST_KEY, 'Accept': 'application/json' },
           });
-          const rawText = await resp.text();
-          let json = null;
-          try { json = rawText ? JSON.parse(rawText) : null; } catch (_) {}
-          return { resp, rawText, json };
+          const t = await r.text();
+          let j = null; try { j = t ? JSON.parse(t) : null; } catch (_) {}
+          if (!r.ok) {
+            const msg = (j && (j.message || j.error)) || ('RentCast error (status ' + r.status + '): ' + String(t || '').slice(0, 200));
+            const e = new Error(msg); e.status = r.status; throw e;
+          }
+          return j;
         };
 
-        const clamp = (n, lo, hi, dflt) => { n = Number(n); return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : dflt; };
-        body.compCount = clamp(body.compCount, 5, 25, 15);
-        let radiusUsed = clamp(body.radiusMiles, 0.1, 25, 0.5);
-        let daysUsed = clamp(body.daysOld, 1, 3650, 180);
-        let widened = false;
-        let { resp, rawText, json: rc } = await callRentCast(radiusUsed, daysUsed);
-        // Only auto-widen when the search is thin AND it's already fairly tight
-        if (resp.ok && rc && (!rc.comparables || rc.comparables.length < 3) && (radiusUsed < 1.5 || daysUsed < 365)) {
-          radiusUsed = Math.max(radiusUsed, 1.5); daysUsed = Math.max(daysUsed, 365); widened = true;
-          const retry = await callRentCast(radiusUsed, daysUsed);
-          if (retry.resp.ok && retry.json) ({ resp, rawText, json: rc } = retry);
-        }
-        if (!resp.ok || !rc) {
-          const msg = (rc && (rc.message || rc.error)) ||
-            ('RentCast error (status ' + resp.status + '): ' + String(rawText || '').slice(0, 200));
-          return err(msg, resp.ok ? 502 : resp.status);
-        }
+        // 1) Value estimate + subject location
+        const avmParams = { address, compCount: '10' };
+        if (body.propertyType)  avmParams.propertyType  = body.propertyType;
+        if (body.bedrooms)      avmParams.bedrooms      = String(body.bedrooms);
+        if (body.bathrooms)     avmParams.bathrooms     = String(body.bathrooms);
+        if (body.squareFootage) avmParams.squareFootage = String(body.squareFootage);
+        let avm = null;
+        try { avm = await rcGet('/avm/value', avmParams); } catch (e) { avm = null; } // estimate is optional
+        const subj = (avm && avm.subjectProperty) || {};
+        const lat = subj.latitude ?? avm?.latitude, lng = subj.longitude ?? avm?.longitude;
 
-        // Map RentCast comparables into the shape the front end already renders.
-        // NOTE: RentCast comps are LISTINGS. `price` is the last list price;
-        // status 'Inactive' means it came off the market (usually sold, sometimes withdrawn).
-        const properties = ((rc && rc.comparables) || []).map(c => {
-          const sqft = c.squareFootage || null;
-          return {
-            streetAddress: c.addressLine1 || c.formattedAddress || '',
-            formattedAddress: c.formattedAddress || '',
-            bedrooms: c.bedrooms != null ? c.bedrooms : null,
-            bathrooms: c.bathrooms != null ? c.bathrooms : null,
-            squareFeet: sqft,
-            yearBuilt: c.yearBuilt || null,
-            propertyType: c.propertyType || '',
-            price: c.price || null,
-            pricePerSquareFoot: (c.price && sqft) ? c.price / sqft : null,
-            onMarket: c.status === 'Active',
-            offMarketDate: c.removedDate ? String(c.removedDate).slice(0, 10) : null,
-            listedDate: c.listedDate ? String(c.listedDate).slice(0, 10) : null,
-            daysOnMarket: c.daysOnMarket != null ? c.daysOnMarket : null,
-            distance: c.distance != null ? c.distance : null,
-            correlation: c.correlation != null ? c.correlation : null,
-          };
-        });
+        // 2) Sold comps
+        const soldSearch = async (rad, d) => {
+          const q = { radius: String(rad), saleDateRange: String(d), limit: String(limit) };
+          if (lat != null && lng != null) { q.latitude = String(lat); q.longitude = String(lng); }
+          else q.address = address;
+          if (body.propertyType) q.propertyType = body.propertyType;
+          const beds = Number(body.bedrooms);
+          if (beds) q.bedrooms = Math.max(0, beds - 1) + ':' + (beds + 1);
+          const rows = await rcGet('/properties', q);
+          return Array.isArray(rows) ? rows : [];
+        };
+
+        const toRad = x => x * Math.PI / 180;
+        const miles = (a1, o1, a2, o2) => {
+          if ([a1, o1, a2, o2].some(v => v == null)) return null;
+          const dA = toRad(a2 - a1), dO = toRad(o2 - o1);
+          const h = Math.sin(dA/2)**2 + Math.cos(toRad(a1))*Math.cos(toRad(a2))*Math.sin(dO/2)**2;
+          return 3958.8 * 2 * Math.asin(Math.sqrt(h));
+        };
+        const subjKey = String(subj.formattedAddress || address).toLowerCase().replace(/[^a-z0-9]/g, '');
+        const cleanSold = rows => rows
+          .filter(p => p.lastSalePrice >= minPrice && p.lastSaleDate)
+          .filter(p => String(p.formattedAddress || '').toLowerCase().replace(/[^a-z0-9]/g, '') !== subjKey)
+          .map(p => {
+            const sqft = p.squareFootage || null;
+            return {
+              streetAddress: p.addressLine1 || p.formattedAddress || '',
+              formattedAddress: p.formattedAddress || '',
+              bedrooms: p.bedrooms ?? null,
+              bathrooms: p.bathrooms ?? null,
+              squareFeet: sqft,
+              yearBuilt: p.yearBuilt || null,
+              propertyType: p.propertyType || '',
+              price: p.lastSalePrice,
+              pricePerSquareFoot: sqft ? p.lastSalePrice / sqft : null,
+              soldDate: String(p.lastSaleDate).slice(0, 10),
+              distance: miles(lat, lng, p.latitude, p.longitude),
+            };
+          });
+
+        let properties, widened = false;
+        try {
+          properties = cleanSold(await soldSearch(radius, days));
+          if (properties.length < 3 && body.autoWiden !== false && (radius < 1.5 || days < 365)) {
+            radius = Math.max(radius, 1.5); days = Math.max(days, 365); widened = true;
+            properties = cleanSold(await soldSearch(radius, days));
+          }
+        } catch (e) {
+          return err(e.message, e.status || 502);
+        }
 
         return ok({
-          estimate: rc && rc.price ? {
-            value: rc.price,
-            low: rc.priceRangeLow || null,
-            high: rc.priceRangeHigh || null,
+          source: 'rentcast',
+          mode: 'sold',
+          estimate: avm && avm.price ? { value: avm.price, low: avm.priceRangeLow || null, high: avm.priceRangeHigh || null } : null,
+          subject: avm && avm.subjectProperty ? {
+            bedrooms: subj.bedrooms ?? null, bathrooms: subj.bathrooms ?? null,
+            squareFeet: subj.squareFootage ?? null, propertyType: subj.propertyType || '',
+            lastSalePrice: subj.lastSalePrice ?? null, lastSaleDate: subj.lastSaleDate ? String(subj.lastSaleDate).slice(0,10) : null,
           } : null,
           properties,
           resultCount: properties.length,
-          source: 'rentcast',
-          searched: { address: String(body.address).trim(), radiusMiles: radiusUsed, daysOld: daysUsed, widened },
-          subject: (rc && rc.subjectProperty) ? {
-            bedrooms: rc.subjectProperty.bedrooms ?? null,
-            bathrooms: rc.subjectProperty.bathrooms ?? null,
-            squareFeet: rc.subjectProperty.squareFootage ?? null,
-            propertyType: rc.subjectProperty.propertyType || '',
-          } : null,
+          searched: { address, radiusMiles: radius, daysOld: days, widened },
         });
       }
 
