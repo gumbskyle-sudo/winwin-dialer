@@ -6452,37 +6452,139 @@ function recalcFinancials(){
   }
 }
 
-// ── RentCast comparables ─────────────────────────────────────────
-const compsCache = {}; // address -> {estimate, properties, resultCount}
+// ── RentCast comparables (with adjustable filters) ───────────────
+const compsCache = {};   // cacheKey -> server response
+const compSubject = {};  // address -> {beds, baths, sqft} typed in for this property
+const COMP_DEFAULTS = { radius:'0.5', days:'180', count:'15', type:'', status:'all', size:'any', sort:'match' };
+function getCompFilters(){
+  try { return { ...COMP_DEFAULTS, ...JSON.parse(localStorage.getItem('compFilters') || '{}') }; }
+  catch { return { ...COMP_DEFAULTS }; }
+}
+function saveCompFilters(f){ try { localStorage.setItem('compFilters', JSON.stringify(f)); } catch {} }
+
+function compSelect(name, value, options){
+  return `<label style="display:flex;flex-direction:column;font-size:10px;color:#6b7280;font-weight:600;gap:2px">${options.label}
+    <select data-cf="${name}" style="font-size:12px;padding:4px;border:1px solid #d1d5db;border-radius:6px;background:#fff">
+      ${options.opts.map(([v,t]) => `<option value="${v}"${String(v)===String(value)?' selected':''}>${t}</option>`).join('')}
+    </select></label>`;
+}
+function compInput(name, value, label, ph){
+  return `<label style="display:flex;flex-direction:column;font-size:10px;color:#6b7280;font-weight:600;gap:2px">${label}
+    <input data-cs="${name}" type="number" inputmode="decimal" value="${escapeHtml(value||'')}" placeholder="${ph}"
+      style="font-size:12px;padding:4px;border:1px solid #d1d5db;border-radius:6px;width:100%;box-sizing:border-box"></label>`;
+}
+
 async function loadComps(container, address){
   if(!container || !address) return;
-  container.innerHTML = '<div class="muted" style="font-size:12px;padding:6px 0">Loading comparables…</div>';
+  let filterBox = container.querySelector('.comp-filters');
+  let results = container.querySelector('.comp-results');
+  if(!filterBox){
+    const f = getCompFilters();
+    const s = compSubject[address] || {};
+    container.innerHTML = `
+      <details class="comp-filters" style="margin:4px 0 8px;border:1px solid #e5e7eb;border-radius:8px;padding:6px 8px;background:#fafafa">
+        <summary style="font-size:12px;font-weight:600;cursor:pointer">⚙️ Comp filters</summary>
+        <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin-top:8px">
+          ${compSelect('radius', f.radius, {label:'Radius', opts:[['0.25','¼ mi'],['0.5','½ mi'],['1','1 mi'],['2','2 mi'],['5','5 mi']]})}
+          ${compSelect('days', f.days, {label:'Seen within', opts:[['90','90 days'],['180','6 months'],['365','12 months'],['730','24 months']]})}
+          ${compSelect('count', f.count, {label:'# of comps', opts:[['5','5'],['10','10'],['15','15'],['20','20'],['25','25']]})}
+          ${compSelect('type', f.type, {label:'Property type', opts:[['','Any'],['Single Family','Single family'],['Townhouse','Townhouse'],['Multi-Family','Multi-family'],['Condo','Condo']]})}
+          ${compSelect('status', f.status, {label:'Show', opts:[['all','All'],['off','Off market'],['active','Active']]})}
+          ${compSelect('size', f.size, {label:'Size match', opts:[['any','Any'],['20','±20% sqft'],['30','±30% sqft']]})}
+          ${compSelect('sort', f.sort, {label:'Sort by', opts:[['match','Best match'],['distance','Closest'],['price_desc','Price ↓'],['price_asc','Price ↑'],['ppsf','$/sqft ↓']]})}
+        </div>
+        <div style="font-size:10px;color:#6b7280;font-weight:600;margin:8px 0 4px">THIS PROPERTY (optional — sharpens the estimate)</div>
+        <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px">
+          ${compInput('beds', s.beds, 'Beds', 'e.g. 3')}
+          ${compInput('baths', s.baths, 'Baths', 'e.g. 1')}
+          ${compInput('sqft', s.sqft, 'Sqft', 'e.g. 1050')}
+        </div>
+        <button type="button" class="comp-apply" style="margin-top:8px;width:100%;padding:6px;font-size:12px;font-weight:600;border-radius:6px;border:1px solid #d97706;background:#fef3c7;color:#92400e;cursor:pointer">Update comps</button>
+      </details>
+      <div class="comp-results"></div>`;
+    filterBox = container.querySelector('.comp-filters');
+    results = container.querySelector('.comp-results');
+    // Display-only filters re-render instantly; search filters wait for "Update comps"
+    filterBox.addEventListener('change', e => {
+      const sel = e.target.closest('[data-cf]');
+      if(!sel) return;
+      const f = getCompFilters(); f[sel.dataset.cf] = sel.value; saveCompFilters(f);
+      if(['status','size','sort'].includes(sel.dataset.cf)) loadComps(container, address);
+    });
+    filterBox.querySelector('.comp-apply').addEventListener('click', () => {
+      const subj = {};
+      filterBox.querySelectorAll('[data-cs]').forEach(i => { if(i.value) subj[i.dataset.cs] = i.value; });
+      compSubject[address] = subj;
+      loadComps(container, address);
+    });
+  }
+
+  const f = getCompFilters();
+  const subj = compSubject[address] || {};
+  const reqBody = { address, radiusMiles: Number(f.radius), daysOld: Number(f.days), compCount: Number(f.count) };
+  if(f.type) reqBody.propertyType = f.type;
+  if(subj.beds) reqBody.bedrooms = Number(subj.beds);
+  if(subj.baths) reqBody.bathrooms = Number(subj.baths);
+  if(subj.sqft) reqBody.squareFootage = Number(subj.sqft);
+  const cacheKey = JSON.stringify(reqBody);
+
+  results.innerHTML = '<div class="muted" style="font-size:12px;padding:6px 0">Loading comparables…</div>';
   try {
-    let data = compsCache[address];
+    let data = compsCache[cacheKey];
     if(!data){
-      data = await api('get-comparables', {method:'POST', body:{ address }});
-      compsCache[address] = data;
+      data = await api('get-comparables', {method:'POST', body: reqBody});
+      if(data && data.source === 'rentcast') compsCache[cacheKey] = data;
     }
-    const props = data.properties || [];
-    const est = data.estimate;
-    container.innerHTML = '';
-    if(est && est.value){
-      const money = n => '$' + Number(n).toLocaleString();
-      const range = (est.low && est.high) ? `<div style="font-size:11px;color:#6b7280">Range ${money(est.low)} – ${money(est.high)}</div>` : '';
-      const box = document.createElement('div');
-      box.style.cssText = 'padding:8px 10px;margin-bottom:8px;border-radius:8px;background:#f0fdf4;border:1px solid #bbf7d0';
-      box.innerHTML = `<div style="font-size:11px;color:#166534;font-weight:600">RENTCAST VALUE ESTIMATE</div>
-        <div style="font-size:18px;font-weight:700;color:#0f0d0a">${money(est.value)}</div>${range}
-        <div style="font-size:10px;color:#6b7280;margin-top:2px">Based on nearby listings — likely as-is value, not ARV. Check renovated comps below.</div>`;
-      container.appendChild(box);
-    }
-    if(!props.length){
-      container.insertAdjacentHTML('beforeend', '<div class="muted" style="font-size:12px;padding:6px 0">No comparables found nearby</div>');
+    if(!data || data.source !== 'rentcast'){
+      results.innerHTML = '<div style="font-size:12px;padding:6px 0;color:#b91c1c">⚠️ The server is still running the old comps code. Redeploy api.js to Netlify.</div>';
       return;
     }
-    container.insertAdjacentHTML('beforeend', `<div style="font-size:11px;color:#6b7280;font-weight:600;margin-bottom:6px">📊 ${props.length} NEARBY COMPARABLE${props.length===1?'':'S'} · list prices</div>`);
-    props.slice(0, 10).forEach(p => {
-      const price = p.price ? '$'+Number(p.price).toLocaleString() : '—';
+    const money = n => '$' + Number(n).toLocaleString();
+    results.innerHTML = '';
+
+    const est = data.estimate;
+    if(est && est.value){
+      const range = (est.low && est.high) ? `<div style="font-size:11px;color:#6b7280">Range ${money(est.low)} – ${money(est.high)}</div>` : '';
+      results.insertAdjacentHTML('beforeend', `
+        <div style="padding:8px 10px;margin-bottom:8px;border-radius:8px;background:#f0fdf4;border:1px solid #bbf7d0">
+          <div style="font-size:11px;color:#166534;font-weight:600">RENTCAST VALUE ESTIMATE</div>
+          <div style="font-size:18px;font-weight:700;color:#0f0d0a">${money(est.value)}</div>${range}
+          <div style="font-size:10px;color:#6b7280;margin-top:2px">Based on nearby listings — likely as-is value, not ARV. Check renovated comps below.</div>
+        </div>`);
+    }
+
+    // Client-side filters
+    const subjSqft = Number(subj.sqft) || (data.subject && data.subject.squareFeet) || 0;
+    let props = (data.properties || []).slice();
+    if(f.status === 'off') props = props.filter(p => !p.onMarket);
+    if(f.status === 'active') props = props.filter(p => p.onMarket);
+    let sizeNote = '';
+    if(f.size !== 'any'){
+      if(subjSqft){
+        const pct = Number(f.size) / 100;
+        props = props.filter(p => p.squareFeet && Math.abs(p.squareFeet - subjSqft) <= subjSqft * pct);
+      } else {
+        sizeNote = ' · enter this property’s sqft to use Size match';
+      }
+    }
+    const sorters = {
+      distance:   (a,b) => (a.distance ?? 99) - (b.distance ?? 99),
+      price_desc: (a,b) => (b.price || 0) - (a.price || 0),
+      price_asc:  (a,b) => (a.price || 1e12) - (b.price || 1e12),
+      ppsf:       (a,b) => (b.pricePerSquareFoot || 0) - (a.pricePerSquareFoot || 0),
+      match:      (a,b) => (b.correlation ?? 0) - (a.correlation ?? 0),
+    };
+    props.sort(sorters[f.sort] || sorters.match);
+
+    const sr = data.searched || {};
+    const widened = sr.widened ? ' · search widened (few comps nearby)' : '';
+    if(!props.length){
+      results.insertAdjacentHTML('beforeend', `<div class="muted" style="font-size:12px;padding:6px 0">No comparables match these filters (searched ${escapeHtml(String(sr.radiusMiles||''))} mi / ${escapeHtml(String(sr.daysOld||''))} days${widened})${sizeNote}</div>`);
+      return;
+    }
+    results.insertAdjacentHTML('beforeend', `<div style="font-size:11px;color:#6b7280;font-weight:600;margin-bottom:6px">📊 ${props.length} COMPARABLE${props.length===1?'':'S'} · list prices · ${escapeHtml(String(sr.radiusMiles||''))} mi / ${escapeHtml(String(sr.daysOld||''))} days${widened}${sizeNote}</div>`);
+    props.forEach(p => {
+      const price = p.price ? money(p.price) : '—';
       const ppsf = p.pricePerSquareFoot ? '$'+Math.round(p.pricePerSquareFoot)+'/sqft' : '';
       const beds = p.bedrooms!=null ? p.bedrooms+'bd' : '';
       const baths = p.bathrooms!=null ? p.bathrooms+'ba' : '';
@@ -6491,10 +6593,8 @@ async function loadComps(container, address){
       const statusTag = p.onMarket
         ? '<span style="color:#059669;font-weight:600">Active</span>'
         : (p.offMarketDate ? 'Off market '+escapeHtml(p.offMarketDate) : 'Off market');
-      const row = document.createElement('div');
-      row.className = 'pr-comp-row';
-      row.innerHTML = `
-        <div style="display:flex;gap:10px;padding:8px 0;border-bottom:1px solid #f3f4f6;align-items:center">
+      results.insertAdjacentHTML('beforeend', `
+        <div class="pr-comp-row" style="display:flex;gap:10px;padding:8px 0;border-bottom:1px solid #f3f4f6;align-items:center">
           <div style="flex:1;min-width:0">
             <div style="font-size:13px;font-weight:600;color:#0f0d0a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(p.streetAddress||'')}</div>
             <div style="font-size:11px;color:#6b7280">${[beds,baths,sqft,dist].filter(Boolean).join(' · ')} · ${statusTag}</div>
@@ -6503,11 +6603,10 @@ async function loadComps(container, address){
             <div style="font-size:13px;font-weight:700;color:#0f0d0a">${price}</div>
             ${ppsf?`<div style="font-size:10px;color:#9ca3af">${ppsf}</div>`:''}
           </div>
-        </div>`;
-      container.appendChild(row);
+        </div>`);
     });
   } catch(e) {
-    container.innerHTML = `<div class="muted" style="font-size:12px;padding:6px 0">Couldn't load comps: ${escapeHtml(e.message)}</div>`;
+    results.innerHTML = `<div class="muted" style="font-size:12px;padding:6px 0">Couldn't load comps: ${escapeHtml(e.message)}</div>`;
   }
 }
 
