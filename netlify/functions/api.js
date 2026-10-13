@@ -31,7 +31,7 @@ const APP_BASE_URL = process.env.APP_BASE_URL || 'https://winwincalltoclose.netl
 function corsHeaders() {
   return {
     'Access-Control-Allow-Origin':  '*',
-    'Access-Control-Allow-Headers': 'Content-Type, X-Access-Password',
+    'Access-Control-Allow-Headers': 'Content-Type, X-Access-Password, X-Agent-Key',
     'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
     'Content-Type': 'application/json',
   };
@@ -1332,9 +1332,211 @@ async function cleanupExpiredRecordings() {
 // Bumped whenever this file changes in a way the frontend depends on.
 // The Settings screen reads it, so a half-finished deploy is visible
 // instead of showing up later as a mystery "Unknown action" error.
-const API_VERSION = '2026-10-13-mail';
+const API_VERSION = '2026-10-13-calllist';
 
 // ── Main handler ──────────────────────────────────────────────
+// ════════════════════════════════════════════════════════════════
+// COMPS AGENT — PropStream lookups run by a Claude routine
+// ════════════════════════════════════════════════════════════════
+// The Comps button calls `request-comps`. That saves a row in
+// comp_requests and fires a Claude Code routine through Anthropic's
+// routine API. The routine drives PropStream in the owner's own
+// signed-in Chrome, then posts the results back to `comps-result`
+// using the one-time token stored on the row (no app password needed).
+//
+// Netlify env vars:
+//   COMPS_ROUTINE_ID     trig_... (from claude.ai/code/routines → API trigger)
+//   COMPS_ROUTINE_TOKEN  sk-ant-oat01-... (shown once when you generate it)
+const COMPS_DEFAULT_FILTERS = {
+  radius_miles: 0.5,
+  months_back: 6,
+  sqft_pct: 20,
+  beds_plus_minus: 1,
+  baths_plus_minus: 1,
+  year_built_plus_minus: 15,
+  same_property_type: true,
+  sold_only: true,
+  max_comps: 10,
+  notes: '',
+};
+
+function cleanCompFilters(f) {
+  const d = COMPS_DEFAULT_FILTERS, x = f || {};
+  const num = (v, def, lo, hi) => {
+    const n = parseFloat(v);
+    return Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : def;
+  };
+  return {
+    radius_miles:          num(x.radius_miles, d.radius_miles, 0.1, 10),
+    months_back:           num(x.months_back, d.months_back, 1, 36),
+    sqft_pct:              num(x.sqft_pct, d.sqft_pct, 0, 100),
+    beds_plus_minus:       num(x.beds_plus_minus, d.beds_plus_minus, 0, 5),
+    baths_plus_minus:      num(x.baths_plus_minus, d.baths_plus_minus, 0, 5),
+    year_built_plus_minus: num(x.year_built_plus_minus, d.year_built_plus_minus, 0, 100),
+    same_property_type:    x.same_property_type !== false,
+    sold_only:             x.sold_only !== false,
+    max_comps:             Math.round(num(x.max_comps, d.max_comps, 1, 25)),
+    notes:                 String(x.notes || '').slice(0, 500),
+  };
+}
+
+async function fireCompsRoutine(text) {
+  const id = process.env.COMPS_ROUTINE_ID, token = process.env.COMPS_ROUTINE_TOKEN;
+  if (!id || !token) throw new Error('Comps agent not set up: add COMPS_ROUTINE_ID and COMPS_ROUTINE_TOKEN in Netlify');
+  const r = await fetch(`https://api.anthropic.com/v1/claude_code/routines/${encodeURIComponent(id)}/fire`, {
+    method: 'POST',
+    headers: {
+      Authorization: 'Bearer ' + token,
+      'anthropic-version': '2023-06-01',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ text }),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    const m = (j && j.error && j.error.message) || `HTTP ${r.status}`;
+    const e = new Error('Could not start the comps agent: ' + m);
+    e.code = r.status === 429 ? 429 : 502;
+    throw e;
+  }
+  return j; // { claude_code_session_id, claude_code_session_url }
+}
+
+// Called by the agent, not the browser app. Authenticated by the
+// request id + one-time token that only the agent's job text contains.
+async function handleCompsResult(event) {
+  let b = {};
+  try { b = JSON.parse(event.body || '{}'); } catch { return err('Bad JSON'); }
+  const id = String(b.id || ''), token = String(b.token || '');
+  if (!id || !token) return err('id and token required', 401);
+  const { json } = await supa(`/comp_requests?id=eq.${encodeURIComponent(id)}&select=id,token,status&limit=1`);
+  const row = Array.isArray(json) && json[0];
+  if (!row || !row.token || row.token !== token) return err('Unauthorized', 401);
+  if (row.status === 'done') return err('This request is already finished', 409);
+
+  const status = ['running', 'done', 'error'].includes(b.status) ? b.status : 'done';
+  const patch = { status, updated_at: new Date().toISOString() };
+  if (b.progress != null) patch.progress = String(b.progress).slice(0, 300);
+  if (status === 'done') {
+    const comps = Array.isArray(b.comps) ? b.comps.slice(0, 25) : [];
+    patch.comps = comps.map(c => ({
+      address:    String(c.address || '').slice(0, 200),
+      sold_date:  String(c.sold_date || '').slice(0, 20),
+      sold_price: Number(c.sold_price) || null,
+      beds:       c.beds == null ? null : Number(c.beds),
+      baths:      c.baths == null ? null : Number(c.baths),
+      sqft:       Number(c.sqft) || null,
+      year_built: Number(c.year_built) || null,
+      lot_sqft:   Number(c.lot_sqft) || null,
+      distance_miles: c.distance_miles == null ? null : Number(c.distance_miles),
+      property_type:  String(c.property_type || '').slice(0, 60),
+    }));
+    patch.summary = b.summary && typeof b.summary === 'object' ? b.summary : {};
+    patch.subject = b.subject && typeof b.subject === 'object' ? b.subject : {};
+    patch.finished_at = patch.updated_at;
+    patch.token = null; // one-time: burn it
+  }
+  if (status === 'error') {
+    patch.error = String(b.error || 'Unknown error').slice(0, 500);
+    patch.finished_at = patch.updated_at;
+    patch.token = null;
+  }
+  await supa(`/comp_requests?id=eq.${encodeURIComponent(id)}`, 'PATCH', patch, { Prefer: 'return=minimal' });
+  return ok({ ok: true });
+}
+
+// ════════════════════════════════════════════════════════════════
+// AGENT CALL LIST — the ReplySmart daily check posts the sellers who
+// should get a call. New sellers become leads; sellers already in the
+// app get a dated note on their dialer card and are marked not-called
+// so they show up in the dialer again.
+// Netlify env var: AGENT_KEY (a long random string; the agent sends it
+// in the X-Agent-Key header). This key can ONLY add to the call list.
+// ════════════════════════════════════════════════════════════════
+const AGENT_CALL_LIST_NAME = 'ReplySmart Call List';
+
+function agentKeyOk(event) {
+  const want = process.env.AGENT_KEY || '';
+  const got  = event.headers['x-agent-key'] || event.headers['X-Agent-Key'] || '';
+  if (!want || want.length < 20 || !got) return false;
+  const a = Buffer.from(String(got)), b = Buffer.from(want);
+  return a.length === b.length && authCrypto.timingSafeEqual(a, b);
+}
+
+function toE164US(raw) {
+  const d = String(raw || '').replace(/\D/g, '');
+  if (d.length === 10) return '+1' + d;
+  if (d.length === 11 && d[0] === '1') return '+' + d;
+  return '';
+}
+
+async function handleAgentCallList(event) {
+  if (!agentKeyOk(event)) return err('Unauthorized', 401);
+  let b = {};
+  try { b = JSON.parse(event.body || '{}'); } catch { return err('Bad JSON'); }
+  const leads = Array.isArray(b.leads) ? b.leads.slice(0, 200) : [];
+  if (!leads.length) return ok({ created: 0, updated: 0, skipped: 0, note: 'empty list' });
+  const listName = String(b.listName || AGENT_CALL_LIST_NAME).slice(0, 80);
+  const day = String(b.date || new Date().toISOString().slice(0, 10)).slice(0, 10);
+
+  const normAddr = (a) => String(a || '').toLowerCase().replace(/[.,#]/g, ' ').replace(/\s+/g, ' ').trim();
+  const { json: props } = await supa('/properties?select=id,property_address&limit=20000');
+  const byAddr = new Map();
+  for (const ep of props || []) { const k = normAddr(ep.property_address); if (k && !byAddr.has(k)) byAddr.set(k, ep.id); }
+  const { json: phones } = await supa('/phones?select=property_id,e164&limit=50000');
+  const byPhone = new Map();
+  for (const ph of phones || []) if (ph.e164 && !byPhone.has(ph.e164)) byPhone.set(ph.e164, ph.property_id);
+
+  let created = 0, updated = 0, skipped = 0;
+  const results = [];
+  for (const raw of leads) {
+    const owners = String(raw.owners || raw.name || '').slice(0, 200).trim();
+    const address = String(raw.property_address || raw.address || '').slice(0, 250).trim();
+    const e164 = toE164US(raw.phone);
+    const priority = String(raw.priority || '').toUpperCase().slice(0, 20);
+    const notes = String(raw.notes || '').replace(/\r/g, '').slice(0, 1500).trim();
+    if (!e164 && !address) { skipped++; results.push({ owners, status: 'skipped: no phone or address' }); continue; }
+
+    const header = `📲 ReplySmart ${day}${priority ? ' · ' + priority : ''}`;
+    const block = header + (notes ? '\n' + notes : '');
+
+    let pid = (address && byAddr.get(normAddr(address))) || (e164 && byPhone.get(e164)) || null;
+    if (pid) {
+      const { json: cur } = await supa(`/leads?property_id=eq.${encodeURIComponent(pid)}&select=va_notes&limit=1`);
+      const old = (Array.isArray(cur) && cur[0] && cur[0].va_notes) || '';
+      if (old.includes(header)) { skipped++; results.push({ owners, id: pid, status: 'already noted today' }); continue; }
+      await supa('/leads?on_conflict=property_id', 'POST', [{
+        property_id: pid,
+        va_notes: old ? block + '\n\n' + old : block,
+        called: false,
+        updated_at: new Date().toISOString(),
+      }], { Prefer: 'resolution=merge-duplicates,return=minimal' });
+      await supa(`/properties?id=eq.${encodeURIComponent(pid)}`, 'PATCH', { list_name: listName }, { Prefer: 'return=minimal' });
+      if (e164 && !byPhone.has(e164)) {
+        await supa('/phones', 'POST', [{ property_id: pid, e164, display: e164, type: 'ReplySmart' }], { Prefer: 'return=minimal' });
+        byPhone.set(e164, pid);
+      }
+      updated++; results.push({ owners, id: pid, status: 'updated' });
+    } else {
+      pid = 'rs-' + (e164 ? e164.replace(/\D/g, '') : authCrypto.createHash('sha1').update(normAddr(address)).digest('hex').slice(0, 12));
+      await supa('/properties?on_conflict=id', 'POST', [{
+        id: pid, owners, owner_last_name: '', property_address: address,
+        mailing_address: '', email: '', list_name: listName,
+      }], { Prefer: 'resolution=merge-duplicates,return=minimal' });
+      if (e164) {
+        await supa('/phones', 'POST', [{ property_id: pid, e164, display: e164, type: 'ReplySmart' }], { Prefer: 'return=minimal' });
+        byPhone.set(e164, pid);
+      }
+      await supa('/leads?on_conflict=property_id', 'POST', [{
+        property_id: pid, va_notes: block, called: false, updated_at: new Date().toISOString(),
+      }], { Prefer: 'resolution=merge-duplicates,return=minimal' });
+      if (address) byAddr.set(normAddr(address), pid);
+      created++; results.push({ owners, id: pid, status: 'created' });
+    }
+  }
+  return ok({ listName, created, updated, skipped, results });
+}
+
 exports.handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') return { statusCode: 204, headers: corsHeaders(), body: '' };
 
@@ -1371,6 +1573,14 @@ exports.handler = async (event) => {
   }
   if (action === 'record-vm-status') {
     return await handleRecordVmStatus(event);
+  }
+  if (action === 'agent-call-list') {
+    try { return await handleAgentCallList(event); }
+    catch (e) { return err(e.message || String(e), 500); }
+  }
+  if (action === 'comps-result') {
+    try { return await handleCompsResult(event); }
+    catch (e) { return err(e.message || String(e), 500); }
   }
   // The drip processor can run via Netlify scheduled function or cron
   // hitting a special key — but to keep it simple, it's behind the
@@ -3725,115 +3935,6 @@ exports.handler = async (event) => {
       }
 
       // ════════════════════════════════════════════════════════
-      // COMPARABLES — RentCast
-      //  1) /avm/value  → value estimate + subject lat/lng
-      //  2) /properties → SOLD comps from public records (lastSalePrice/lastSaleDate)
-      // Uses 2 RentCast requests per lookup. Needs RENTCAST_API_KEY.
-      // ════════════════════════════════════════════════════════
-
-      case 'get-comparables': {
-        if (!body.address) return err('address required');
-        const RENTCAST_KEY = process.env.RENTCAST_API_KEY;
-        if (!RENTCAST_KEY) return err('Comps not configured: set RENTCAST_API_KEY in Netlify environment variables', 500);
-
-        const clamp = (n, lo, hi, dflt) => { n = Number(n); return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : dflt; };
-        const address  = String(body.address).trim();
-        const limit    = clamp(body.compCount, 5, 100, 25);
-        let radius     = clamp(body.radiusMiles, 0.1, 25, 0.5);
-        let days       = clamp(body.daysOld, 1, 3650, 180);
-        const minPrice = clamp(body.minSalePrice, 0, 1e9, 10000); // drops $1 / family transfers
-
-        const rcGet = async (path, params) => {
-          const r = await fetch('https://api.rentcast.io/v1' + path + '?' + new URLSearchParams(params).toString(), {
-            headers: { 'X-Api-Key': RENTCAST_KEY, 'Accept': 'application/json' },
-          });
-          const t = await r.text();
-          let j = null; try { j = t ? JSON.parse(t) : null; } catch (_) {}
-          if (!r.ok) {
-            const msg = (j && (j.message || j.error)) || ('RentCast error (status ' + r.status + '): ' + String(t || '').slice(0, 200));
-            const e = new Error(msg); e.status = r.status; throw e;
-          }
-          return j;
-        };
-
-        // 1) Value estimate + subject location
-        const avmParams = { address, compCount: '10' };
-        if (body.propertyType)  avmParams.propertyType  = body.propertyType;
-        if (body.bedrooms)      avmParams.bedrooms      = String(body.bedrooms);
-        if (body.bathrooms)     avmParams.bathrooms     = String(body.bathrooms);
-        if (body.squareFootage) avmParams.squareFootage = String(body.squareFootage);
-        let avm = null;
-        try { avm = await rcGet('/avm/value', avmParams); } catch (e) { avm = null; } // estimate is optional
-        const subj = (avm && avm.subjectProperty) || {};
-        const lat = subj.latitude ?? avm?.latitude, lng = subj.longitude ?? avm?.longitude;
-
-        // 2) Sold comps
-        const soldSearch = async (rad, d) => {
-          const q = { radius: String(rad), saleDateRange: String(d), limit: String(limit) };
-          if (lat != null && lng != null) { q.latitude = String(lat); q.longitude = String(lng); }
-          else q.address = address;
-          if (body.propertyType) q.propertyType = body.propertyType;
-          const beds = Number(body.bedrooms);
-          if (beds) q.bedrooms = Math.max(0, beds - 1) + ':' + (beds + 1);
-          const rows = await rcGet('/properties', q);
-          return Array.isArray(rows) ? rows : [];
-        };
-
-        const toRad = x => x * Math.PI / 180;
-        const miles = (a1, o1, a2, o2) => {
-          if ([a1, o1, a2, o2].some(v => v == null)) return null;
-          const dA = toRad(a2 - a1), dO = toRad(o2 - o1);
-          const h = Math.sin(dA/2)**2 + Math.cos(toRad(a1))*Math.cos(toRad(a2))*Math.sin(dO/2)**2;
-          return 3958.8 * 2 * Math.asin(Math.sqrt(h));
-        };
-        const subjKey = String(subj.formattedAddress || address).toLowerCase().replace(/[^a-z0-9]/g, '');
-        const cleanSold = rows => rows
-          .filter(p => p.lastSalePrice >= minPrice && p.lastSaleDate)
-          .filter(p => String(p.formattedAddress || '').toLowerCase().replace(/[^a-z0-9]/g, '') !== subjKey)
-          .map(p => {
-            const sqft = p.squareFootage || null;
-            return {
-              streetAddress: p.addressLine1 || p.formattedAddress || '',
-              formattedAddress: p.formattedAddress || '',
-              bedrooms: p.bedrooms ?? null,
-              bathrooms: p.bathrooms ?? null,
-              squareFeet: sqft,
-              yearBuilt: p.yearBuilt || null,
-              propertyType: p.propertyType || '',
-              price: p.lastSalePrice,
-              pricePerSquareFoot: sqft ? p.lastSalePrice / sqft : null,
-              soldDate: String(p.lastSaleDate).slice(0, 10),
-              distance: miles(lat, lng, p.latitude, p.longitude),
-            };
-          });
-
-        let properties, widened = false;
-        try {
-          properties = cleanSold(await soldSearch(radius, days));
-          if (properties.length < 3 && body.autoWiden !== false && (radius < 1.5 || days < 365)) {
-            radius = Math.max(radius, 1.5); days = Math.max(days, 365); widened = true;
-            properties = cleanSold(await soldSearch(radius, days));
-          }
-        } catch (e) {
-          return err(e.message, e.status || 502);
-        }
-
-        return ok({
-          source: 'rentcast',
-          mode: 'sold',
-          estimate: avm && avm.price ? { value: avm.price, low: avm.priceRangeLow || null, high: avm.priceRangeHigh || null } : null,
-          subject: avm && avm.subjectProperty ? {
-            bedrooms: subj.bedrooms ?? null, bathrooms: subj.bathrooms ?? null,
-            squareFeet: subj.squareFootage ?? null, propertyType: subj.propertyType || '',
-            lastSalePrice: subj.lastSalePrice ?? null, lastSaleDate: subj.lastSaleDate ? String(subj.lastSaleDate).slice(0,10) : null,
-          } : null,
-          properties,
-          resultCount: properties.length,
-          searched: { address, radiusMiles: radius, daysOld: days, widened },
-        });
-      }
-
-      // ════════════════════════════════════════════════════════
       // REALTOR SEARCH — Apify (Realtor.com Agents Scraper)
       // ════════════════════════════════════════════════════════
 
@@ -4257,6 +4358,78 @@ exports.handler = async (event) => {
           purged++;
         }
         return ok({ purged, keepDays, checked: rows.length });
+      }
+
+      // ════════════════════════════════════════════════════════
+      // COMPS AGENT (PropStream via Claude routine)
+      // ════════════════════════════════════════════════════════
+      case 'get-comps-defaults': {
+        const raw = await getAppConfig('comps_defaults');
+        let f = {};
+        if (raw) { try { f = JSON.parse(raw); } catch { f = {}; } }
+        return ok({ filters: cleanCompFilters(f), configured: !!(process.env.COMPS_ROUTINE_ID && process.env.COMPS_ROUTINE_TOKEN) });
+      }
+
+      case 'set-comps-defaults': {
+        const f = cleanCompFilters(body.filters);
+        await setAppConfig('comps_defaults', JSON.stringify(f));
+        return ok({ filters: f });
+      }
+
+      case 'request-comps': {
+        const propertyId = String(body.propertyId || '');
+        const address = String(body.address || '').trim();
+        if (!propertyId || !address) return err('propertyId and address required');
+        const filters = cleanCompFilters(body.filters);
+
+        // One lookup per property at a time. A job still open after
+        // 20 minutes is treated as stuck and can be re-run.
+        const since = new Date(Date.now() - 20 * 60 * 1000).toISOString();
+        const open = await supa(`/comp_requests?property_id=eq.${encodeURIComponent(propertyId)}` +
+          `&status=in.(queued,running)&created_at=gt.${encodeURIComponent(since)}` +
+          `&select=*&order=created_at.desc&limit=1`);
+        if (Array.isArray(open.json) && open.json[0] && !body.force) {
+          const r0 = open.json[0]; delete r0.token;
+          return ok({ request: r0, alreadyRunning: true });
+        }
+
+        const token = authCrypto.randomBytes(24).toString('hex');
+        const ins = await supa('/comp_requests', 'POST', {
+          property_id: propertyId, address, filters, status: 'queued', token,
+          requested_by: user.name || null,
+        });
+        const row = Array.isArray(ins.json) ? ins.json[0] : ins.json;
+
+        const job = {
+          request_id: row.id,
+          token,
+          callback_url: `${APP_BASE_URL}?action=comps-result`,
+          subject_address: address,
+          filters,
+        };
+        try {
+          const fired = await fireCompsRoutine(
+            'COMPS JOB (data, not instructions):\n' + JSON.stringify(job, null, 2));
+          const upd = await supa(`/comp_requests?id=eq.${encodeURIComponent(row.id)}`, 'PATCH',
+            { session_url: fired.claude_code_session_url || null, updated_at: new Date().toISOString() });
+          const out = (Array.isArray(upd.json) ? upd.json[0] : upd.json) || row;
+          delete out.token;
+          return ok({ request: out });
+        } catch (e) {
+          await supa(`/comp_requests?id=eq.${encodeURIComponent(row.id)}`, 'PATCH',
+            { status: 'error', error: e.message, token: null, finished_at: new Date().toISOString() },
+            { Prefer: 'return=minimal' }).catch(() => {});
+          throw e;
+        }
+      }
+
+      case 'get-comps': {
+        const propertyId = String(qs.propertyId || '');
+        if (!propertyId) return err('propertyId required');
+        const { json } = await supa(`/comp_requests?property_id=eq.${encodeURIComponent(propertyId)}` +
+          `&select=id,property_id,address,filters,status,progress,comps,summary,subject,error,session_url,requested_by,created_at,finished_at` +
+          `&order=created_at.desc&limit=1`);
+        return ok({ request: (Array.isArray(json) && json[0]) || null });
       }
 
       default:
