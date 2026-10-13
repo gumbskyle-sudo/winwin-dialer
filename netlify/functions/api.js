@@ -1227,7 +1227,7 @@ function spacemailFrom() {
   const name = process.env.SPACEMAIL_FROM_NAME || 'Win Win Property Solutions NY';
   return `${name} <${process.env.SPACEMAIL_USER}>`;
 }
-async function sendViaSpacemail({ to, subject, html, text, replyTo, cc }) {
+async function sendViaSpacemail({ to, subject, html, text, replyTo, cc, attachments }) {
   if (!spacemailReady()) return { error: 'SPACEMAIL_USER / SPACEMAIL_PASS not set in Netlify env vars' };
   const nodemailer = require('nodemailer');
   const transporter = nodemailer.createTransport({
@@ -1244,6 +1244,7 @@ async function sendViaSpacemail({ to, subject, html, text, replyTo, cc }) {
     subject: subject || '(no subject)',
     text: text || (html ? html.replace(/<[^>]+>/g, ' ') : ''),
     html: html || (text ? text.replace(/\n/g, '<br>') : ''),
+    attachments: Array.isArray(attachments) && attachments.length ? attachments : undefined,
   });
   return { ok: true, id: info.messageId };
 }
@@ -1331,7 +1332,7 @@ async function cleanupExpiredRecordings() {
 // Bumped whenever this file changes in a way the frontend depends on.
 // The Settings screen reads it, so a half-finished deploy is visible
 // instead of showing up later as a mystery "Unknown action" error.
-const API_VERSION = '2026-09-08-lux-teardown';
+const API_VERSION = '2026-10-13-mail';
 
 // ── Main handler ──────────────────────────────────────────────
 exports.handler = async (event) => {
@@ -3444,6 +3445,22 @@ exports.handler = async (event) => {
       // ════════════════════════════════════════════════════════
       case 'send-email': {
         if (!body.to) return err('to (recipient) required');
+        const files = Array.isArray(body.attachments) ? body.attachments : [];
+        const attachments = [];
+        let totalBytes = 0;
+        for (const f of files) {
+          if (!f || !f.contentBase64) continue;
+          const buf = Buffer.from(String(f.contentBase64), 'base64');
+          totalBytes += buf.length;
+          attachments.push({
+            filename: String(f.filename || 'attachment').slice(0, 200),
+            content: buf,
+            contentType: f.contentType || undefined,
+          });
+        }
+        if (totalBytes > 4 * 1024 * 1024) {
+          return err('Attachments are too big. Keep them under about 3.5 MB per email.', 413);
+        }
         const res = await sendViaSpacemail({
           to: body.to,
           cc: body.cc,
@@ -3451,9 +3468,10 @@ exports.handler = async (event) => {
           subject: body.subject,
           html: body.html,
           text: body.text,
+          attachments,
         });
         if (res.error) return err(res.error, 500);
-        return ok({ sent: true, id: res.id });
+        return ok({ sent: true, id: res.id, attachments: attachments.length });
       }
 
       // ════════════════════════════════════════════════════════
@@ -3464,13 +3482,14 @@ exports.handler = async (event) => {
         if (!spacemailReady()) return err('SPACEMAIL_USER / SPACEMAIL_PASS not set in Netlify env vars', 500);
         const limit  = Math.min(parseInt(body.limit, 10) || 30, 50);
         const search = (body.search || '').trim().toLowerCase();
+        const folder = String(body.folder || 'INBOX');
         const client = spacemailImapClient();
         const messages = [];
         try {
           await client.connect();
-          const lock = await client.getMailboxLock('INBOX');
+          const lock = await client.getMailboxLock(folder);
           try {
-            const status = await client.status('INBOX', { messages: true });
+            const status = await client.status(folder, { messages: true });
             const total = status.messages || 0;
             if (total > 0) {
               const windowSize = search ? total : Math.min(total, limit);
@@ -3513,12 +3532,13 @@ exports.handler = async (event) => {
         const uid = parseInt(body.uid, 10);
         if (!uid) return err('uid required');
         if (!spacemailReady()) return err('SPACEMAIL_USER / SPACEMAIL_PASS not set', 500);
+        const folder = String(body.folder || 'INBOX');
         const { simpleParser } = require('mailparser');
         const client = spacemailImapClient();
         let result = null;
         try {
           await client.connect();
-          const lock = await client.getMailboxLock('INBOX');
+          const lock = await client.getMailboxLock(folder);
           try {
             const msg = await client.fetchOne(String(uid), { source: true }, { uid: true });
             if (!msg || !msg.source) {
@@ -3545,6 +3565,105 @@ exports.handler = async (event) => {
         }
         if (result && result.error) return err(result.error, 404);
         return ok(result);
+      }
+
+      // ════════════════════════════════════════════════════════
+      // SPACEMAIL — folders, move, delete
+      // ════════════════════════════════════════════════════════
+      case 'list-mail-folders': {
+        if (!spacemailReady()) return err('SPACEMAIL_USER / SPACEMAIL_PASS not set', 500);
+        const client = spacemailImapClient();
+        let folders = [];
+        try {
+          await client.connect();
+          const list = await client.list();
+          folders = list
+            .filter(f => !(f.flags && f.flags.has('\\Noselect')))
+            .map(f => ({ path: f.path, name: f.name, specialUse: f.specialUse || '' }));
+          await client.logout();
+        } catch (e) {
+          try { await client.close(); } catch {}
+          return err('IMAP error: ' + (e.message || e), 502);
+        }
+        const order = { '\\Sent': 1, '\\Drafts': 2, '\\Junk': 3, '\\Trash': 4, '\\Archive': 5 };
+        const rank = f => f.path.toUpperCase() === 'INBOX' ? 0 : (order[f.specialUse] || 9);
+        folders.sort((a, b) => rank(a) - rank(b) || a.path.localeCompare(b.path));
+        return ok({ folders });
+      }
+
+      case 'create-mail-folder': {
+        const name = String(body.name || '').trim().replace(/[\\/]/g, '-').slice(0, 60);
+        if (!name) return err('name required');
+        if (!spacemailReady()) return err('SPACEMAIL_USER / SPACEMAIL_PASS not set', 500);
+        const client = spacemailImapClient();
+        let path = name;
+        try {
+          await client.connect();
+          const r = await client.mailboxCreate(name);
+          if (r && r.path) path = r.path;
+          await client.logout();
+        } catch (e) {
+          try { await client.close(); } catch {}
+          return err('Could not create folder: ' + (e.message || e), 502);
+        }
+        return ok({ path });
+      }
+
+      case 'move-email': {
+        const uid = parseInt(body.uid, 10);
+        const from = String(body.folder || 'INBOX');
+        const to = String(body.toFolder || '');
+        if (!uid) return err('uid required');
+        if (!to) return err('toFolder required');
+        if (to === from) return ok({ moved: false });
+        if (!spacemailReady()) return err('SPACEMAIL_USER / SPACEMAIL_PASS not set', 500);
+        const client = spacemailImapClient();
+        try {
+          await client.connect();
+          const lock = await client.getMailboxLock(from);
+          try {
+            const r = await client.messageMove(String(uid), to, { uid: true });
+            if (!r) throw new Error('That email was not found in ' + from);
+          } finally { lock.release(); }
+          await client.logout();
+        } catch (e) {
+          try { await client.close(); } catch {}
+          return err('Move failed: ' + (e.message || e), 502);
+        }
+        return ok({ moved: true, to });
+      }
+
+      // Outside Trash: moves the email to Trash. Inside Trash: deletes it for good.
+      case 'delete-email': {
+        const uid = parseInt(body.uid, 10);
+        const folder = String(body.folder || 'INBOX');
+        if (!uid) return err('uid required');
+        if (!spacemailReady()) return err('SPACEMAIL_USER / SPACEMAIL_PASS not set', 500);
+        const client = spacemailImapClient();
+        let permanent = false;
+        try {
+          await client.connect();
+          const list = await client.list();
+          const trash = list.find(f => f.specialUse === '\\Trash') ||
+                        list.find(f => /^(trash|deleted( items| messages)?)$/i.test(f.name));
+          const inTrash = trash && trash.path === folder;
+          if (!trash && !inTrash) throw new Error('No Trash folder found on this mailbox');
+          const lock = await client.getMailboxLock(folder);
+          try {
+            if (inTrash) {
+              await client.messageDelete(String(uid), { uid: true });
+              permanent = true;
+            } else {
+              const r = await client.messageMove(String(uid), trash.path, { uid: true });
+              if (!r) throw new Error('That email was not found in ' + folder);
+            }
+          } finally { lock.release(); }
+          await client.logout();
+        } catch (e) {
+          try { await client.close(); } catch {}
+          return err('Delete failed: ' + (e.message || e), 502);
+        }
+        return ok({ deleted: true, permanent });
       }
 
       // ════════════════════════════════════════════════════════
