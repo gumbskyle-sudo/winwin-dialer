@@ -1332,7 +1332,7 @@ async function cleanupExpiredRecordings() {
 // Bumped whenever this file changes in a way the frontend depends on.
 // The Settings screen reads it, so a half-finished deploy is visible
 // instead of showing up later as a mystery "Unknown action" error.
-const API_VERSION = '2026-10-13-calllist';
+const API_VERSION = '2026-10-13-calllist2';
 
 // ── Main handler ──────────────────────────────────────────────
 // ════════════════════════════════════════════════════════════════
@@ -1478,6 +1478,9 @@ async function handleAgentCallList(event) {
   if (!leads.length) return ok({ created: 0, updated: 0, skipped: 0, note: 'empty list' });
   const listName = String(b.listName || AGENT_CALL_LIST_NAME).slice(0, 80);
   const day = String(b.date || new Date().toISOString().slice(0, 10)).slice(0, 10);
+  // Where the leads came from, shown at the top of each card note. 'ReplySmart' by default.
+  const source = String(b.source || 'ReplySmart').replace(/[\r\n]/g, ' ').slice(0, 40);
+  const sourceIcon = /replysmart/i.test(source) ? '📲' : '📥';
 
   const normAddr = (a) => String(a || '').toLowerCase().replace(/[.,#]/g, ' ').replace(/\s+/g, ' ').trim();
   const { json: props } = await supa('/properties?select=id,property_address&limit=20000');
@@ -1497,7 +1500,7 @@ async function handleAgentCallList(event) {
     const notes = String(raw.notes || '').replace(/\r/g, '').slice(0, 1500).trim();
     if (!e164 && !address) { skipped++; results.push({ owners, status: 'skipped: no phone or address' }); continue; }
 
-    const header = `📲 ReplySmart ${day}${priority ? ' · ' + priority : ''}`;
+    const header = `${sourceIcon} ${source} ${day}${priority ? ' · ' + priority : ''}`;
     const block = header + (notes ? '\n' + notes : '');
 
     let pid = (address && byAddr.get(normAddr(address))) || (e164 && byPhone.get(e164)) || null;
@@ -1521,7 +1524,8 @@ async function handleAgentCallList(event) {
       pid = 'rs-' + (e164 ? e164.replace(/\D/g, '') : authCrypto.createHash('sha1').update(normAddr(address)).digest('hex').slice(0, 12));
       await supa('/properties?on_conflict=id', 'POST', [{
         id: pid, owners, owner_last_name: '', property_address: address,
-        mailing_address: '', email: '', list_name: listName,
+        mailing_address: String(raw.mailing_address || '').slice(0, 250),
+        email: String(raw.email || '').slice(0, 200), list_name: listName,
       }], { Prefer: 'resolution=merge-duplicates,return=minimal' });
       if (e164) {
         await supa('/phones', 'POST', [{ property_id: pid, e164, display: e164, type: 'ReplySmart' }], { Prefer: 'return=minimal' });
