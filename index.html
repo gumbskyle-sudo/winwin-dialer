@@ -944,6 +944,17 @@ body.view-mail header .callerid{display:none}
 .mail-iframe{width:100%;min-height:300px;border:1px solid #e5e7eb;border-radius:8px;background:#fff}
 .mail-meta{font-size:12px;color:#6b7280;margin-bottom:4px}
 .mail-meta b{color:#0f0d0a}
+.mail-folder-row{margin:0 0 10px}
+.mail-folder-row select,.mail-actions select{width:100%;padding:9px 10px;border:1.5px solid #d1d5db;border-radius:8px;font-size:14px;background:#fff;color:#0f0d0a;font-family:inherit}
+.mail-actions{display:flex;gap:8px;margin-top:8px}
+.mail-actions select{flex:1}
+.mail-actions .btn-danger{padding:9px 14px;font-size:13px}
+.mail-attach-btn{display:inline-flex!important;align-items:center;gap:6px;padding:8px 12px;border:1.5px dashed #96751A;border-radius:8px;color:#96751A!important;font-weight:700;cursor:pointer;background:#fffdf5}
+.mail-attach-list{display:flex;flex-direction:column;gap:5px;margin-top:8px}
+.mail-attach-chip{display:flex;align-items:center;gap:6px;font-size:12px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:7px;padding:6px 9px}
+.mail-attach-chip span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mail-attach-chip em{color:#6b7280;font-style:normal}
+.mail-attach-chip button{background:none;border:none;color:#b91c1c;cursor:pointer;font-size:13px}
 
 /* SMS settings in settings modal */
 .sms-settings-section{
@@ -1484,6 +1495,9 @@ body.my-phone-mode .phone .badge:last-child{background:#ffedd5;color:#9a3412}
 
   <!-- Mail (email) view -->
   <div id="mailView">
+    <div class="mail-folder-row">
+      <select id="mailFolderSel"><option value="INBOX">📥 Inbox</option></select>
+    </div>
     <div class="pipe-toolbar">
       <div class="pipe-summary" id="mailSummary">—</div>
       <div style="display:flex;gap:8px">
@@ -1763,6 +1777,10 @@ body.my-phone-mode .phone .badge:last-child{background:#ffedd5;color:#9a3412}
       <div id="mailReadMeta"></div>
       <iframe id="mailReadFrame" class="mail-iframe" sandbox=""></iframe>
       <button class="btn-primary" id="mailReplyBtn" style="width:100%;margin-top:12px">↩ Reply</button>
+      <div class="mail-actions">
+        <select id="mailMoveSel"><option value="">📁 Move to…</option></select>
+        <button class="btn-danger" id="mailDeleteBtn">🗑 Delete</button>
+      </div>
     </div>
   </div>
 </div>
@@ -1777,6 +1795,10 @@ body.my-phone-mode .phone .badge:last-child{background:#ffedd5;color:#9a3412}
       <div class="field"><label>To</label><input type="email" id="composeTo" placeholder="name@example.com" autocomplete="off"></div>
       <div class="field"><label>Subject</label><input type="text" id="composeSubject" placeholder="Subject"></div>
       <div class="field"><label>Message</label><textarea id="composeBody" rows="8" placeholder="Write your message…"></textarea></div>
+      <div class="field">
+        <label class="mail-attach-btn">📎 Attach files<input type="file" id="composeFiles" multiple style="display:none"></label>
+        <div id="composeAttachList" class="mail-attach-list"></div>
+      </div>
       <button class="btn-primary" id="composeSend" style="width:100%;margin-top:8px">📤 Send</button>
     </div>
   </div>
@@ -2140,7 +2162,7 @@ const DEFAULT_WEBSITE = 'winwinproperties.net';
 const companyName = () => localStorage.getItem(LS.company) || DEFAULT_COMPANY;
 const companySite = () => localStorage.getItem(LS.website) || DEFAULT_WEBSITE;
 // Bump this on every deploy so you can see which build is actually live
-const BUILD_ID = 'build 2026-09-24-myphone';
+const BUILD_ID = 'build 2026-10-13-mail';
 const DEFAULT_VM_MESSAGE = "Hi {FirstName}, we are calling from Win Win Properties to give you a quick offer on your property at {Address}. Give us a call back at {CallbackNumber}, or find us online at win win properties dot net. That's W W W dot winwinproperties dot net. Thanks, and have a great day.";
 let backend  = localStorage.getItem(LS.backend) || '/api';
 let password = localStorage.getItem(LS.pwd) || '';
@@ -7217,7 +7239,8 @@ async function loadMail(){
   $('mailList').innerHTML = '<div class="inbox-empty">Loading mail…</div>';
   $('mailSummary').textContent = '…';
   try {
-    const j = await api('fetch-inbox', {method:'POST', body:{ limit: 30 }});
+    if(!mailFolders.length) loadMailFolders();
+    const j = await api('fetch-inbox', {method:'POST', body:{ limit: 30, folder: mailFolder }});
     mailCache = j.messages || [];
     renderMail(mailCache);
   } catch(e){
@@ -7261,6 +7284,121 @@ function extractEmail(s){
 }
 $('mailRefresh')?.addEventListener('click', () => loadMail());
 
+// ── Mail: folders, move, delete, attachments ────────────────────
+let mailFolder = 'INBOX';
+let mailFolders = [];
+let mailOpenUid = null;
+let composeFiles = [];   // [{filename, contentType, contentBase64, size}]
+const MAIL_ATTACH_MAX = 3.5 * 1024 * 1024;
+
+function folderLabel(f){
+  const icons = {'\\Sent':'📤','\\Drafts':'📝','\\Junk':'🚫','\\Trash':'🗑','\\Archive':'🗄'};
+  if(f.path.toUpperCase() === 'INBOX') return '📥 Inbox';
+  return (icons[f.specialUse] || '📁') + ' ' + f.name;
+}
+async function loadMailFolders(){
+  try {
+    const j = await api('list-mail-folders', {method:'POST', body:{}});
+    mailFolders = (j.folders && j.folders.length) ? j.folders : [{path:'INBOX', name:'Inbox', specialUse:''}];
+  } catch(e){
+    mailFolders = [{path:'INBOX', name:'Inbox', specialUse:''}];
+    toast('Could not load folders: ' + e.message, 'err');
+  }
+  renderMailFolderSelects();
+}
+function renderMailFolderSelects(){
+  $('mailFolderSel').innerHTML = mailFolders.map(f =>
+    `<option value="${escapeHtml(f.path)}"${f.path===mailFolder?' selected':''}>${escapeHtml(folderLabel(f))}</option>`).join('');
+  $('mailMoveSel').innerHTML = '<option value="">📁 Move to…</option>' +
+    mailFolders.filter(f => f.path !== mailFolder).map(f =>
+      `<option value="${escapeHtml(f.path)}">${escapeHtml(folderLabel(f))}</option>`).join('') +
+    '<option value="__new__">➕ New folder…</option>';
+  const cur = mailFolders.find(f => f.path === mailFolder);
+  $('mailDeleteBtn').textContent = (cur && cur.specialUse === '\\Trash') ? '🗑 Delete forever' : '🗑 Delete';
+}
+function removeMailRow(uid){
+  mailCache = mailCache.filter(m => String(m.uid) !== String(uid));
+  renderMail(mailCache);
+  mailOpenUid = null;
+}
+
+$('mailFolderSel').addEventListener('change', e => {
+  mailFolder = e.target.value || 'INBOX';
+  renderMailFolderSelects();
+  loadMail();
+});
+
+$('mailMoveSel').addEventListener('change', async e => {
+  const sel = e.target;
+  let to = sel.value;
+  if(!to || !mailOpenUid) return;
+  if(to === '__new__'){
+    const name = (prompt('Name the new folder:') || '').trim();
+    if(!name){ sel.value = ''; return; }
+    try {
+      const j = await api('create-mail-folder', {method:'POST', body:{ name }});
+      to = j.path;
+    } catch(err){ toast('Could not create folder: ' + err.message, 'err'); sel.value = ''; return; }
+  }
+  sel.disabled = true;
+  try {
+    await api('move-email', {method:'POST', body:{ uid: mailOpenUid, folder: mailFolder, toFolder: to }});
+    const dest = mailFolders.find(f => f.path === to);
+    toast('Moved to ' + (dest ? folderLabel(dest) : to) + ' ✓', 'ok');
+    $('mailReadModal').classList.remove('open');
+    removeMailRow(mailOpenUid);
+    if(!dest) loadMailFolders();   // a brand-new folder joins the list
+  } catch(err){ toast(err.message, 'err'); }
+  sel.disabled = false; sel.value = '';
+});
+
+$('mailDeleteBtn').addEventListener('click', async () => {
+  if(!mailOpenUid) return;
+  const cur = mailFolders.find(f => f.path === mailFolder);
+  const inTrash = cur && cur.specialUse === '\\Trash';
+  if(!confirm(inTrash ? 'Delete this email forever? This cannot be undone.' : 'Move this email to Trash?')) return;
+  const btn = $('mailDeleteBtn');
+  btn.disabled = true;
+  try {
+    const r = await api('delete-email', {method:'POST', body:{ uid: mailOpenUid, folder: mailFolder }});
+    toast(r.permanent ? 'Deleted for good' : 'Moved to Trash', 'ok');
+    $('mailReadModal').classList.remove('open');
+    removeMailRow(mailOpenUid);
+  } catch(err){ toast(err.message, 'err'); }
+  btn.disabled = false;
+});
+
+$('composeFiles').addEventListener('change', async e => {
+  const files = Array.from(e.target.files || []);
+  e.target.value = '';
+  for(const f of files){
+    const used = composeFiles.reduce((s, x) => s + x.size, 0);
+    if(used + f.size > MAIL_ATTACH_MAX){
+      toast(`"${f.name}" won't fit. Attachments are limited to about 3.5 MB per email.`, 'err');
+      continue;
+    }
+    const contentBase64 = await new Promise((res, rej) => {
+      const r = new FileReader();
+      r.onload = () => res(String(r.result).split(',')[1] || '');
+      r.onerror = rej;
+      r.readAsDataURL(f);
+    });
+    composeFiles.push({ filename: f.name, contentType: f.type || 'application/octet-stream', contentBase64, size: f.size });
+  }
+  renderComposeAttachments();
+});
+function renderComposeAttachments(){
+  $('composeAttachList').innerHTML = composeFiles.map((f, i) =>
+    `<div class="mail-attach-chip">📄 <span>${escapeHtml(f.filename)}</span><em>${fmtFileSize(f.size)}</em>` +
+    `<button type="button" data-rm-attach="${i}" title="Remove">✕</button></div>`).join('');
+}
+$('composeAttachList').addEventListener('click', e => {
+  const b = e.target.closest('[data-rm-attach]');
+  if(!b) return;
+  composeFiles.splice(parseInt(b.dataset.rmAttach, 10), 1);
+  renderComposeAttachments();
+});
+
 // Open one email in the reader modal (body rendered in a sandboxed iframe)
 document.addEventListener('click', async e => {
   const row = e.target.closest('[data-mailuid]');
@@ -7271,7 +7409,9 @@ document.addEventListener('click', async e => {
   $('mailReadMeta').innerHTML = '';
   $('mailReadFrame').srcdoc = '<p style="font-family:sans-serif;color:#888">Loading…</p>';
   try {
-    const m = await api('fetch-email', {method:'POST', body:{ uid: parseInt(uid,10) }});
+    mailOpenUid = parseInt(uid,10);
+    renderMailFolderSelects();
+    const m = await api('fetch-email', {method:'POST', body:{ uid: mailOpenUid, folder: mailFolder }});
     $('mailReadSubject').textContent = m.subject || '(no subject)';
     $('mailReadMeta').innerHTML = `<div class="mail-meta"><b>From:</b> ${escapeHtml(m.from||'')}</div>
       <div class="mail-meta"><b>Date:</b> ${escapeHtml(m.date? new Date(m.date).toLocaleString():'')}</div>`;
@@ -7299,6 +7439,8 @@ function openCompose(prefill){
   $('composeTo').value = prefill.to || '';
   $('composeSubject').value = prefill.subject || '';
   $('composeBody').value = prefill.body || '';
+  composeFiles = [];
+  renderComposeAttachments();
   openModal('mailComposeModal');
 }
 $('mailCompose')?.addEventListener('click', () => openCompose());
@@ -7312,8 +7454,11 @@ $('composeSend')?.addEventListener('click', async () => {
       subject: $('composeSubject').value.trim(),
       text: $('composeBody').value,
       html: $('composeBody').value.replace(/\n/g,'<br>'),
+      attachments: composeFiles.map(f => ({ filename: f.filename, contentType: f.contentType, contentBase64: f.contentBase64 })),
     }});
-    toast('Email sent ✓','ok');
+    toast(composeFiles.length ? `Email sent with ${composeFiles.length} attachment${composeFiles.length===1?'':'s'} ✓` : 'Email sent ✓','ok');
+    composeFiles = [];
+    renderComposeAttachments();
     $('mailComposeModal').classList.remove('open');
   } catch(err){ toast('Send failed: '+err.message,'err'); }
   btn.disabled = false; btn.textContent = '📤 Send';
