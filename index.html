@@ -430,6 +430,8 @@ body.view-pipeline header .callerid{display:none}
 /* ── Deal detail ── */
 #dealDetail{display:none;background:#fdfbf6;position:fixed;inset:0;z-index:55;overflow-y:auto;padding-bottom:80px}
 #dealDetail.open{display:block}
+/* Popups opened from inside a deal must sit above the deal screen (z-index 55) */
+#deadModal{z-index:70}
 .dd-head{background:#0f0d0a;color:#fff;padding:12px 14px;position:sticky;top:0;z-index:5}
 .dd-head-row{display:flex;align-items:center;gap:10px}
 .dd-back{background:transparent;border:none;color:#fff;font-size:14px;cursor:pointer;padding:4px 6px;border-radius:4px}
@@ -634,15 +636,28 @@ body.view-pipeline header .callerid{display:none}
 .research-link.assessor:hover{background:#c7d2fe}
 .research-link.maps{background:#f5e6c0;color:#96751A;border:1px solid #e8d29a}
 .research-link.maps:hover{background:#e8d29a}
-.research-link.comps{
-  background:#fef3c7;color:#92400e;border:1px solid #fde68a;
-  font-family:inherit;cursor:pointer;
-}
+.research-link.comps{background:#fef3c7;color:#92400e;border:1px solid #fde68a;cursor:pointer;font:inherit}
 .research-link.comps:hover{background:#fde68a}
-.card-comps-panel{
-  margin-top:8px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;
-  padding:8px 10px;
-}
+.comps-panel{margin-top:8px;padding:10px;border:1px solid #fde68a;background:#fffbeb;border-radius:8px;font-size:12.5px;color:#1f2937}
+.comps-panel.hide{display:none}
+.comps-panel .cp-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:6px 10px;margin:6px 0}
+.comps-panel label{display:flex;flex-direction:column;gap:2px;font-size:11px;color:#6b7280}
+.comps-panel label.cp-check{flex-direction:row;align-items:center;gap:6px;color:#374151}
+.comps-panel input[type=number],.comps-panel input[type=text]{padding:4px 6px;border:1px solid #d1d5db;border-radius:5px;font-size:12.5px;width:100%;box-sizing:border-box}
+.comps-panel .cp-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.comps-panel .cp-btn{padding:5px 10px;border-radius:6px;border:1px solid #d97706;background:#f59e0b;color:#fff;font-weight:600;cursor:pointer;font-size:12px}
+.comps-panel .cp-btn.ghost{background:#fff;color:#92400e;border-color:#fcd34d}
+.comps-panel .cp-status{display:flex;align-items:center;gap:8px;margin:4px 0}
+.comps-panel .cp-spin{width:12px;height:12px;border:2px solid #fcd34d;border-top-color:#d97706;border-radius:50%;animation:cpspin .8s linear infinite}
+@keyframes cpspin{to{transform:rotate(360deg)}}
+.comps-panel .cp-err{color:#b91c1c}
+.comps-panel .cp-sum{display:flex;gap:14px;flex-wrap:wrap;margin:6px 0;font-weight:600}
+.comps-panel .cp-sum span b{color:#92400e}
+.comps-panel .cp-table-wrap{overflow-x:auto}
+.comps-panel table{border-collapse:collapse;width:100%;min-width:520px}
+.comps-panel th,.comps-panel td{padding:4px 6px;border-bottom:1px solid #fde68a;text-align:left;white-space:nowrap}
+.comps-panel th{font-size:11px;color:#6b7280;font-weight:600}
+.comps-panel .cp-meta{font-size:11px;color:#6b7280;margin-top:6px}
 
 /* ── VA Notes block on cards ───────────────────────────────── */
 .va-notes-block{margin-top:8px;background:#f9fafb;border-radius:7px;padding:8px 10px}
@@ -2162,7 +2177,7 @@ const DEFAULT_WEBSITE = 'winwinproperties.net';
 const companyName = () => localStorage.getItem(LS.company) || DEFAULT_COMPANY;
 const companySite = () => localStorage.getItem(LS.website) || DEFAULT_WEBSITE;
 // Bump this on every deploy so you can see which build is actually live
-const BUILD_ID = 'build 2026-10-13-mail';
+const BUILD_ID = 'build 2026-10-13-deadfix';
 const DEFAULT_VM_MESSAGE = "Hi {FirstName}, we are calling from Win Win Properties to give you a quick offer on your property at {Address}. Give us a call back at {CallbackNumber}, or find us online at win win properties dot net. That's W W W dot winwinproperties dot net. Thanks, and have a great day.";
 let backend  = localStorage.getItem(LS.backend) || '/api';
 let password = localStorage.getItem(LS.pwd) || '';
@@ -2196,6 +2211,167 @@ function convertDriveUrl(url){
   return url;
 }
 // ── API client ──────────────────────────────────────────────────
+// ════════════════════════════════════════════════════════════════
+// COMPS AGENT — the 📊 Comps button asks a Claude agent to run the
+// lookup in PropStream in the owner's signed-in Chrome. The computer
+// must be on with Chrome open. Results come back here when it's done.
+// ════════════════════════════════════════════════════════════════
+const compsOpen   = new Set();   // property ids with the panel open
+const compsState  = {};          // pid -> latest request row (or null)
+const compsPolls  = {};          // pid -> interval id
+let compsDefaults = null;
+let compsConfigured = true;
+
+async function loadCompsDefaults(){
+  if(compsDefaults) return compsDefaults;
+  try{
+    const j = await api('get-comps-defaults');
+    compsDefaults = j.filters; compsConfigured = !!j.configured;
+  }catch(e){ compsDefaults = {radius_miles:0.5,months_back:6,sqft_pct:20,beds_plus_minus:1,baths_plus_minus:1,year_built_plus_minus:15,same_property_type:true,sold_only:true,max_comps:10,notes:''}; }
+  return compsDefaults;
+}
+
+const cpMoney = n => (n==null||isNaN(n)) ? '—' : '$' + Math.round(Number(n)).toLocaleString();
+const cpNum   = n => (n==null||isNaN(n)) ? '—' : Number(n).toLocaleString();
+
+function compsFilterFormHtml(pid, f){
+  const id = escapeHtml(pid);
+  const n = (k,label,step) => `<label>${label}<input type="number" step="${step||1}" data-cf="${k}" value="${escapeHtml(f[k])}"></label>`;
+  return `
+    <div class="cp-grid" data-cf-form="${id}">
+      ${n('radius_miles','Radius (miles)','0.1')}
+      ${n('months_back','Sold within (months)')}
+      ${n('sqft_pct','Sq ft ± %')}
+      ${n('beds_plus_minus','Beds ±')}
+      ${n('baths_plus_minus','Baths ±','0.5')}
+      ${n('year_built_plus_minus','Year built ±')}
+      ${n('max_comps','Max comps')}
+      <label class="cp-check"><input type="checkbox" data-cf="same_property_type"${f.same_property_type?' checked':''}> Same property type</label>
+      <label class="cp-check"><input type="checkbox" data-cf="sold_only"${f.sold_only?' checked':''}> Sold only</label>
+    </div>
+    <label>Anything else for the agent<input type="text" data-cf="notes" value="${escapeHtml(f.notes||'')}" placeholder="e.g. skip new construction"></label>
+    <div class="cp-actions">
+      <button type="button" class="cp-btn" data-comps-run="${id}">▶ Run in PropStream</button>
+      <button type="button" class="cp-btn ghost" data-comps-save="${id}">Save as my defaults</button>
+    </div>`;
+}
+
+function readCompsForm(pid){
+  const panel = document.getElementById('compsPanel-' + pid);
+  const f = {...(compsDefaults||{})};
+  if(!panel) return f;
+  panel.querySelectorAll('[data-cf]').forEach(el => {
+    const k = el.getAttribute('data-cf');
+    f[k] = el.type === 'checkbox' ? el.checked : (el.type === 'number' ? parseFloat(el.value) : el.value);
+  });
+  return f;
+}
+
+function compsPanelHtml(pid){
+  const r = compsState[pid];
+  const f = (r && r.filters) || compsDefaults || {};
+  const setupNote = compsConfigured ? '' : `<div class="cp-err">The comps agent isn't connected yet. Add COMPS_ROUTINE_ID and COMPS_ROUTINE_TOKEN in Netlify.</div>`;
+  if(r === undefined) return `<div class="cp-status"><span class="cp-spin"></span> Loading…</div>`;
+  const watch = r && r.session_url ? ` · <a href="${escapeHtml(r.session_url)}" target="_blank" rel="noopener">watch the agent</a>` : '';
+  if(r && (r.status === 'queued' || r.status === 'running')){
+    const msg = r.progress || (r.status === 'queued' ? 'Starting the agent on your computer…' : 'Pulling comps in PropStream…');
+    return `<div class="cp-status"><span class="cp-spin"></span> ${escapeHtml(msg)}</div>
+      <div class="cp-meta">Usually 1–3 minutes. Keep your computer on with Chrome open${watch}.</div>`;
+  }
+  let head = '';
+  if(r && r.status === 'error'){
+    head = `<div class="cp-err">⚠ ${escapeHtml(r.error || 'The lookup failed')}</div><div class="cp-meta">Started ${new Date(r.created_at).toLocaleString()}${watch}</div>`;
+  } else if(r && r.status === 'done'){
+    const s = r.summary || {}, comps = r.comps || [];
+    const rows = comps.map(c => `<tr>
+        <td>${escapeHtml(c.address)}</td><td>${escapeHtml(c.sold_date||'—')}</td><td>${cpMoney(c.sold_price)}</td>
+        <td>${c.beds??'—'}/${c.baths??'—'}</td><td>${cpNum(c.sqft)}</td>
+        <td>${c.sold_price&&c.sqft ? cpMoney(c.sold_price/c.sqft) : '—'}</td>
+        <td>${c.year_built||'—'}</td><td>${c.distance_miles!=null ? Number(c.distance_miles).toFixed(2)+' mi' : '—'}</td></tr>`).join('');
+    head = `
+      <div class="cp-sum">
+        <span>Comps: <b>${comps.length}</b></span>
+        <span>Median sold: <b>${cpMoney(s.median_price)}</b></span>
+        <span>Median $/sqft: <b>${cpMoney(s.median_price_per_sqft)}</b></span>
+        ${s.estimated_arv ? `<span>Est. ARV: <b>${cpMoney(s.estimated_arv)}</b></span>` : ''}
+      </div>
+      ${s.note ? `<div>${escapeHtml(s.note)}</div>` : ''}
+      ${comps.length ? `<div class="cp-table-wrap"><table>
+        <thead><tr><th>Address</th><th>Sold</th><th>Price</th><th>Bd/Ba</th><th>Sq ft</th><th>$/sqft</th><th>Built</th><th>Dist.</th></tr></thead>
+        <tbody>${rows}</tbody></table></div>` : '<div>No sales matched these filters. Try a wider radius or more months.</div>'}
+      <div class="cp-meta">From PropStream · ${new Date(r.finished_at||r.created_at).toLocaleString()}${r.requested_by?' · by '+escapeHtml(r.requested_by):''}${watch}</div>
+      <details style="margin-top:6px"><summary style="cursor:pointer;font-weight:600">Run again with different filters</summary>${compsFilterFormHtml(pid, f)}</details>`;
+    return setupNote + head;
+  }
+  return setupNote + head + compsFilterFormHtml(pid, f);
+}
+
+function paintCompsPanel(pid){
+  const el = document.getElementById('compsPanel-' + pid);
+  if(el) el.innerHTML = compsPanelHtml(pid);
+}
+
+function startCompsPoll(pid){
+  if(compsPolls[pid]) return;
+  const started = Date.now();
+  compsPolls[pid] = setInterval(async () => {
+    try{
+      const j = await api('get-comps&propertyId=' + encodeURIComponent(pid));
+      compsState[pid] = j.request;
+      paintCompsPanel(pid);
+      const st = j.request && j.request.status;
+      if(st === 'done' || st === 'error' || Date.now() - started > 20*60*1000){
+        clearInterval(compsPolls[pid]); delete compsPolls[pid];
+        if(st === 'done') toast('Comps ready: ' + (j.request.address||''), 'ok');
+        if(st === 'error') toast('Comps failed: ' + (j.request.error||''), 'err');
+      }
+    }catch(e){ /* keep polling through blips */ }
+  }, 8000);
+}
+
+async function toggleCompsPanel(pid){
+  pid = String(pid);
+  const el = document.getElementById('compsPanel-' + pid);
+  if(compsOpen.has(pid)){ compsOpen.delete(pid); if(el){ el.classList.add('hide'); } return; }
+  compsOpen.add(pid);
+  if(el){ el.classList.remove('hide'); el.innerHTML = compsPanelHtml(pid); }
+  await loadCompsDefaults();
+  try{
+    const j = await api('get-comps&propertyId=' + encodeURIComponent(pid));
+    compsState[pid] = j.request;
+  }catch(e){ compsState[pid] = null; toast(e.message,'err'); }
+  paintCompsPanel(pid);
+  const st = compsState[pid] && compsState[pid].status;
+  if(st === 'queued' || st === 'running') startCompsPoll(pid);
+}
+
+async function runComps(pid){
+  pid = String(pid);
+  const p = properties.find(x => String(x.id) === pid);
+  const address = p ? p.property_address : (document.querySelector(`[data-card-id="${CSS.escape(pid)}"] .property`)||{}).textContent;
+  if(!address){ toast('This lead has no property address','err'); return; }
+  const filters = readCompsForm(pid);
+  compsState[pid] = { status:'queued', filters, created_at:new Date().toISOString() };
+  paintCompsPanel(pid);
+  try{
+    const j = await api('request-comps', {method:'POST', body:{propertyId:pid, address, filters}});
+    compsState[pid] = j.request;
+    if(j.alreadyRunning) toast('Comps for this property are already running','ok');
+    paintCompsPanel(pid);
+    startCompsPoll(pid);
+  }catch(e){
+    compsState[pid] = { status:'error', error:e.message, filters, created_at:new Date().toISOString() };
+    paintCompsPanel(pid);
+  }
+}
+
+async function saveCompsDefaults(pid){
+  try{
+    const j = await api('set-comps-defaults', {method:'POST', body:{filters: readCompsForm(String(pid))}});
+    compsDefaults = j.filters; toast('Saved as your default comp filters','ok');
+  }catch(e){ toast(e.message,'err'); }
+}
+
 async function api(action, opts){
   if(!password) throw new Error('Not signed in');
   // Split action like "search-numbers&areaCode=516" into name + extra params
@@ -2774,9 +2950,9 @@ function renderPage(){
               <a href="https://www.zillow.com/homes/${encodeURIComponent(p.property_address)}_rb/" target="_blank" rel="noopener" class="research-link zillow">🏠 Zillow</a>
               <a href="https://www.google.com/maps/place/?q=${encodeURIComponent(p.property_address)}" target="_blank" rel="noopener" class="research-link maps">🗺 Street View</a>
               <a href="${assessorUrl(p.property_address)}" target="_blank" rel="noopener" class="research-link assessor">🏛 Assessor</a>
-              <button class="research-link comps" data-show-comps="${escapeHtml(p.id)}" data-comps-addr="${escapeHtml(p.property_address)}">📊 Comps</button>
+              <button type="button" class="research-link comps" data-comps="${escapeHtml(p.id)}">📊 Comps</button>
             </div>
-            <div class="card-comps-panel hide" id="card-comps-${escapeHtml(p.id)}"></div>` : ''}
+            <div class="comps-panel${compsOpen.has(String(p.id))?'':' hide'}" id="compsPanel-${escapeHtml(p.id)}">${compsOpen.has(String(p.id)) ? compsPanelHtml(p.id) : ''}</div>` : ''}
           </div>
           <div class="idx-badge">
             <span class="status-pip" style="background:${pipBg}"></span>
@@ -3906,6 +4082,12 @@ async function searchRealtors(shuffle){
 }
 
 document.addEventListener('click', e => {
+  const compsBtn = e.target.closest('[data-comps]');
+  if(compsBtn){ e.preventDefault(); toggleCompsPanel(compsBtn.getAttribute('data-comps')); return; }
+  const compsRun = e.target.closest('[data-comps-run]');
+  if(compsRun){ e.preventDefault(); runComps(compsRun.getAttribute('data-comps-run')); return; }
+  const compsSave = e.target.closest('[data-comps-save]');
+  if(compsSave){ e.preventDefault(); saveCompsDefaults(compsSave.getAttribute('data-comps-save')); return; }
   // Mark called
   const mark = e.target.closest('[data-mark]');
   if(mark){
@@ -6474,164 +6656,9 @@ function recalcFinancials(){
   }
 }
 
-// ── RentCast comparables (with adjustable filters) ───────────────
-const compsCache = {};   // cacheKey -> server response
-const compSubject = {};  // address -> {beds, baths, sqft} typed in for this property
-const COMP_DEFAULTS = { radius:'0.5', days:'180', count:'25', type:'', size:'any', sort:'recent' };
-function getCompFilters(){
-  try { return { ...COMP_DEFAULTS, ...JSON.parse(localStorage.getItem('compFilters') || '{}') }; }
-  catch { return { ...COMP_DEFAULTS }; }
-}
-function saveCompFilters(f){ try { localStorage.setItem('compFilters', JSON.stringify(f)); } catch {} }
-
-function compSelect(name, value, options){
-  return `<label style="display:flex;flex-direction:column;font-size:10px;color:#6b7280;font-weight:600;gap:2px">${options.label}
-    <select data-cf="${name}" style="font-size:12px;padding:4px;border:1px solid #d1d5db;border-radius:6px;background:#fff">
-      ${options.opts.map(([v,t]) => `<option value="${v}"${String(v)===String(value)?' selected':''}>${t}</option>`).join('')}
-    </select></label>`;
-}
-function compInput(name, value, label, ph){
-  return `<label style="display:flex;flex-direction:column;font-size:10px;color:#6b7280;font-weight:600;gap:2px">${label}
-    <input data-cs="${name}" type="number" inputmode="decimal" value="${escapeHtml(value||'')}" placeholder="${ph}"
-      style="font-size:12px;padding:4px;border:1px solid #d1d5db;border-radius:6px;width:100%;box-sizing:border-box"></label>`;
-}
-
-async function loadComps(container, address){
-  if(!container || !address) return;
-  let filterBox = container.querySelector('.comp-filters');
-  let results = container.querySelector('.comp-results');
-  if(!filterBox){
-    const f = getCompFilters();
-    const s = compSubject[address] || {};
-    container.innerHTML = `
-      <details class="comp-filters" style="margin:4px 0 8px;border:1px solid #e5e7eb;border-radius:8px;padding:6px 8px;background:#fafafa">
-        <summary style="font-size:12px;font-weight:600;cursor:pointer">⚙️ Comp filters</summary>
-        <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin-top:8px">
-          ${compSelect('radius', f.radius, {label:'Radius', opts:[['0.25','¼ mi'],['0.5','½ mi'],['1','1 mi'],['2','2 mi'],['5','5 mi']]})}
-          ${compSelect('days', f.days, {label:'Sold within', opts:[['90','90 days'],['180','6 months'],['365','12 months'],['730','24 months']]})}
-          ${compSelect('count', f.count, {label:'Max comps', opts:[['10','10'],['25','25'],['50','50'],['100','100']]})}
-          ${compSelect('type', f.type, {label:'Property type', opts:[['','Any'],['Single Family','Single family'],['Townhouse','Townhouse'],['Multi-Family','Multi-family'],['Condo','Condo']]})}
-          ${compSelect('size', f.size, {label:'Size match', opts:[['any','Any'],['20','±20% sqft'],['30','±30% sqft']]})}
-          ${compSelect('sort', f.sort, {label:'Sort by', opts:[['recent','Most recent'],['distance','Closest'],['size','Closest size'],['price_desc','Price ↓'],['price_asc','Price ↑'],['ppsf','$/sqft ↓']]})}
-        </div>
-        <div style="font-size:10px;color:#6b7280;font-weight:600;margin:8px 0 4px">THIS PROPERTY (optional — sharpens the estimate)</div>
-        <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px">
-          ${compInput('beds', s.beds, 'Beds', 'e.g. 3')}
-          ${compInput('baths', s.baths, 'Baths', 'e.g. 1')}
-          ${compInput('sqft', s.sqft, 'Sqft', 'e.g. 1050')}
-        </div>
-        <button type="button" class="comp-apply" style="margin-top:8px;width:100%;padding:6px;font-size:12px;font-weight:600;border-radius:6px;border:1px solid #d97706;background:#fef3c7;color:#92400e;cursor:pointer">Update comps</button>
-      </details>
-      <div class="comp-results"></div>`;
-    filterBox = container.querySelector('.comp-filters');
-    results = container.querySelector('.comp-results');
-    // Display-only filters re-render instantly; search filters wait for "Update comps"
-    filterBox.addEventListener('change', e => {
-      const sel = e.target.closest('[data-cf]');
-      if(!sel) return;
-      const f = getCompFilters(); f[sel.dataset.cf] = sel.value; saveCompFilters(f);
-      if(['size','sort'].includes(sel.dataset.cf)) loadComps(container, address);
-    });
-    filterBox.querySelector('.comp-apply').addEventListener('click', () => {
-      const subj = {};
-      filterBox.querySelectorAll('[data-cs]').forEach(i => { if(i.value) subj[i.dataset.cs] = i.value; });
-      compSubject[address] = subj;
-      loadComps(container, address);
-    });
-  }
-
-  const f = getCompFilters();
-  const subj = compSubject[address] || {};
-  const reqBody = { address, radiusMiles: Number(f.radius), daysOld: Number(f.days), compCount: Number(f.count) };
-  if(f.type) reqBody.propertyType = f.type;
-  if(subj.beds) reqBody.bedrooms = Number(subj.beds);
-  if(subj.baths) reqBody.bathrooms = Number(subj.baths);
-  if(subj.sqft) reqBody.squareFootage = Number(subj.sqft);
-  const cacheKey = JSON.stringify(reqBody);
-
-  results.innerHTML = '<div class="muted" style="font-size:12px;padding:6px 0">Loading comparables…</div>';
-  try {
-    let data = compsCache[cacheKey];
-    if(!data){
-      data = await api('get-comparables', {method:'POST', body: reqBody});
-      if(data && data.source === 'rentcast') compsCache[cacheKey] = data;
-    }
-    if(!data || data.source !== 'rentcast'){
-      results.innerHTML = '<div style="font-size:12px;padding:6px 0;color:#b91c1c">⚠️ The server is still running the old comps code. Redeploy api.js to Netlify.</div>';
-      return;
-    }
-    const money = n => '$' + Number(n).toLocaleString();
-    results.innerHTML = '';
-
-    const est = data.estimate;
-    if(est && est.value){
-      const range = (est.low && est.high) ? `<div style="font-size:11px;color:#6b7280">Range ${money(est.low)} – ${money(est.high)}</div>` : '';
-      results.insertAdjacentHTML('beforeend', `
-        <div style="padding:8px 10px;margin-bottom:8px;border-radius:8px;background:#f0fdf4;border:1px solid #bbf7d0">
-          <div style="font-size:11px;color:#166534;font-weight:600">RENTCAST VALUE ESTIMATE</div>
-          <div style="font-size:18px;font-weight:700;color:#0f0d0a">${money(est.value)}</div>${range}
-          <div style="font-size:10px;color:#6b7280;margin-top:2px">RentCast's as-is estimate, not ARV. Use the renovated sales below for ARV.</div>
-        </div>`);
-    }
-
-    // Client-side filters
-    const subjSqft = Number(subj.sqft) || (data.subject && data.subject.squareFeet) || 0;
-    let props = (data.properties || []).slice();
-    let sizeNote = '';
-    if(f.size !== 'any'){
-      if(subjSqft){
-        const pct = Number(f.size) / 100;
-        props = props.filter(p => p.squareFeet && Math.abs(p.squareFeet - subjSqft) <= subjSqft * pct);
-      } else {
-        sizeNote = ' · enter this property’s sqft to use Size match';
-      }
-    }
-    const sorters = {
-      distance:   (a,b) => (a.distance ?? 99) - (b.distance ?? 99),
-      price_desc: (a,b) => (b.price || 0) - (a.price || 0),
-      price_asc:  (a,b) => (a.price || 1e12) - (b.price || 1e12),
-      ppsf:       (a,b) => (b.pricePerSquareFoot || 0) - (a.pricePerSquareFoot || 0),
-      recent:     (a,b) => String(b.soldDate||'').localeCompare(String(a.soldDate||'')),
-      size:       (a,b) => Math.abs((a.squareFeet||1e9) - subjSqft) - Math.abs((b.squareFeet||1e9) - subjSqft),
-    };
-    props.sort(sorters[f.sort] || sorters.recent);
-
-    const sr = data.searched || {};
-    const widened = sr.widened ? ' · search widened (few comps nearby)' : '';
-    if(!props.length){
-      results.insertAdjacentHTML('beforeend', `<div class="muted" style="font-size:12px;padding:6px 0">No sold comps match these filters (searched ${escapeHtml(String(sr.radiusMiles||''))} mi / ${escapeHtml(String(sr.daysOld||''))} days${widened})${sizeNote}</div>`);
-      return;
-    }
-    results.insertAdjacentHTML('beforeend', `<div style="font-size:11px;color:#6b7280;font-weight:600;margin-bottom:6px">📊 ${props.length} SOLD COMP${props.length===1?'':'S'} · sale prices · ${escapeHtml(String(sr.radiusMiles||''))} mi / ${escapeHtml(String(sr.daysOld||''))} days${widened}${sizeNote}</div>`);
-    props.forEach(p => {
-      const price = p.price ? money(p.price) : '—';
-      const ppsf = p.pricePerSquareFoot ? '$'+Math.round(p.pricePerSquareFoot)+'/sqft' : '';
-      const beds = p.bedrooms!=null ? p.bedrooms+'bd' : '';
-      const baths = p.bathrooms!=null ? p.bathrooms+'ba' : '';
-      const sqft = p.squareFeet ? Number(p.squareFeet).toLocaleString()+'sqft' : '';
-      const dist = p.distance!=null ? Number(p.distance).toFixed(2)+'mi' : '';
-      const statusTag = p.soldDate ? '<span style="color:#1d4ed8;font-weight:600">Sold '+escapeHtml(p.soldDate)+'</span>' : 'Sold';
-      results.insertAdjacentHTML('beforeend', `
-        <div class="pr-comp-row" style="display:flex;gap:10px;padding:8px 0;border-bottom:1px solid #f3f4f6;align-items:center">
-          <div style="flex:1;min-width:0">
-            <div style="font-size:13px;font-weight:600;color:#0f0d0a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(p.streetAddress||'')}</div>
-            <div style="font-size:11px;color:#6b7280">${[beds,baths,sqft,dist].filter(Boolean).join(' · ')} · ${statusTag}</div>
-          </div>
-          <div style="text-align:right;flex-shrink:0">
-            <div style="font-size:13px;font-weight:700;color:#0f0d0a">${price}</div>
-            ${ppsf?`<div style="font-size:10px;color:#9ca3af">${ppsf}</div>`:''}
-          </div>
-        </div>`);
-    });
-  } catch(e) {
-    results.innerHTML = `<div class="muted" style="font-size:12px;padding:6px 0">Couldn't load comps: ${escapeHtml(e.message)}</div>`;
-  }
-}
-
 function renderComps(comps, deal){
   const card = el(`<div class="dd-card">
     <div class="dd-section-title">Comps <button class="add" data-add="comp">+ Add</button></div>
-    <div id="prComps"></div>
     <div id="compList"></div>
     <div class="add-form" id="compForm">
       <div class="row">
@@ -6653,8 +6680,6 @@ function renderComps(comps, deal){
       <a href="https://www.zillow.com/homes/${encodeURIComponent(propAddr)}_rb/" target="_blank" rel="noopener">Zillow page for this property →</a>
     </div>`);
     list.appendChild(z);
-    // Pull live comparables from RentCast
-    loadComps(card.querySelector('#prComps'), propAddr);
   }
   if(!comps.length && !propAddr){
     list.innerHTML = '<div class="muted" style="font-size:12px;padding:4px 0">No comps yet</div>';
@@ -7887,22 +7912,6 @@ document.addEventListener('click', async e => {
     const wrap = a.closest('.esign-status-wrap');
     if(wrap) loadEsignStatus(wrap);
   } catch(err){ toast('Void failed: '+err.message,'err'); }
-});
-
-// ── Show comparables panel on a lead card ────────────────────────
-document.addEventListener('click', e => {
-  const btn = e.target.closest('[data-show-comps]');
-  if(!btn) return;
-  const pid = btn.dataset.showComps;
-  const addr = btn.dataset.compsAddr;
-  const panel = document.getElementById('card-comps-'+pid);
-  if(!panel) return;
-  const willShow = panel.classList.contains('hide');
-  panel.classList.toggle('hide');
-  if(willShow && !panel.dataset.loaded){
-    panel.dataset.loaded = '1';
-    loadComps(panel, addr);
-  }
 });
 
 // ── Dial a realtor from search results ──────────────────────────
