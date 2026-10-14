@@ -1,4445 +1,9542 @@
-/* Real Estate Dialer — single backend
- * ─────────────────────────────────────
- * Required env vars (Netlify → Site → Environment variables):
- *   SUPABASE_URL              https://YOUR-PROJECT.supabase.co
- *   SUPABASE_SERVICE_ROLE_KEY eyJ...  (server-side only — full DB access)
- *   TWILIO_ACCOUNT_SID        AC...
- *   TWILIO_API_KEY_SID        SK...   (preferred)
- *   TWILIO_API_KEY_SECRET     ...     (preferred)
- *   ACCESS_PASSWORD           the OWNER login — full admin access
- *
- * Callers no longer share ACCESS_PASSWORD. Each one gets their own
- * password, stored as a SHA-256 hash on their profiles row
- * (profiles.password_hash), set by the owner from the Team screen.
- * One-time SQL to run in Supabase before deploying this:
- *
- *   alter table profiles add column if not exists password_hash text;
- *   alter table profiles add column if not exists is_active boolean not null default true;
- *   create index if not exists profiles_password_hash_idx on profiles(password_hash);
- *
- * Fallback if you don't make a Twilio API key:
- *   TWILIO_AUTH_TOKEN
- */
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,viewport-fit=cover">
+<meta name="theme-color" content="#0f0d0a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Win-Win CRM Dialer</title>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+html{min-height:100%}
+body{min-height:100%}
+body{
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  background:#fdfbf6;color:#0f0d0a;line-height:1.4;
+  -webkit-font-smoothing:antialiased;
+}
+input,select,textarea,button{font-family:inherit}
+input,select,textarea{font-size:16px}
+a{color:#96751A}
+.muted{color:#6b7280}
+.hide{display:none!important}
 
-const TWILIO_BASE = 'https://api.twilio.com/2010-04-01';
+/* ── Login screen ── */
+#login{position:fixed;inset:0;background:#0f0d0a;display:flex;align-items:center;justify-content:center;padding:20px;z-index:100}
+#login.hide{display:none}
+#login .box{background:#fff;border-radius:14px;padding:28px 24px;width:100%;max-width:340px;text-align:center}
+#login .logo{font-size:34px;margin-bottom:6px}
+#login h1{font-size:20px;font-weight:700;margin:0 0 4px}
+#login p{font-size:13px;color:#6b7280;margin:0 0 18px}
+#login input{display:block;width:100%;padding:12px 14px;border:2px solid #d1d5db;border-radius:8px;font-size:16px;margin-bottom:10px}
+#login input:focus{outline:none;border-color:#96751A}
+#login button{display:block;width:100%;padding:13px;background:#D4AF37;color:#0f0d0a;border:none;border-radius:8px;font-size:15px;font-weight:700;cursor:pointer}
+#login button:disabled{opacity:.5}
+#login .err{color:#b91c1c;font-size:13px;margin-top:8px;min-height:18px}
 
-// Public URL of this function. Was hardcoded in three separate places;
-// override with APP_BASE_URL in Netlify env vars if the domain ever changes.
-const APP_BASE_URL = process.env.APP_BASE_URL || 'https://winwincalltoclose.netlify.app/api';
+/* ── App shell ── */
+header{background:#0f0d0a;color:#fff;padding:12px 14px;position:sticky;top:0;z-index:10;overflow:hidden}
+header::before{content:'';position:absolute;top:-14px;right:-16px;width:100px;height:83px;background-image:url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAJYAAAB8CAYAAACL3kkGAAAdV0lEQVR42u3deXhU5b048O/3nDPLmS37AoGQBQgkUFBSewvUTKpSN9TaztSqQFEu1Fb0ilq3es+MrVTrQi1dBP25U29n1ApaBEUnqIiVwBXZAwQC2dfZZ86c5fv7YzIQMCj3lnJrn/fzPHkSJpk5533P992+5z0PeN111zmAYRjmqwAHvxiGYRiGYRiGYRiGYRiGYRiGYRiGYRiGYRiGYRiGYRiGYRiGYRiGYRiGYRiGYRiGYRiGYRiGYRiGYRiGYRiGYRiGYRiGYRiGYRiGYRiGYRiGYRiGYRiGYRiGYRiGOcvOyn80TkQI4OGhAQCcNYTo1r7obxGRhj1ZBNDfkwQAAHB6tMzfkSRx4AQu/XoNAbh1RKBh368DDve7E88BEMDHAexCANARvfrpl9XHAxQM1qtTR0T91McAONW5EEkcNAAHPbsJ3X4dIP13Pp+LLyjoRgCAnp5Ccg/53cmf/2XlBACUJEAnpOvO6QHtNN7z1ZOp7HQgnlk+n4s/MdD/dUl1IAAASNJgY/s/IPzDCidJnMfjoY1vPVBbObbQlW3G4mQkSmYjp+070PrRtIvtzyB6aWhrQwRafvecPETsO6nlwVrf4vyyPMONIwut4zVdN8g67Nu2u/9POTa+rLI8a5aZ50YkYgqIFoPaG4zv3bt3wHf5gmdayOfi0e3XxudUfK3r0/98cOvGge9yHMokSRx6j/dEkiRxXq+XPnzjP2YWjcidmeewjSeDiLrOB5sO9Hw8fda9f06f4/C9qc/n4yvGpG4YO750BqgpMBgABkLh0JH9rau+ecHiLR6PB71er55uPASPL3Gbww4LeTzPyQAIiEDpOvPSB/7551eMEC9FUgsTCTnV1x/f+H5jcPU54wzfLXRwtclkMieVlIEjLdIXim1ulBW/17s7FZBAqPeCWj6l9MerzkmNu87beWvmteEa8bM/Lbwi2wqTNU0fDwBkMuDOrjCuX/DH7h1Ap+5NT8c/LKK9gxetO7pzWzxITyJnduVXl88F3vj97l7Fh+jViYZ0+wCw9/17vnbtvPEfbPjTLUVEgCRJHCIQEcCl7uW9XWH7k4IgzBd4/uLOSHjFZdfWt7TJXRtDIXzZbDTOLa4pnqsTTjRy+u8uqxzdBgAArmoCABAEngpHOi457/ys1eefXyeAx0OSJHEnnS/NGDHxYzmiLddVdWxuWc68SCgamD5rnB/Az50qqAAAXC4XAD/hOV3BA1n54+ZZsirmWc1Wau0v3grQwHuPBbGPQ0S6fmHdb25ynbsCEamhQeKPnUODxHdC9MOEYjwycnLpjxTd2NHCwytXXjBB7e847AsphsOVY/LmVlXkzVUEsTchK34nFAx+dh0AAORki1g1ynzLn28vua3eC2pAGqYDQQBF7V57JGR7gef563ie++GRiOXF1sLunV80RP+fB1amdbtcLqg67yfN0ST3FKR4VTBZzaPKR40f7CcwXcQaBADMdxiW507Im/i1KsdyRKBj86b031GOTS40201aNKY9cO75y3tg6wbO7fZr67aF9sbjqSOQUNRIWN5dOn1Z4uRzKcjOhlhfVMsrtH5n9e+d/4VuN+fxDDMsTsvRJ9V7o2oi+iF0tKpyXNmSnhPu+rKK1mtra5XX1ux7Ipkc6AEAlRNMk91utwbg1DPzL0S3tnfLH2cUjh65sKhy5Nymj389q77eq6bnZmlut1+z2qwTom2JxJadiUfcbn9qnJirub27UyZL1ieRlEFN6CbVas1udHt3pz43DJlETuVELT/b+PhLd5TeUe8FdcXCaYaT4ooWrQTlP1Y2H0lpsE9R4dDNf2jp9HpBR/j751lnZQwmIozGtNV6EgVzQZ6hoDD32+mr6eQoIPGIbu3I3x5YkleSe37XttY3C8Zku/Y33DEX671qICAJ0AAcEWBRruEqXdX5lu74awAA/uYBHQAgF/pNg8O64HBYE8OdQzIVEwwGnpejMmTlit/rvq/q5fSk3IMnBtcuBAAwmQwaqClBx3D6gni+vBEREb9gwYJISpbfBzALJovj64HAs8WIqBMRN9i18aMrRj+fkLmD8ZC2Z3Rl6QsvPHK99VjP7fRqABInWkw/kFX+nbl3vhQj8vH+nt0EAJCX7eCMoigYRYtAnNk83LmkgM+x2Gw8bxL10fnmR179eeWCRSu3Ko0rTgwuSQKOAFDgQeE41AAAM/Pcf/rAQnDrHId0dBtsSsrYTAYHWCz2C441CadHa/zgodKR5cWP9nXLvy+etnR2f3vMP6o05+lNr/640OkEPb2SBOI4uCYcjG+ZPntZG5HEuVx+HQBATpqGzNNOXIX5/bsRAKC9cyAnKSt6NKFv15MKFORbXZ3b7n92cMWHJ/dciUSKIx3gyJFePHnVFwhIwtAvCkhCusdpQCLARDj0KsAAmMx2+7iK8m+l37nfgOjW+n53g9eSXVh55NDA5Tv2dM3izfacK665eDmiW4NdNQIi0N7NxknZRfkFcVV4lgCwoWHX8XMwi2A0i2AUReDEwXI7M3WZ/mbPshvjmjGocJZDFpsV8hzGFWseqL62dtFWZbieiwhVjgcZAMjj+YoEFiCQrgeE+vnzk0lVWIsggtEk/tvGjY+PAGjQEZGqxhS9mpC5j/Jr7rqZKCBcvVi/VtH5HROrRr6WvvC7aMPqe4qybMZzZFVfSQQIDad37q7B7w7RpJtNRmzuUq4fCKfWAgIUFVp+1NF4z/PpYPSc0FplRdE0TQeehNTQDgvRrdXXe9WhX1jvVdPDpVNDBPp0d8v6RLCzD0gH0QKXAQBwXJV84MD6abmFZfd1tXVdP6F2/t5/q7+1taul75KsEcXz2/Y/fyVOcqeICHOys78fj2Pi062tbyMAOZ1eLVMOs2AGo1kEk9kCFlE8MaIG2a1WAwlirD1oma3wli6b3cplW/mX3nxw0vWLVh4PrkyZNB040s9s6uksLUd7CACgPyS/qqc0MOcWOsaXjrkY0at3HHzpHsFoqWxsjFxGRNjQ0AANDV5t57bERYLBXN21/Rc/Q/TqVSOEK1WN9NYj+l/S8y+PdnrHTl8Sh92iGU0G5JWgqbOJ+25fX2IbaDoUFzvmdm6794V0APs42DoSAQCyHZagqhFUTapJAAB4PB4CSeL2NCy5ovvTe65p/+Se6zu2eW7s/OyXP+7f/8Ti5sZH3JheafAXX/zv/fFI+F3AOJh49duPPXabSETciKK8NyKR2OPFpbNXEQUEooAwetLc97qODtyUlZXt3/b+EwWISKLFdk1KN6y5YtHKeHpednzOI4giGMxmMIpmMBqNJ5Q0E142h02x2KyOeb98f09HlJ8NBtuA1WbFXJvpxb/+aurck4dFnUjRdB1PY8T/5wosRLeOiLD27fc2J5N0ELh8Mom2mZs3P1VktTp+ORBVL6r/7m1B2OU3OJ0eDXb5DNPd3v6eCF/HG8wPbn1bGmky8hfHE8on37j6oT4iF/9FK7ThmKxGAgTIy803T3J7U59sGbg4FFN3k6pBUZF9Ts/2+59GdGswrR0BABSVSCcd2vbux8wcqnFmsmbC5FGrC0bnvZybbX7RZNAfMvI4R9OUc3Rd44gIABqQADAWib4KqV6w2ITRU6tLSwd63pV0NdHmcNTeTrTWBNBDfn8PHToUMBeXu56UVe6FsVWVz0iLL3bYc3LHRVPcC8P2vYIAvNEMgkkE3iieVMp0aKWIt6HBZHLVVdu+d+f7WwaS5it4sy1utpghP8v0/Oql0+bVLtqqNMAYIwCA2SiEdZ07o4lR4ez0WEC6/p6AWC/PmzvnrwDiLSaLbcbYstHrFJ1+MnLsdVsBAHCSO3Vs/gkAlbW372jdsez6USXZr1vMekU4nLg3PQxWn363PXg9UsmUAXgDmE2Cns6NLe/Z+vadF40fbdtgBZiYnyve2L39/hSi9ydEEndoU0wQjRZoDYWPBydH9r72gYcjoeT64IDadM7sZe0nZr3vBiLSEIDW7TqwIdcBA7b83Oxzpoz5g67EsvYfPXwJEXGIKA85Q40oICDWL+htX/vn2z23v52Q5bbdf+vbOLhGPGHOaBDMwAk8AK8Db1SHLTLPG80WsxEtZQUqOYHDm9d9uOnpy6+wi/wbvCCLI/jUc28s/bpaf++WVSRJ3BpaxdkMWggAwF9zZobEsxVYx4fDgcirDkf0Fot9TFVSPrAsr8C5giggbPvoYEluUVZ1V9vA3qISy4RQV3jrlOld/Yi3/blr9/IyNBh++eGmg39yTU1P+AG8p3XUzMS3qzvoKCmzQ1dvf3YxAtFOyYiTvO2Nb917wbgxxnccVqGmIM9yU+sn9xgQvf/e85knpOsEBw724ZBbTR8BwEcnrXg5AA8H/hpCt1tLrw59PKK7v6dp5Xobr1wjCtrMw0d6as+tXdTj89n5pt2+unA4JuucqDkcDgeA8z0iQo/HM+/uOy7aJyfone/MvTM2GHAnRo9BBBQMALwOwA8/G7Bm2cgsEDidTsD5G/XGFQsNtQtWvrvpmdmXZ1uENYJBsJYIqefefmKGgrd6fW/+crKBR10/k1f7rKX8Ed0aEeH8+Q98FI30d0YjXevzCpxLiJpMiPVqaXmpq6yyeu3Ikvw5ZZU1ayvKS2YielWitaai6sUPd/erj9VOr5qWnm94TtmqOG74IVK0GQg4hIL87PTva2o08rn42kuWdmzb2X1hMKzuBE2DklFZC3o+vf9uRRF6CVGZVF6YOLYKIUAKSAL5XLwkSRwBICLqiF4V3Sfe/yQiTCaSLyiJGHS2tl41sXbRDqIVBrfbrZUWZ71WlG99pqTIvnxMSdb69LDuQa/Xmzx6uPvbsRTKTU1rTX5/Dx27n5uZvQtmAIMIYBCB543D1oHNZtdNZrOgHt5sAQCYtnClGgjUCTNueOO9kGy4jDNboxabVSjKNr+85tGZFxhFscVgtgjpw7i+WoGV5sHHHrsWuzt63jzatHt+erLepgEAtLT3f7h3z75fH23rb9i798Cv97d070mnC6IqkcTxuYVelYRZOz96LBfAS6fKt2iKzg8bWEYjAIcgy4qY6cnQ7dfI5+Lr3X/o3Lqj/8JYgnaAroPZiL8SDcr9AHpf/uSqE245Yb1XRbdf83q9p0wk+v1+QEQKhwZSrbuaHyw/97a30r3PIgUAYH9T88NHj7b+9vChlpX79x14IP3ZXp3Ix4+ffPVBOa68RkRz3W635vP5TrhGZsFGKFgABAvwJnHYWjaYTZzZKuLY8WWD7yWor9+oNq6YZpg+7/WNR/vh+2Awp+wOC1ecY/5zTo7tGxxvjH4leywiiUP06koMrujp6Xy6unZOB4AHnYNLmbKystrxVdU/G1U6Zvr48RN/NrZq3NjMrRKPB6C01J0IRhNPKprlQgACj0fKXFecNHkK8iYRAHkIR6M5kiRxW5s6cOh9MZvNTMAhyGrKOjRnlQmuC6/9bdeBPvXCaFTZbrOZINthmEIq0Y4d+/5Hcw4CQJfLr3+8VnKoanJCv/Gol8jHA9ZrmcZQMcqyaHSBeW5psfWaylLH4qGLHCIfXzH+0reTSb2rsfEvk91ut5a59URE2NYTsqcDSwSjaP9c/o2IMCZTltEsQl5RHj+0AdYu2qpQoE6YtXD1+kMd2tUab0nk5NryivJtY802ax8AQMOubvzKBFZ6fuLVX3npF2OC/cHub56/6G8+n49PL/Eb9PQWkN7NnZ299x1p7f6wpzN4X6gvuSezGvZ6vbokSdx5dXcc7eqPb3v1T0ur0vfePAgA9Lf9B2TgRA54UTVb7LLX69VrF61UAACcPenkajyp6cBzqlkwESKS0wn60ODy+Vz81Bne7v3NyYtCYeW/wWIERdOVDz44hP/DwgIAQTQenxZVUv7a2pUKgFtHAMqkDXp7+x8NhSO/D4ciT/d29T/4+SmDxE2ZMntNR0dP9otPPOHwer16Q0MBIiJpIACYrCoYLGpfUBYQkS749gNqJtmMiGQw2WSD1aG2dfRxJ9/zw/qNKgXqhEt+uuavXWH+MsFsG7DYbGBzWCPDpMT++blcLn6p9JOxmZ0E/9sdEwAAd9wxr7iurs5MRLhqxZL8Q9t/90MKryJKraLwgd8c3rXp5+e89eLCEQCAgWfnmT945aaKrm33v0T0R+r77D83NK67ecKHr99gP9XWmjUrFuYP7Pbs7P/s57Hq6mpjptc7rXQwACxZ8sP85Q/fMPLvKSsAQF1dnXD77T8uBABobFxhWLfumdG93Q1/INpPRDsp1LX2vxobn53w2mtL8wAA174oOXZue6I63PxkM9Er1LH9kQfW+24uX7t2selz8R9I72tr9M//Rs/GG+Vdr1/7CgBAIFB3RhZ0Z3NfEsIX3NxM73BwcukezMmls9h4yg1sLpeL9/v92ttveL9TXpo/ozjPHIoFI2AROUNrV5+xuzO4x3n1E37fUzfmluQb5peXZFkBKM5xvKV9IK6EQom/1H9/5d7B7TL60OByu/3axlcXjhhbWnDbpkNN97jdfu3Lzn+YkUA/1Wa7QEASnM4aAj8AFBQg1terX/aBPp+LH1l85Q3llcWlFrMQ1NUkqinZ1tkzkOrq7Hxv1qV3f/zmX6SpY0bnXVqSYyLSlVQyHss61NITbO8I/z/3opWh9E6Y4+dDAUnAeq+6+eVrL+E5rua8H7z0aKb8X5UOC30+F08+F09DWjARIPl8PPl8/OfmCgDo8/l4Ih/v8/n4k4OQiPihOwL+d0O0jydyDR4j3VsRERJJx1otDdkgOFxjSH/GCQ0UM6/7TnqvJKVfP3maMPQ18vl4gsyGR4kLDN6H/LvLekK9S1xmq1Lm+5eV9V8WfcGQkq586bS68MbGhYbTqUDfGarkM71bNX0riPgTGwfh0ADJNNrGxhWGE3fODl+HZ2pHw9lMkCIA0LJb67KnVOfOsFlFU0dQ3nflza/uAgB4dtm8svMmlUzROMHY2ZXYNOvaR9ozOzvXrn3CVGgTLiksLbHGBqLteM71gczKcv36p6ZNnjy5PNjfbki1RddMrZ8bc7lc/JYP/ugcO3FMTm97h2FXc+9bV111V2TZsluzr5s1bjqIZO092nuwuta7DQDgv9/9WU12Fj9FULQkmHguGk7JE52Pvbl17S2Tiwts5SVfX7p6b2BJvmgyfPP1l7e/fetv16VgcFjLDHE73l0y3e4wTezvgTXnXvqrnkyQ52uhS/JHZ1mDbZEBRFyfOe/GdUsmVBRbxz21anvDXY+siQAArHvhxrHTzyuteWHDzne1HiP3w+/VzPx4x+FPrrhuZe+ODx5x5pRkF6HCpTizzdDdOdCJWP/+woWXW5r3v35hd2ewDdG9NfP5W7eummYyiZMcoi5s2hT0zZy5IJI+p4BQWXC0DHHuAZ/Px4+x7zhPFAG+5vzFZiJCv9/N7dhQfKkBMKs5Rf5LL10u/7OvCokIMNjeE+c4uFPRtFSWxfi7t1ZcNwIAoCQry5CMp25LypTMzzG9LEl1AtTUYCAgmctyDL/hkIupCWgURePdLU2v3ArgIQCAEYUFEww8zbM5svJLa8cuH8wd6RUVpc5kNHlVLBLZXVExSiACDAbb44JovV1TuHhOXu6ypo8fqQYAiEVITMbkw2aLZQlPvLk3pCR9PsnAGfk+RP7BpsDPRhFnrUtqOKI/d51C6c2Gg2kToJbGX8x0WMzX9EVpo8kiZmeCapSQWo7IYTwhb7NZxZ+2brn3vszDGDaLqSSl0X1xSygRGJw8Z2VZLcmk/ovPPmuWtzW0psKx5LyaqgoFADASTymhYKKPB/2hSCw2wKFRJSJuYECUHXbLTUWFWZMH84PU0tLgznbkzTWZ+E28wYgTKkvWHWz0ZRER1tfXa6JN8PcffvF6t9ut5eXlT7Y7cqdm7oGeVz7lJovZNrY3gjsLxVz7mejFzkq6wevfnVKT8c6jLa1Ho7HYzkQqlgIAyLdRUJGjfR1t7XsikfjmkSOrEN1uLVcT61U5Unbut256p2LiVfvi0eg9qKmLENNlTaUSIaTE0WhS+ywp6y2ZILZl5bfqnNWsG3LyolFDEoDA6/WnOEHs04wFbVGZ26iRECcinHnVI40T6x7/yGi2Hx4xavTmb13523dcLtDPuXBZW1LWf2K2GJ8nXcup+tZDKz0eouNP6niICBB5PCSK/EWjsoSpNc7/3A8AUMTHZ1hFw9hJFzy+pnLqQ019Ye0OHrkfSZLLOLiNIKzp0P2Ad6Nqt6d3UaDZENE06Hzqqa3K8xs3qloq1VEx7a44AND079y3qebcWwKoJdrGV9+wYfJ5N3wE0MD5/X4NlXgXkBzMBIdF5Bbbs+zPjRt35YGS0iueRs6kigWOKxGR3nlnheNIe3QzoXBnf5v/ysOdkUaZxP5jQ7Vu2JOTl/vT0tF5Wm29tzfTeL4SCVIlESUeuaJDbR2eqxe/3gcAoCsyKcmYkGuB2yE5cHTRYO5J0WVdVxLZx08S46lYeCDzbz0V15LxeH5X25E+j+fWpUQBAQAAeSMPnDDQ3xvsOen+WtJs5OdY7Y6iid+87TDHcZSelxECZ+Si0YR1cP6hE7n4ihkPvm8QON5hoUPp3tDNHc8zIXk8Epae8/O2cDB5BSI+fHDzfTPT8woBeB6OnbdgpqRGMDByZE46k4s6EoFOAFBbm87Cm9NXVxzc/68CoAHAj5l5ZeAvt9o1JY57PnzYNnSeqWsJAO34ZllOT5o0OXLs2BoY+1VM7yXLybEZsnML9yuqZRYSd++ECeWLolE5XZ9bVwpl37jrXdL1W6wWq69p24MF6Tsb9M/fY0kScHI8XIpy76HFD23py0yej3Z32ZRENGfDpgN3ItD3G56d45KkOqE5uDOgysnoR6/dfnPjW/eOCPW2zQkG+57KPHyBlLLGI/0j6+sX7Fyx4q5jqYJQVC4xGC2W7MIRUSWSLAZAcLlcPKGhoqc7tRw5Y6zjwKrHN216VHQ6R6Lb7eaSCld5tD1WNPTZQUmqEwBRjSRSlnQOrpqGToC9Xq/+yZv3XRjSjKlQTF/FERUAALRpxk2aBh1HPr73zj0f3jlSRH6OoujPZBoMCAazwGPl9ndvrdr85t3fAAAQQrY2TdO0o1vucu7ecOe5yPGdiO4U+Vw8er06xHmB05NF/V2HxMxTRZIEnJ6KFWqpWHam11FS8hMCpjyHD68uP7h3zdc1VQv392tvAADE40k0mM1Tiiuv7Gppic222m2Xi1ZrFgAA1i5SPv3g91e3yPlbYinD3zhZyD4Tzxb+47cmI1B49ygTpuK/DkVjGhGgZ5efAAAS8UjCQPJvCgoAtITsCkXiJmiVHW63P9V8OPxdUpWYllJmRsLh1bUX3vPc4EMVEBrob4qGwr+/++45eQAuHcCpAQDu3t3UkEjIG3heOB9FJYoIVFZmt7R3B5/cvm9/1oixP1wSjCQ+a9nfNhpxkVJbZrcEY4nftLQF+zLDHKJfgw67MRJNPNnSFuwaHMyHVHR6nmc2ac1GIXFRNBoOlE9f+joRYH29Vz3cHPmBqqjdqq6fH0vE3iufvvTJzGqsubmvCzj9IdL088yCTAAAk9zelMwLc+PxVJWsJCrDye7fEgB6dqWDuanrkCGlyA/sau6zpo/v1A4frjO2t3c+27S/5VAmF1lcOntVcCDskaNyXUKOjmjr2HvL1KnfiQEAfPbZEb6ze+CtR6Ul+VNnzO1uOyJPyyoe9XGmRHarcFQU5NmhpLJs7Dfv2v9FDw3/66UbvqIPmf4jlvJfdFfiyxLg/3IP6/p8cHIicTAJmklMHvsZjydPXTyRxJ2cwxou0ThYaRwR8enEKuDJuZ6Tf878e7iLcqrXT0hsDp7fyYGUPsbxJOTQ9wQGt90MLVO6PC7e53MNW0fDJGEhc4wT6zidbPZ9PuGcScLi8aTs0DqQuPR7JA4YhmEYhmEYhmEYhmEYhmEYhmEYhmEYhmEYhmEYhmEYhmEYhmEYhmEYhmEYhmEYhmEYhmEYhmEYhmEYhmEYhmEYhmH+pSCc3f8Mk2EY5u/osVwuV1YkEiFWFcyZ9P8BcVKmQEqWSWgAAAAASUVORK5CYII=');background-size:contain;background-repeat:no-repeat;opacity:.08;pointer-events:none;z-index:0}
+header>*{position:relative;z-index:1}
+.title-row{display:flex;align-items:center;gap:8px}
+.title{font-size:16px;font-weight:600;flex:1}
+.sync-badge{font-size:11px;padding:3px 9px;border-radius:999px;font-weight:600;background:#4b5563;color:#fff;white-space:nowrap}
+.sync-badge.ok{background:#047857}
+.sync-badge.sync{background:#b45309}
+.sync-badge.offline,.sync-badge.err{background:#b91c1c}
+.sub{font-size:12px;opacity:.75;margin-top:3px}
+#counter{font-size:12px;opacity:.9;margin-top:4px;line-height:1.6;min-height:18px}
+.header-controls{margin-top:8px;font-size:12px;display:flex;align-items:center;flex-wrap:wrap;gap:6px}
+.header-controls label{cursor:pointer;user-select:none;display:flex;align-items:center;gap:4px}
+.header-link{background:transparent;border:none;color:rgba(255,255,255,.8);font-size:12px;cursor:pointer;padding:4px 6px;border-radius:4px;text-decoration:underline;text-underline-offset:3px}
+.header-link:hover{color:#fff}
+.header-link:active{background:rgba(255,255,255,.1)}
+.header-link.on-light{color:#96751A}
+.header-link.on-light:hover{color:#1450b0}
+.header-link.on-light:active{background:rgba(31,111,235,.1)}
 
-// ── Auth & response helpers ───────────────────────────────────
-function corsHeaders() {
-  return {
-    'Access-Control-Allow-Origin':  '*',
-    'Access-Control-Allow-Headers': 'Content-Type, X-Access-Password, X-Agent-Key',
-    'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
-    'Content-Type': 'application/json',
+/* Caller-ID strip */
+.callerid{margin-top:6px;font-size:11px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;color:rgba(255,255,255,.85)}
+.callerid select{background:#2a2e36;color:#fff;border:1px solid #374151;border-radius:5px;font-size:11px;padding:3px 22px 3px 8px;-webkit-appearance:none;appearance:none;cursor:pointer;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24'%3E%3Cpath fill='%23fff' d='M7 10l5 5 5-5z'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right 5px center;
+}
+.callerid .dot{width:8px;height:8px;border-radius:50%;background:#9ca3af}
+.callerid .dot.live{background:#10b981;box-shadow:0 0 0 3px rgba(16,185,129,.25)}
+.callerid .dot.warn{background:#f59e0b}
+
+main{padding:12px;max-width:720px;margin:0 auto;padding-bottom:100px}
+.search-bar-wrap{position:relative;margin-bottom:8px}
+.filter-row{display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap}
+.filter-chip{padding:6px 12px;border-radius:20px;border:1.5px solid #d1d5db;background:#fff;font-size:12px;font-weight:600;color:#374151;cursor:pointer}
+.filter-chip.active{background:#D4AF37;color:#0f0d0a;border-color:#96751A}
+.filter-chip.filter-clear{background:#fee2e2;color:#991b1b;border-color:#fecaca}
+.search-bar-wrap input{
+  width:100%;padding:11px 36px 11px 14px;border:1.5px solid #d1d5db;border-radius:10px;
+  font-size:15px;background:#fff;color:#0f0d0a;
+}
+.search-bar-wrap input:focus{outline:none;border-color:#96751A}
+/* ── Realtor Search ─────────────────────────────────────────── */
+.realtor-search-bar{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}
+.realtor-search-bar button{flex:0 0 auto}
+.realtor-search-bar input{flex:1;min-width:120px;padding:11px 14px;border:1.5px solid #d1d5db;border-radius:10px;font-size:15px}
+.realtor-card{background:#fff;border:1.5px solid #e5e7eb;border-radius:12px;padding:14px;margin-bottom:10px;display:flex;gap:12px;align-items:flex-start}
+.realtor-photo{width:48px;height:48px;border-radius:50%;object-fit:cover;flex-shrink:0;background:#f3f4f6}
+.realtor-photo-placeholder{width:48px;height:48px;border-radius:50%;background:#e5e7eb;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0}
+.realtor-info{flex:1;min-width:0}
+.realtor-name{font-size:15px;font-weight:700;color:#0f0d0a}
+.realtor-brokerage{font-size:12px;color:#6b7280;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.realtor-stats{font-size:11px;color:#9ca3af;margin-top:4px}
+.realtor-actions{display:flex;flex-direction:column;gap:6px;flex-shrink:0}
+.realtor-call-btn{background:#D4AF37;color:#0f0d0a;border:none;border-radius:8px;padding:8px 14px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap}
+.realtor-call-btn:hover{background:#1a56db}
+.search-bar-wrap button{
+  position:absolute;right:8px;top:50%;transform:translateY(-50%);
+  background:none;border:none;color:#9ca3af;font-size:16px;cursor:pointer;padding:4px 8px;
+}
+
+/* ── Pagination ── */
+.page-nav{display:flex;justify-content:space-between;align-items:center;padding:10px 4px;font-size:14px;font-weight:500}
+.page-nav button{background:#D4AF37;color:#0f0d0a;border:none;padding:8px 14px;border-radius:6px;font-weight:600;cursor:pointer;font-size:14px}
+.page-nav button:disabled{background:#9ca3af;cursor:not-allowed}
+.page-label{color:#6b7280;font-size:13px}
+
+/* ── Cards ── */
+.card{background:#fff;border:2px solid #e5e7eb;border-radius:12px;padding:12px 14px;margin-bottom:12px;transition:background .2s,border-color .2s,opacity .2s}
+.card.called .owners,.card.called .property{text-decoration:line-through;opacity:.55}
+.card.called .phones{opacity:.45}
+body.hide-called .card.called{display:none}
+.card-top{display:flex;gap:10px;align-items:flex-start;margin-bottom:4px}
+.card-info{flex:1;min-width:0}
+.idx-badge{display:flex;flex-direction:column;align-items:center;gap:4px;flex-shrink:0;padding-top:2px}
+.status-pip{width:10px;height:10px;border-radius:50%;background:transparent;transition:background .2s}
+.idx-num{font-size:11px;color:#6b7280;font-weight:600}
+.owners{font-weight:600;font-size:15px;margin-bottom:2px;word-break:break-word}
+.property{font-size:14px;margin-bottom:2px;word-break:break-word}
+.mailing{font-size:12px;color:#6b7280;margin-bottom:6px;word-break:break-word}
+
+/* Phone buttons */
+.phones{display:flex;flex-direction:column;gap:7px;margin-top:8px}
+.phone{display:flex;align-items:center;gap:8px;padding:12px 14px;border-radius:8px;background:#D4AF37;color:#0f0d0a;text-decoration:none;font-size:16px;font-weight:600;border:none;cursor:pointer;width:100%;text-align:left;-webkit-tap-highlight-color:rgba(31,111,235,.3)}
+.phone .num{flex:1}
+.badge{font-size:10px;font-weight:700;padding:2px 7px;border-radius:4px;text-transform:uppercase;letter-spacing:.3px;background:rgba(255,255,255,.25);color:#fff}
+.phone.dialing{opacity:.7;pointer-events:none}
+.phone.dialing .badge{background:#f59e0b;color:#000}
+.phone.dnc{background:#fef2f2;color:#7f1d1d;border:1.5px dashed #fca5a5}
+.phone.dnc .badge{background:rgba(185,28,28,.14);color:#7f1d1d}
+.badge.mob{background:#065f46;color:#fff}
+.badge.land{background:rgba(15,13,10,.35);color:#fff}
+.badge.dnc-badge{background:#b91c1c;color:#fff}
+/* Lead spec chips — only render for fields the lead actually has */
+.spec-chips{display:flex;flex-wrap:wrap;gap:5px;margin:5px 0 2px}
+.chip{font-size:11px;font-weight:600;padding:3px 8px;border-radius:999px;background:#f3f4f6;color:#374151;border:1px solid #e5e7eb;white-space:nowrap}
+.chip.gold{background:#faf3e0;border-color:#e8d29a;color:#96751A}
+.chip.list{background:#0f0d0a;border-color:#0f0d0a;color:#f5e6b8}
+.chip.warn{background:#fef2f2;border-color:#fca5a5;color:#991b1b}
+
+/* Mark button */
+/* ── Power Dialer ────────────────────────────────────────────── */
+.pd-start-btn{
+  width:100%;padding:14px;background:#D4AF37;color:#0f0d0a;border:none;
+  border-radius:12px;font-size:16px;font-weight:700;cursor:pointer;
+  margin-bottom:10px;letter-spacing:.2px;
+}
+.pd-start-btn:active{background:#1a56db}
+.pd-setup-field{margin-bottom:12px}
+.pd-setup-field label{display:block;font-size:12px;font-weight:600;color:#6b7280;margin-bottom:4px}
+.pd-setup-field select,.pd-setup-field input{
+  width:100%;padding:10px 12px;border:1.5px solid #d1d5db;border-radius:8px;
+  font-size:14px;background:#fff;color:#0f0d0a;
+}
+#powerDialBar{
+  background:#0f0d0a;border-radius:12px;padding:10px 14px;
+  margin-bottom:10px;
+}
+.pd-session{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.pd-left{display:flex;align-items:center;gap:8px}
+.pd-pulse{font-size:18px;animation:pdpulse 1s infinite}
+@keyframes pdpulse{0%,100%{opacity:1}50%{opacity:.4}}
+.pd-actions{display:flex;gap:6px}
+.pd-btn{padding:7px 14px;border-radius:7px;border:1.5px solid #374151;background:#374151;color:#e5e7eb;font-size:13px;font-weight:600;cursor:pointer}
+.pd-btn:hover{background:#4b5563}
+.pd-stop{border-color:#dc2626;background:#dc2626;color:#fff}
+.pd-stop:hover{background:#b91c1c}
+
+/* Now-dialing panel — who you're on with right now */
+.pd-now{margin-top:10px;padding:10px 12px;background:#1c1917;border:1px solid #292524;border-radius:9px}
+.pd-now-lbl{font-size:10px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:#a8a29e}
+.pd-now-name{font-size:17px;font-weight:700;color:#fff;line-height:1.3;margin-top:2px}
+.pd-now-sub{font-size:12px;color:#a8a29e;margin-top:1px}
+.pd-now-row{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:7px;flex-wrap:wrap}
+.pd-now-phone{font-size:14px;font-weight:600;color:#e7e5e4;font-variant-numeric:tabular-nums}
+.pd-now-state{font-size:11px;font-weight:700;padding:3px 9px;border-radius:99px;background:#374151;color:#e5e7eb}
+.pd-now-state.live{background:#065f46;color:#d1fae5}
+.pd-now-state.vm{background:#b91c1c;color:#fff}
+.pd-now-state.ringing{background:#78350f;color:#fde68a}
+
+/* Paused */
+.pd-paused-note{margin-top:8px;padding:7px 10px;background:#78350f;color:#fde68a;border-radius:7px;font-size:12px;font-weight:600;text-align:center}
+.pd-btn.paused{background:#b45309;border-color:#b45309;color:#fff}
+.card.pd-active{outline:3px solid #96751A;outline-offset:3px;box-shadow:0 0 0 8px rgba(31,111,235,.12)}
+.mark-btn{display:block;width:100%;margin-top:12px;font-size:15px;padding:13px 16px;border-radius:8px;border:2px solid #047857;background:#fff;color:#047857;cursor:pointer;font-weight:700;text-align:center;-webkit-tap-highlight-color:rgba(4,120,87,.3);transition:transform .05s,background .15s,color .15s}
+.mark-btn:active{transform:scale(.97);background:#ecfdf5}
+.mark-btn.is-called{background:#047857;border-color:#047857;color:#fff}
+
+/* Call info */
+.call-info{display:none;margin-top:10px}
+.card.called .call-info{display:block}
+.status-sel,.notes-ta,.input-base{display:block;width:100%;font-size:15px;padding:11px 12px;border:2px solid #d1d5db;border-radius:8px;background:#f9fafb;color:#0f0d0a}
+.status-sel{font-weight:600;-webkit-appearance:none;appearance:none;cursor:pointer;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24'%3E%3Cpath fill='%236b7280' d='M7 10l5 5 5-5z'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right 12px center;padding-right:36px;
+}
+.status-sel:focus,.notes-ta:focus,.input-base:focus{outline:none;border-color:#96751A;background:#fff}
+.notes-ta{margin-top:8px;font-size:14px;resize:vertical;line-height:1.5;font-family:inherit}
+
+/* Empty state */
+.empty-state{text-align:center;padding:60px 20px;color:#6b7280}
+.empty-state .icon{font-size:48px;margin-bottom:8px;opacity:.6}
+.empty-state h2{font-size:17px;font-weight:600;color:#0f0d0a;margin:0 0 6px}
+.empty-state p{font-size:14px;margin:0 0 18px}
+
+/* ── Modals ── */
+.modal{position:fixed;inset:0;z-index:50;background:rgba(0,0,0,.7);display:none;align-items:flex-start;justify-content:center;overflow-y:auto;padding:0}
+.modal.open{display:flex}
+.modal-box{background:#fff;border-radius:14px;width:100%;max-width:680px;margin:30px 16px;display:flex;flex-direction:column;max-height:calc(100vh - 60px)}
+.modal-head{padding:16px 20px;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;justify-content:space-between;gap:10px;position:sticky;top:0;background:#fff;border-radius:14px 14px 0 0;z-index:1}
+.modal-head h3{margin:0;font-size:17px;font-weight:700}
+.modal-close{background:#f3f4f6;border:none;border-radius:6px;font-size:18px;cursor:pointer;padding:4px 10px;color:#374151;line-height:1}
+.modal-tabs{display:flex;gap:4px;padding:0 16px;border-bottom:1px solid #e5e7eb;background:#fff;flex-shrink:0}
+.modal-tab{padding:10px 12px;font-size:13px;font-weight:600;background:transparent;border:none;cursor:pointer;color:#6b7280;border-bottom:3px solid transparent}
+.modal-tab.active{color:#96751A;border-bottom-color:#96751A}
+.modal-body{padding:16px 20px;overflow-y:auto;flex:1}
+.tab-pane{display:none}
+.tab-pane.active{display:block}
+
+/* Buttons */
+.btn-primary{display:inline-block;padding:10px 16px;background:#D4AF37;color:#0f0d0a;border:none;border-radius:7px;font-size:14px;font-weight:700;cursor:pointer;text-align:center}
+.btn-primary:disabled{background:#9ca3af;cursor:not-allowed}
+.btn-secondary{display:inline-block;padding:9px 14px;background:#fff;color:#96751A;border:2px solid #96751A;border-radius:7px;font-size:13px;font-weight:700;cursor:pointer}
+.btn-danger{padding:7px 12px;background:#fff;color:#b91c1c;border:1.5px solid #fecaca;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer}
+.btn-danger:hover{background:#fef2f2}
+.btn-ghost{display:inline-block;padding:9px 14px;background:#f3f4f6;color:#374151;border:none;border-radius:7px;font-size:13px;font-weight:600;cursor:pointer}
+
+/* Numbers UI */
+.area-search{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap}
+.area-search input{flex:1;min-width:120px;padding:10px 12px;border:2px solid #d1d5db;border-radius:7px;font-size:14px;background:#f9fafb}
+.area-search input:focus{outline:none;border-color:#96751A;background:#fff}
+.num-result{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 12px;border:1.5px solid #e5e7eb;border-radius:8px;margin-bottom:7px;font-size:14px;flex-wrap:wrap}
+.num-result .num{font-weight:700;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.num-result .meta{color:#6b7280;font-size:12px;margin-top:2px}
+.num-result.owned{background:#f0fdf4;border-color:#bbf7d0}
+.num-result.owned .num{color:#047857}
+.num-result.active{background:#f5e6c0;border-color:#d9b563}
+.num-result.active .num{color:#96751A}
+.num-result .actions{display:flex;gap:6px;flex-wrap:wrap}
+.empty{padding:24px;text-align:center;color:#6b7280;font-size:13px}
+.list-loading{padding:14px;text-align:center;color:#6b7280;font-size:13px}
+
+/* KPIs */
+.kpi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;margin-bottom:18px}
+.kpi{background:#f9fafb;border:1.5px solid #e5e7eb;border-radius:9px;padding:11px 13px}
+.kpi-label{font-size:11px;color:#6b7280;font-weight:600;text-transform:uppercase;letter-spacing:.4px}
+.kpi-value{font-size:22px;font-weight:700;margin-top:3px;color:#111827}
+.kpi-sub{font-size:11px;color:#6b7280;margin-top:1px}
+.kpi.good .kpi-value{color:#047857}
+.kpi.warn .kpi-value{color:#b45309}
+
+.log-filters{display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap;font-size:12px}
+.log-filters select{padding:6px 26px 6px 9px;border:1.5px solid #d1d5db;border-radius:6px;background:#f9fafb;font-size:12px;-webkit-appearance:none;appearance:none;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24'%3E%3Cpath fill='%236b7280' d='M7 10l5 5 5-5z'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right 6px center;
+}
+.log-table{width:100%;border-collapse:collapse;font-size:13px}
+.log-table th{text-align:left;font-weight:600;color:#6b7280;font-size:11px;text-transform:uppercase;letter-spacing:.3px;padding:8px 6px;border-bottom:2px solid #e5e7eb;position:sticky;top:0;background:#fff}
+.log-table td{padding:9px 6px;border-bottom:1px solid #f3f4f6;vertical-align:top}
+.log-table tr:hover td{background:#fafbfc}
+.log-table .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
+.log-status{display:inline-block;padding:2px 7px;border-radius:4px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.3px}
+.s-completed{background:#dcfce7;color:#15803d}
+.s-no-answer{background:#fee2e2;color:#b91c1c}
+.s-busy{background:#fef3c7;color:#92400e}
+.s-canceled,.s-failed{background:#f3f4f6;color:#6b7280}
+.s-in-progress,.s-ringing,.s-queued,.s-initiated{background:#dbeafe;color:#1d4ed8}
+.csv-export{margin-top:12px;text-align:right}
+
+/* Settings panel fields */
+.field{margin-bottom:14px}
+.field label{display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:5px}
+.field input,.field textarea{display:block;width:100%;padding:10px 12px;background:#f9fafb;border:2px solid #d1d5db;border-radius:7px;font-size:14px}
+.field input:focus,.field textarea:focus{outline:none;border-color:#96751A;background:#fff}
+
+/* Upload UI */
+.upload-drop{border:2px dashed #d1d5db;border-radius:10px;padding:30px 20px;text-align:center;background:#fafbfc;cursor:pointer;transition:border-color .15s,background .15s}
+.upload-drop:hover{border-color:#96751A;background:#faf3e0}
+.upload-drop.dragging{border-color:#96751A;background:#f5e6c0}
+.upload-drop input{display:none}
+.upload-drop .icon{font-size:40px;margin-bottom:6px;opacity:.6}
+.upload-drop .lbl{font-weight:600;font-size:14px}
+.upload-drop .sub{font-size:12px;color:#6b7280;margin-top:2px}
+.col-map{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;align-items:center;font-size:13px;margin:14px 0}
+.col-map select{padding:6px 22px 6px 8px;border:1.5px solid #d1d5db;border-radius:5px;font-size:13px;background:#fff;-webkit-appearance:none;appearance:none;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24'%3E%3Cpath fill='%236b7280' d='M7 10l5 5 5-5z'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right 4px center;
+}
+
+/* Live-call drawer */
+.calldrawer{position:fixed;left:0;right:0;bottom:0;z-index:60;background:#0f0d0a;color:#fff;border-radius:14px 14px 0 0;box-shadow:0 -4px 20px rgba(0,0,0,.25);transform:translateY(100%);transition:transform .25s ease;padding:16px 18px calc(16px + env(safe-area-inset-bottom))}
+.calldrawer.open{transform:translateY(0)}
+.calldrawer .row1{display:flex;align-items:center;gap:12px}
+.calldrawer .who{flex:1;min-width:0}
+.calldrawer .who .name{font-weight:600;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.calldrawer .who .num{font-size:12px;opacity:.75;font-family:ui-monospace,monospace}
+.calldrawer .state{font-size:12px;font-weight:600;padding:4px 10px;border-radius:999px;background:#374151}
+.calldrawer .state.live{background:#047857}
+.calldrawer .state.ringing{background:#b45309}
+.calldrawer .state.failed{background:#b91c1c}
+.calldrawer .row2{display:flex;gap:8px;margin-top:12px;align-items:center;font-size:12px;opacity:.85;min-width:0}
+.calldrawer .timer{font-family:ui-monospace,monospace;font-size:14px;font-weight:600;opacity:1;flex:0 0 auto}
+.calldrawer .row2 .from{flex:1;text-align:right;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.calldrawer .btns{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.calldrawer .btns button{flex:1 1 calc(50% - 4px);text-align:center}
+.calldrawer .vm-drop{background:#96751A;color:#fff;border:none;border-radius:8px;padding:11px 12px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap}
+.calldrawer .hangup{background:#b91c1c;color:#fff;border:none;border-radius:8px;padding:11px 14px;font-size:13px;font-weight:700;cursor:pointer}
+.calldrawer .skip-btn{background:rgba(255,255,255,.12);color:#fff;border:1px solid rgba(255,255,255,.25);border-radius:8px;padding:11px 10px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap}
+.calldrawer .skip-btn:disabled{opacity:.35;cursor:not-allowed}
+.calldrawer .cd-script{background:rgba(255,255,255,.12);color:#f5e6b8;border:1px solid rgba(245,230,184,.35);border-radius:999px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;flex:0 0 auto}
+.calldrawer .cd-script.on{background:#96751A;color:#fff;border-color:#96751A}
+
+/* Live call script panel */
+.scriptpanel{position:fixed;left:0;right:0;top:0;bottom:0;z-index:59;background:#fffdf7;transform:translateY(100%);transition:transform .22s ease;display:flex;flex-direction:column;visibility:hidden}
+.scriptpanel.open{transform:translateY(0);visibility:visible}
+.scriptpanel .sp-head{flex:0 0 auto;background:#0f0d0a;color:#fff;padding:calc(10px + env(safe-area-inset-top)) 14px 10px;display:flex;align-items:center;gap:10px}
+.scriptpanel .sp-head .sp-title{flex:1;min-width:0;font-size:14px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.scriptpanel .sp-head .sp-title span{display:block;font-weight:400;font-size:11px;opacity:.7}
+.scriptpanel .sp-head select{background:#1c1917;color:#f5e6b8;border:1px solid rgba(245,230,184,.3);border-radius:7px;padding:6px 8px;font-size:12px;max-width:38%}
+.scriptpanel .sp-close{background:rgba(255,255,255,.12);color:#fff;border:none;border-radius:8px;width:32px;height:32px;font-size:16px;cursor:pointer;flex:0 0 auto}
+.scriptpanel .sp-body{flex:1 1 auto;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:10px 12px 24px}
+.scriptpanel .sp-sec{border:1px solid #e8d29a;border-radius:10px;margin-bottom:8px;overflow:hidden;background:#fff}
+.scriptpanel .sp-sec>summary{list-style:none;cursor:pointer;padding:11px 12px;font-size:13px;font-weight:700;color:#0f0d0a;background:#faf3e0;display:flex;align-items:center;gap:8px}
+.scriptpanel .sp-sec>summary::-webkit-details-marker{display:none}
+.scriptpanel .sp-sec>summary .sp-n{background:#96751A;color:#fff;border-radius:999px;min-width:20px;height:20px;display:inline-flex;align-items:center;justify-content:center;font-size:11px;flex:0 0 auto}
+.scriptpanel .sp-sec>summary::after{content:'▼';margin-left:auto;font-size:10px;opacity:.5;transition:transform .15s}
+.scriptpanel .sp-sec[open]>summary::after{transform:rotate(180deg)}
+.scriptpanel .sp-in{padding:10px 12px 12px}
+.scriptpanel .sp-say{border-left:3px solid #96751A;background:#fffdf5;padding:8px 10px;margin:0 0 8px;font-size:15px;line-height:1.5;color:#1c1917}
+.scriptpanel .sp-ask{padding:7px 10px 7px 22px;margin:0 0 6px;font-size:15px;line-height:1.45;color:#1c1917;position:relative;background:#fff}
+.scriptpanel .sp-ask::before{content:'▸';position:absolute;left:8px;color:#96751A;font-weight:700}
+.scriptpanel .sp-note{font-size:12px;color:#6b7280;font-style:italic;margin:0 0 8px;padding-left:2px}
+.scriptpanel .sp-warn{background:#fef2f2;border:1px solid #fca5a5;color:#991b1b;font-size:13px;font-weight:700;padding:8px 10px;border-radius:7px;margin:0 0 8px;text-align:center}
+.scriptpanel .sp-sub{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:#96751A;margin:10px 0 6px}
+.scriptpanel .sp-li{font-size:14px;line-height:1.5;color:#1c1917;padding-left:16px;position:relative;margin-bottom:4px}
+.scriptpanel .sp-li::before{content:'•';position:absolute;left:4px;color:#96751A}
+.scriptpanel .sp-copy{background:#96751A;color:#fff;border:none;border-radius:7px;padding:7px 12px;font-size:12px;font-weight:700;cursor:pointer;margin-top:2px}
+.scriptpanel .sp-fill{background:#faf3e0;border-bottom:1px dashed #96751A;font-weight:700;padding:0 2px}
+.scriptpanel .sp-blank{background:#fee2e2;border-bottom:1px dashed #b91c1c;font-weight:700;padding:0 2px}
+.scriptpanel .sp-facts{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px}
+.scriptpanel .sf-col{border:1px solid #e8d29a;border-radius:10px;background:#fff;padding:8px 10px;min-width:0}
+.scriptpanel .sf-h{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:#96751A;margin-bottom:5px}
+.scriptpanel .sf-row{display:flex;gap:6px;font-size:12px;line-height:1.35;margin-bottom:3px;min-width:0}
+.scriptpanel .sf-k{flex:0 0 62px;color:#6b7280;font-weight:600}
+.scriptpanel .sf-v{flex:1;min-width:0;color:#0f0d0a;font-weight:600;overflow-wrap:anywhere}
+.scriptpanel .sf-none{font-size:12px;color:#9ca3af;font-style:italic}
+@media (max-width:520px){.scriptpanel .sp-facts{grid-template-columns:1fr}}
+.scriptpanel .sp-foot{flex:0 0 auto;border-top:1px solid #e8d29a;background:#fffdf7;padding:8px 12px;display:flex;align-items:center;gap:10px;font-size:11px;color:#6b7280}
+.scriptpanel .sp-foot label{display:flex;align-items:center;gap:5px;cursor:pointer}
+
+/* Toast */
+.toast-stack{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);z-index:80;display:flex;flex-direction:column;gap:6px;pointer-events:none;align-items:center}
+.toast{background:#0f0d0a;color:#fff;padding:10px 16px;border-radius:8px;font-size:13px;font-weight:500;max-width:90vw;box-shadow:0 4px 14px rgba(0,0,0,.25);animation:toastIn .25s ease;pointer-events:auto}
+.toast.err{background:#b91c1c}
+.toast.ok{background:#047857}
+@keyframes toastIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+
+/* Mobile tweaks */
+@media(max-width:640px){
+  .modal-box{margin:0;max-height:100vh;border-radius:0;height:100vh}
+  .modal-head{border-radius:0}
+  .area-search input{font-size:16px}
+  .kpi{padding:9px 11px}
+  .kpi-value{font-size:18px}
+  .log-table{font-size:12px}
+  .log-table th,.log-table td{padding:7px 4px}
+  .log-table .col-hide-sm{display:none}
+}
+
+/* ── Profile picker overlay ── */
+#profilePicker{position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:90;display:none;align-items:center;justify-content:center;padding:20px}
+#profilePicker.open{display:flex}
+#profilePicker .box{background:#fff;border-radius:12px;padding:24px;width:100%;max-width:340px}
+#profilePicker h2{font-size:18px;font-weight:700;margin:0 0 6px}
+#profilePicker p{font-size:13px;color:#6b7280;margin:0 0 14px}
+.profile-list{display:flex;flex-direction:column;gap:6px;margin-bottom:10px}
+.profile-pick{background:#f9fafb;border:1.5px solid #d1d5db;border-radius:8px;padding:12px 14px;font-size:15px;font-weight:600;text-align:left;cursor:pointer;font-family:inherit;color:#0f0d0a}
+.profile-pick:hover{background:#faf3e0;border-color:#96751A;color:#96751A}
+.profile-new{display:flex;gap:6px;margin-top:8px}
+.profile-new input{flex:1;padding:10px 12px;border:1.5px solid #d1d5db;border-radius:7px;font-size:14px}
+.profile-new button{padding:10px 14px;background:#D4AF37;color:#0f0d0a;border:none;border-radius:7px;font-size:13px;font-weight:600;cursor:pointer}
+
+/* ── View tabs (Dialer / Pipeline) ── */
+.view-tabs{display:flex;gap:0;background:#2a2e36;border-radius:8px;padding:3px;margin-top:8px}
+.view-tab{flex:1;padding:7px 10px;background:transparent;border:none;color:rgba(255,255,255,.65);font-size:12px;font-weight:600;cursor:pointer;border-radius:5px;font-family:inherit}
+.view-tab.active{background:#fff;color:#0f0d0a}
+
+#profileBadge{font-size:11px;background:rgba(255,255,255,.12);color:#fff;padding:3px 8px;border-radius:4px;cursor:pointer;border:none;font-family:inherit}
+#profileBadge:hover{background:rgba(255,255,255,.18)}
+
+/* ── Pipeline view ── */
+#pipelineView{display:none}
+body.view-pipeline #cards,body.view-pipeline #pageNav{display:none}
+body.view-pipeline #pipelineView{display:block}
+body.view-pipeline header .callerid{display:none}
+
+.pipe-toolbar{display:flex;align-items:center;justify-content:space-between;margin:0 0 12px;flex-wrap:wrap;gap:8px}
+.pipe-summary{font-size:12px;color:#6b7280}
+.pipe-board{display:flex;gap:8px;overflow-x:auto;padding-bottom:8px;-webkit-overflow-scrolling:touch}
+.pipe-col{flex:0 0 220px;min-width:220px;background:#f9fafb;border-radius:10px;padding:10px;border:1px solid #e5e7eb}
+@media (max-width:700px){
+  .pipe-board{display:block;overflow-x:visible}
+  .pipe-col{min-width:0;width:100%;margin-bottom:10px;flex:none}
+  .pipe-empty{padding:6px}
+}
+.pipe-col-head{display:flex;align-items:center;gap:6px;margin-bottom:10px;padding:0 2px}
+.pipe-col-head .dot{width:8px;height:8px;border-radius:50%}
+.pipe-col-head .lbl{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#0f0d0a}
+.pipe-col-head .ct{font-size:11px;color:#9ca3af;margin-left:auto}
+.pipe-card{background:#fff;border-radius:8px;padding:10px 11px;margin-bottom:6px;border-left:3px solid transparent;cursor:pointer;transition:transform .05s,box-shadow .15s}
+.pipe-card:hover{box-shadow:0 1px 4px rgba(0,0,0,.08)}
+.pipe-card:active{transform:scale(.98)}
+.pipe-card .addr{font-size:13px;font-weight:600;line-height:1.2;margin-bottom:1px;color:#0f0d0a}
+.pipe-card .who{font-size:11px;color:#6b7280;margin-bottom:4px}
+.pipe-card .meta{font-size:11px;color:#374151}
+.pipe-card .stale{color:#b45309}
+.pipe-card .assignee{display:inline-block;font-size:9px;font-weight:700;background:#f5e6c0;color:#96751A;padding:1px 5px;border-radius:3px;margin-left:4px}
+.pipe-empty{font-size:11px;color:#9ca3af;text-align:center;padding:20px 6px;font-style:italic}
+
+/* Stage borders */
+.pipe-card.s-hot{border-left-color:#ef4444}
+.pipe-card.s-underwriting{border-left-color:#f59e0b}
+.pipe-card.s-offer{border-left-color:#d97706}
+.pipe-card.s-contract{border-left-color:#2563eb}
+.pipe-card.s-closed{border-left-color:#0f6e56}
+.pipe-col[data-stage="hot"] .pipe-col-head .dot{background:#ef4444}
+.pipe-col[data-stage="underwriting"] .pipe-col-head .dot{background:#f59e0b}
+.pipe-col[data-stage="offer"] .pipe-col-head .dot{background:#d97706}
+.pipe-col[data-stage="contract"] .pipe-col-head .dot{background:#2563eb}
+.pipe-col[data-stage="closed"] .pipe-col-head .dot{background:#0f6e56}
+
+/* ── Deal detail ── */
+#dealDetail{display:none;background:#fdfbf6;position:fixed;inset:0;z-index:55;overflow-y:auto;padding-bottom:80px}
+#dealDetail.open{display:block}
+/* Popups opened from inside a deal must sit above the deal screen (z-index 55) */
+#deadModal{z-index:70}
+.dd-head{background:#0f0d0a;color:#fff;padding:12px 14px;position:sticky;top:0;z-index:5}
+.dd-head-row{display:flex;align-items:center;gap:10px}
+.dd-back{background:transparent;border:none;color:#fff;font-size:14px;cursor:pointer;padding:4px 6px;border-radius:4px}
+.dd-back:hover{background:rgba(255,255,255,.1)}
+.dd-title{flex:1;font-size:14px;font-weight:600;line-height:1.3}
+.dd-title .sub{font-size:11px;opacity:.65;font-weight:400;display:block;margin-top:1px}
+.dd-archive{background:rgba(255,255,255,.1);border:none;color:#fff;padding:5px 9px;border-radius:5px;font-size:11px;cursor:pointer;font-family:inherit}
+.dd-archive:hover{background:rgba(239,68,68,.4)}
+.dd-stage-bar{display:flex;gap:3px;margin-top:10px;background:rgba(0,0,0,.25);border-radius:7px;padding:3px}
+
+/* Dead deal */
+.dd-dead{background:rgba(255,255,255,.1);border:1.5px solid rgba(255,255,255,.25);color:#fff;border-radius:7px;padding:6px 11px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;margin-right:6px}
+.dd-dead:hover{background:#b91c1c;border-color:#b91c1c}
+.dead-reasons{display:flex;flex-direction:column;gap:7px}
+.dead-reason{display:block;width:100%;text-align:left;padding:12px 14px;border:2px solid #e5e7eb;border-radius:9px;background:#fff;color:#0f0d0a;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit}
+.dead-reason:hover{border-color:#d1d5db;background:#f9fafb}
+.dead-reason.sel{border-color:#b91c1c;background:#fef2f2;color:#b91c1c}
+.dead-row{padding:12px 0;border-bottom:1px solid #e5e7eb}
+.dead-row:last-child{border-bottom:none}
+.dead-row .nm{font-size:14px;font-weight:700}
+.dead-row .rs{font-size:12px;color:#b91c1c;font-weight:600;margin-top:2px}
+.dead-row .nt{font-size:12px;color:#6b7280;margin-top:3px}
+.dead-row button{margin-top:7px;padding:6px 12px;font-size:12px;font-weight:600;border:1.5px solid #d1d5db;background:#fff;border-radius:6px;cursor:pointer}
+
+/* Metrics */
+.mx-grid{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-bottom:18px}
+.mx-card{padding:12px;border:1px solid #e5e7eb;border-radius:10px;background:#f9fafb}
+.mx-card .k{font-size:10px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:#6b7280}
+.mx-card .v{font-size:23px;font-weight:800;color:#0f0d0a;line-height:1.15;margin-top:3px}
+.mx-card .s{font-size:11px;color:#6b7280;margin-top:2px}
+.mx-card.good .v{color:#047857}
+.mx-card.bad .v{color:#b91c1c}
+.mx-h{font-size:13px;font-weight:700;margin:0 0 8px;color:#0f0d0a}
+.mx-bar-row{margin-bottom:9px}
+.mx-bar-lbl{display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px}
+.mx-bar-lbl b{font-weight:700}
+.mx-bar{height:7px;background:#e5e7eb;border-radius:99px;overflow:hidden}
+.mx-bar span{display:block;height:100%;background:#b91c1c;border-radius:99px}
+.mx-tbl{width:100%;border-collapse:collapse;font-size:12px}
+.mx-tbl th{text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:#6b7280;padding:5px 6px;border-bottom:1px solid #e5e7eb}
+.mx-tbl td{padding:7px 6px;border-bottom:1px solid #f3f4f6}
+.mx-tbl td.num{text-align:right;font-variant-numeric:tabular-nums}
+.dd-stage-btn{flex:1;padding:7px 4px;background:transparent;border:none;color:rgba(255,255,255,.55);font-size:11px;font-weight:600;cursor:pointer;border-radius:4px;font-family:inherit}
+.dd-stage-btn.active{background:#fff;color:#0f0d0a}
+.dd-stage-btn:hover:not(.active){color:#fff}
+.dd-body{padding:12px;max-width:720px;margin:0 auto}
+.dd-card{background:#fff;border-radius:10px;border:1px solid #e5e7eb;padding:14px 16px;margin-bottom:10px}
+.dd-section-title{font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;font-weight:600;margin:0 0 10px;display:flex;align-items:center;justify-content:space-between}
+.dd-section-title .add{background:transparent;border:none;color:#96751A;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;padding:2px 6px;border-radius:4px}
+.dd-section-title .add:hover{background:#faf3e0}
+.dd-prop-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.dd-field label{display:block;font-size:11px;color:#6b7280;font-weight:600;margin-bottom:3px}
+.dd-field input{display:block;width:100%;padding:8px 10px;border:1.5px solid #e5e7eb;border-radius:6px;font-size:14px;background:#f9fafb}
+.dd-field input:focus{outline:none;border-color:#96751A;background:#fff}
+.dd-field.full{grid-column:1/-1}
+.dd-money input{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.dd-calc{background:#faf3e0;border-radius:7px;padding:9px 11px;display:flex;justify-content:space-between;align-items:center;margin-top:6px}
+.dd-calc .lbl{font-size:11px;color:#96751A;font-weight:600;text-transform:uppercase;letter-spacing:.4px}
+.dd-calc .val{font-size:16px;font-weight:700;color:#96751A;font-family:ui-monospace,monospace}
+.dd-calc.good{background:#dcfce7}
+.dd-calc.good .lbl,.dd-calc.good .val{color:#15803d}
+.dd-toggle{display:inline-flex;background:#f3f4f6;border-radius:6px;padding:3px}
+.dd-toggle button{padding:6px 12px;background:transparent;border:none;color:#6b7280;font-size:12px;font-weight:600;cursor:pointer;border-radius:4px;font-family:inherit}
+.dd-toggle button.active{background:#fff;color:#0f0d0a;box-shadow:0 1px 2px rgba(0,0,0,.05)}
+
+.dd-link-row{display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid #f3f4f6;font-size:13px}
+.dd-link-row:last-child{border-bottom:none}
+.dd-link-row a{color:#96751A;text-decoration:none;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dd-link-row a:hover{text-decoration:underline}
+.dd-link-row .price{font-size:11px;color:#6b7280;font-family:ui-monospace,monospace;flex-shrink:0}
+.dd-link-row .del{background:transparent;border:none;color:#9ca3af;cursor:pointer;font-size:14px;padding:2px 4px}
+.dd-link-row .del:hover{color:#b91c1c}
+.dd-link-row .icon{color:#96751A;flex-shrink:0}
+
+.dd-act-list{display:flex;flex-direction:column;gap:10px;margin-bottom:12px}
+.dd-act{display:flex;gap:9px;font-size:13px}
+.dd-act .icn{margin-top:2px;font-size:14px;width:18px;flex-shrink:0;text-align:center}
+.dd-act.call .icn{color:#0f6e56}
+.dd-act.note .icn{color:#96751A}
+.dd-act.system .icn{color:#7c3aed}
+.dd-act.stage_change .icn{color:#d97706}
+.dd-act .body{flex:1;color:#0f0d0a}
+.dd-act .meta{color:#9ca3af;font-size:11px;margin-top:1px}
+.dd-note-input{width:100%;padding:9px 11px;border:1.5px solid #e5e7eb;border-radius:7px;font-size:13px;min-height:60px;resize:vertical;background:#f9fafb;font-family:inherit}
+.dd-note-input:focus{outline:none;border-color:#96751A;background:#fff}
+.dd-note-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:8px}
+
+/* "Send to pipeline" button on hot leads */
+.send-to-pipeline{display:block;width:100%;margin-top:8px;padding:10px 14px;background:#fef3c7;color:#92400e;border:1.5px solid #fde68a;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;text-align:center}
+.send-to-pipeline:hover{background:#fde68a}
+.send-to-pipeline.sent{background:#dcfce7;color:#15803d;border-color:#bbf7d0;cursor:default}
+
+/* Add comp/doc inline form */
+.add-form{display:none;flex-direction:column;gap:6px;margin-top:8px;padding:10px;background:#f9fafb;border-radius:7px}
+.add-form.open{display:flex}
+.add-form input,.add-form select{padding:8px 10px;border:1.5px solid #d1d5db;border-radius:6px;font-size:13px;background:#fff;font-family:inherit}
+.add-form .row{display:flex;gap:6px}
+.add-form .row input{flex:1}
+.add-form .actions{display:flex;gap:6px;justify-content:flex-end}
+.add-form button{padding:7px 12px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;border:none}
+.add-form .btn-cancel{background:#fff;color:#6b7280;border:1px solid #d1d5db}
+.add-form .btn-add{background:#D4AF37;color:#0f0d0a}
+
+/* ── Owner last name tag (dialer card) ─────────────────────── */
+.last-name-tag{
+  display:inline-block;background:#D4AF37;color:#0f0d0a;
+  font-size:10px;font-weight:600;padding:2px 8px;border-radius:10px;
+  margin-left:6px;vertical-align:middle;letter-spacing:.3px;
+}
+
+/* ── VA lead badge ─────────────────────────────────────────── */
+.va-lead-tag{
+  display:inline-block;background:#dc2626;color:#fff;
+  font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;
+  margin-left:6px;vertical-align:middle;letter-spacing:.4px;
+}
+/* ── VA notes preview (visible before mark as called) ───────── */
+.va-notes-preview{
+  background:#fefce8;border:1px solid #fde047;border-radius:8px;
+  padding:8px 10px;font-size:13px;color:#713f12;margin-bottom:8px;
+  line-height:1.5;white-space:pre-wrap;word-break:break-word;
+}
+/* ── Per-format card views ─────────────────────────────────── */
+.card.view-lux{border-color:#e8d29a;background:#fffdf7}
+.card.view-lux .property{color:#96751A}
+.card.view-va{border-color:#dbeafe}
+.view-tag{
+  display:inline-block;font-size:10px;font-weight:800;letter-spacing:.05em;
+  padding:2px 7px;border-radius:999px;margin-left:6px;vertical-align:middle;
+}
+.view-tag.lux{background:#96751A;color:#fff}
+.view-tag.va{background:#1d4ed8;color:#fff}
+.land-strip{
+  display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:6px 0 2px;
+  background:#faf3e0;border:1px solid #e8d29a;border-radius:9px;padding:8px 10px;
+}
+.land-strip .ls-item{min-width:0}
+.land-strip .ls-k{font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:#96751A}
+.land-strip .ls-v{font-size:14px;font-weight:700;color:#1c1917;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.land-strip .ls-v.missing{color:#9ca3af;font-weight:500}
+/* ── Recording playback (listen only — no uploads) ──────────── */
+.listen-btn{
+  display:block;width:100%;padding:11px 14px;background:#059669;color:#fff;
+  border-radius:8px;font-size:14px;font-weight:700;text-align:center;
+  text-decoration:none;margin-bottom:8px;
+}
+.rec-list{display:flex;flex-direction:column;gap:5px;margin-top:8px}
+.rec-link{
+  display:flex;align-items:center;gap:8px;padding:8px 11px;
+  background:#faf3e0;border:1px solid #e8d29a;border-radius:7px;
+  text-decoration:none;color:#96751A;font-size:12px;font-weight:500;
+}
+.rec-link .icon{font-size:16px;flex-shrink:0}
+.rec-link .info{flex:1;min-width:0}
+.rec-link .name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rec-link .meta{font-size:10px;color:#6b7280;font-weight:400;margin-top:1px}
+.rec-link .expires{color:#b45309}
+/* ── Pre-call collapsible sections ─────────────────────────── */
+.pre-call-section{margin-bottom:8px}
+.pre-call-toggle{
+  width:100%;text-align:left;background:#f3f4f6;border:1px solid #d1d5db;
+  border-radius:8px;padding:9px 12px;font-size:13px;font-weight:600;
+  color:#0f0d0a;cursor:pointer;display:flex;justify-content:space-between;align-items:center;
+}
+.pre-call-toggle.open{border-color:#d97706;background:#fffbeb;color:#92400e}
+.toggle-arrow{font-size:10px;transition:transform .2s}
+.pre-call-toggle.open .toggle-arrow{transform:rotate(180deg)}
+.pre-call-content{
+  background:#fff;border:1px solid #e5e7eb;border-top:none;
+  border-radius:0 0 8px 8px;padding:10px 12px;font-size:13px;
+  color:#374151;white-space:pre-wrap;word-break:break-word;line-height:1.6;
+}
+/* ── Inline card forms (documents, e-sign, buyers) ──────────── */
+.iq-field{margin-bottom:10px}
+.iq-field label{display:block;font-size:11px;font-weight:600;color:#78350f;margin-bottom:3px}
+.iq-field input,.iq-field select,.iq-field textarea{
+  width:100%;padding:8px 10px;border:1.5px solid #d1d5db;border-radius:7px;
+  font-size:14px;background:#fff;color:#0f0d0a;
+}
+.iq-field textarea{min-height:56px;resize:vertical}
+.iq-save-btn{
+  width:100%;padding:10px;background:#059669;color:#fff;border:none;
+  border-radius:8px;font-size:14px;font-weight:700;cursor:pointer;margin-top:4px;
+}
+.iq-save-btn:hover{background:#047857}
+.iq-save-btn:disabled{opacity:.5}
+
+/* ── Property research links (Zillow + Street View) ─────────── */
+.research-links{
+  display:flex;gap:6px;margin-top:5px;flex-wrap:wrap;
+}
+.research-link{
+  display:inline-flex;align-items:center;gap:3px;
+  font-size:11px;font-weight:600;padding:3px 9px;border-radius:5px;
+  text-decoration:none;letter-spacing:.2px;
+}
+.research-link.zillow{background:#dcfce7;color:#166534;border:1px solid #bbf7d0}
+.research-link.zillow:hover{background:#bbf7d0}
+.research-link.redfin{background:#fee2e2;color:#991b1b;border:1px solid #fecaca}
+.research-link.redfin:hover{background:#fecaca}
+.research-link.assessor{background:#e0e7ff;color:#3730a3;border:1px solid #c7d2fe}
+.research-link.assessor:hover{background:#c7d2fe}
+.research-link.maps{background:#f5e6c0;color:#96751A;border:1px solid #e8d29a}
+.research-link.maps:hover{background:#e8d29a}
+.research-link.comps{background:#fef3c7;color:#92400e;border:1px solid #fde68a;cursor:pointer;font:inherit}
+.research-link.comps:hover{background:#fde68a}
+.comps-panel{margin-top:8px;padding:10px;border:1px solid #fde68a;background:#fffbeb;border-radius:8px;font-size:12.5px;color:#1f2937}
+.comps-panel.hide{display:none}
+.comps-panel .cp-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:6px 10px;margin:6px 0}
+.comps-panel label{display:flex;flex-direction:column;gap:2px;font-size:11px;color:#6b7280}
+.comps-panel label.cp-check{flex-direction:row;align-items:center;gap:6px;color:#374151}
+.comps-panel input[type=number],.comps-panel input[type=text]{padding:4px 6px;border:1px solid #d1d5db;border-radius:5px;font-size:12.5px;width:100%;box-sizing:border-box}
+.comps-panel .cp-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.comps-panel .cp-btn{padding:5px 10px;border-radius:6px;border:1px solid #d97706;background:#f59e0b;color:#fff;font-weight:600;cursor:pointer;font-size:12px}
+.comps-panel .cp-btn.ghost{background:#fff;color:#92400e;border-color:#fcd34d}
+.comps-panel .cp-status{display:flex;align-items:center;gap:8px;margin:4px 0}
+.comps-panel .cp-spin{width:12px;height:12px;border:2px solid #fcd34d;border-top-color:#d97706;border-radius:50%;animation:cpspin .8s linear infinite}
+@keyframes cpspin{to{transform:rotate(360deg)}}
+.comps-panel .cp-err{color:#b91c1c}
+.comps-panel .cp-sum{display:flex;gap:14px;flex-wrap:wrap;margin:6px 0;font-weight:600}
+.comps-panel .cp-sum span b{color:#92400e}
+.comps-panel .cp-table-wrap{overflow-x:auto}
+.comps-panel table{border-collapse:collapse;width:100%;min-width:520px}
+.comps-panel th,.comps-panel td{padding:4px 6px;border-bottom:1px solid #fde68a;text-align:left;white-space:nowrap}
+.comps-panel th{font-size:11px;color:#6b7280;font-weight:600}
+.comps-panel .cp-meta{font-size:11px;color:#6b7280;margin-top:6px}
+
+/* ── VA Notes block on cards ───────────────────────────────── */
+.va-notes-block{margin-top:8px;background:#f9fafb;border-radius:7px;padding:8px 10px}
+/* ── Lead tools (highlight + assign) ───────────────────────── */
+.lead-tools{margin-top:10px;padding-top:10px;border-top:1px solid #f3f4f6}
+.lead-tools-row{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.lead-tools-label{font-size:12px;color:#6b7280;font-weight:600;min-width:80px;flex-shrink:0}
+.hl-swatches{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.hl-dot{width:26px;height:26px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 0 1px #d1d5db;cursor:pointer;padding:0;display:flex;align-items:center;justify-content:center;font-size:13px;color:#9ca3af;line-height:1;-webkit-tap-highlight-color:transparent}
+.hl-dot.active{box-shadow:0 0 0 2px #111827;transform:scale(1.12)}
+.hl-dot.hl-clear{background:#fff}
+.filter-lbl{font-size:11px;color:#6b7280;font-weight:600;margin-right:2px}
+.social-chips{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.social-chip{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;
+  border-radius:50%;color:#fff;font-size:14px;font-weight:800;text-decoration:none;line-height:1;
+  flex-shrink:0;-webkit-tap-highlight-color:transparent}
+.social-chip:active{opacity:.75}
+.buyer-row .social-chips{margin-top:6px}
+.lead-buyer-btn{width:100%;margin-top:6px;padding:8px;border:1px solid #D4AF37;border-radius:8px;
+  background:#fffdf5;color:#96751A;font-size:12px;font-weight:700;font-family:inherit;cursor:pointer}
+.lead-buyer-btn:active{background:#fdf6e3}
+.lead-del-btn{width:100%;margin-top:6px;padding:8px;border:1px solid #fca5a5;border-radius:8px;
+  background:#fff;color:#b91c1c;font-size:12px;font-weight:700;font-family:inherit;cursor:pointer}
+.lead-del-btn:active{background:#fef2f2}
+.state-filter-row{display:flex;align-items:center;gap:7px;flex-wrap:wrap;padding:6px 14px 2px}
+.state-filter-row select{max-width:46vw}
+.state-filter-row select{padding:5px 8px;border:1px solid #d1d5db;border-radius:7px;font-size:12px;background:#fff;color:#0f0d0a}
+.assign-sel{flex:1;padding:7px 10px;border:1.5px solid #d1d5db;border-radius:7px;font-size:13px;background:#fff;color:#0f0d0a}
+.postcard-row{display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap}
+.postcard-btn{background:#fff;color:#96751A;border:1.5px solid #96751A;border-radius:7px;padding:6px 11px;font-size:12px;font-weight:700;cursor:pointer}
+.postcard-btn:disabled{opacity:.5;cursor:not-allowed}
+.postcard-sent{font-size:11px;color:#047857;font-weight:600}
+.assigned-badge{font-size:11px;color:#96751A;background:#faf3e0;border-radius:6px;padding:3px 8px;display:inline-block}
+.va-notes-block summary{
+  cursor:pointer;font-size:12px;color:#374151;font-weight:600;user-select:none;
+  list-style:none;padding:2px 0;
+}
+.va-notes-block summary::-webkit-details-marker{display:none}
+.va-notes-block[open] summary{margin-bottom:6px}
+.va-notes-ta{
+  width:100%;border:1px solid #e5e7eb;border-radius:5px;padding:7px 9px;
+  font-size:12px;font-family:inherit;background:#fff;resize:vertical;min-height:60px;
+}
+.va-notes-ta:focus{outline:none;border-color:#96751A}
+
+/* ── Cash Buyers tab ───────────────────────────────────────── */
+#buyersView{display:none}
+body.view-buyers #cards,body.view-buyers #pageNav,body.view-buyers #pipelineView,body.view-buyers #inboxView{display:none}
+body.view-buyers #buyersView{display:block}
+body.view-buyers header .callerid{display:none}
+/* ── Realtors tab ─────────────────────────────────────────── */
+#realtorsView{display:none}
+body.view-realtors #cards,body.view-realtors #pageNav,body.view-realtors #pipelineView,body.view-realtors #inboxView,body.view-realtors #buyersView,body.view-realtors .search-bar-wrap,body.view-realtors .filter-row{display:none}
+body.view-realtors #realtorsView{display:block}
+/* ── Driving for Dollars ─────────────────────────────────────── */
+#d4dView{display:none}
+body.view-d4d #cards,body.view-d4d #pageNav,body.view-d4d #pipelineView,body.view-d4d #inboxView,body.view-d4d #buyersView,body.view-d4d #realtorsView,body.view-d4d #mailView,body.view-d4d .search-bar-wrap,body.view-d4d .filter-row{display:none}
+body.view-d4d #d4dView{display:block}
+body.view-d4d header .callerid{display:none}
+body:not(.view-d4d) .d4d-sheet{display:none !important}
+#d4dMap{height:calc(100vh - 250px);height:calc(100dvh - 250px);min-height:320px;border-radius:12px;border:1px solid #e5e0d5;z-index:0;background:#eee}
+.d4d-bar{display:flex;gap:8px;align-items:center;padding:8px 0;flex-wrap:wrap}
+.d4d-bar button{font-size:13px;padding:7px 12px}
+.d4d-count{font-size:12px;color:#6b7280;margin-left:auto}
+.d4d-hint{font-size:12px;color:#6b7280;padding:6px 2px}
+.d4d-follow.on,.d4d-sat.on,.d4d-mode.on{background:#96751A;color:#fff;border-color:#96751A}
+.d4d-sheet{position:fixed;left:0;right:0;bottom:0;background:#fff;border-top:2px solid #96751A;border-radius:16px 16px 0 0;box-shadow:0 -8px 30px rgba(0,0,0,.25);padding:14px 16px calc(14px + env(safe-area-inset-bottom));z-index:1200;max-height:78vh;overflow-y:auto}
+.d4d-sheet h3{margin:0 0 8px;font-size:15px}
+.d4d-sheet input[type=text]{width:100%;border:1px solid #d6d0c4;border-radius:8px;padding:9px}
+.d4d-sheet textarea{width:100%;min-height:52px;border:1px solid #d6d0c4;border-radius:8px;padding:8px;margin-top:8px}
+.d4d-tagrow{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
+.d4d-tag{border:1px solid #d6d0c4;background:#faf8f2;border-radius:999px;padding:6px 12px;font-size:12px;cursor:pointer;user-select:none}
+.d4d-tag.on{background:#96751A;border-color:#96751A;color:#fff}
+.d4d-sheet .row{display:flex;gap:8px;margin-top:10px}
+.d4d-sheet .row button{flex:1}
+.d4d-card{background:#fff;border:1px solid #e5e0d5;border-radius:12px;padding:12px;margin-bottom:10px;display:flex;gap:10px}
+.d4d-card img{width:64px;height:64px;object-fit:cover;border-radius:8px;flex-shrink:0}
+.d4d-card .meta{flex:1;min-width:0}
+.d4d-card .addr{font-weight:600;font-size:14px}
+.d4d-card .tags{font-size:12px;color:#96751A;margin:2px 0}
+.d4d-card .st{font-size:11px;color:#6b7280}
+.d4d-card .acts{display:flex;flex-direction:column;gap:6px;flex-shrink:0}
+.d4d-card .acts button{font-size:12px;padding:5px 9px}
+
+.buyers-toolbar{display:flex;align-items:center;justify-content:space-between;margin:0 0 12px;flex-wrap:wrap;gap:8px}
+.buyers-actions{display:flex;gap:6px;align-items:center}
+.buyers-list{display:flex;flex-direction:column;gap:6px}
+
+.buyer-row{
+  background:#fff;border-radius:9px;padding:11px 14px;
+  border:1px solid #e5e7eb;display:flex;gap:12px;align-items:flex-start;
+  transition:border-color .1s;
+}
+.buyer-row:hover{border-color:#96751A}
+.buyer-row.inactive{opacity:.5}
+.buyer-checkbox{flex-shrink:0;margin-top:2px}
+.buyer-checkbox input{width:18px;height:18px;cursor:pointer;accent-color:#96751A}
+.buyer-info{flex:1;min-width:0;cursor:pointer}
+.buyer-name{font-size:14px;font-weight:600;color:#0f0d0a;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.buyer-name .co{font-size:11px;color:#6b7280;font-weight:400}
+.buyer-name .stars{color:#f59e0b;letter-spacing:1px;font-size:11px}
+.buyer-meta{font-size:11px;color:#6b7280;margin-top:3px;line-height:1.4}
+.buyer-meta .pill{display:inline-block;background:#f3f4f6;padding:1px 7px;border-radius:9px;margin-right:4px;font-size:10px}
+.buyer-stats{font-size:11px;color:#6b7280;text-align:right;flex-shrink:0;line-height:1.4}
+.buyer-stats .big{font-size:18px;font-weight:700;color:#96751A;display:block;line-height:1}
+.buyer-actions-btns{display:flex;gap:5px;flex-shrink:0;align-items:flex-start}
+.buyer-actions-btns button{
+  background:transparent;border:1px solid #e5e7eb;color:#374151;
+  padding:5px 9px;border-radius:5px;font-size:11px;cursor:pointer;font-family:inherit;
+}
+.buyer-actions-btns button:hover{background:#faf3e0;border-color:#96751A;color:#96751A}
+
+.buyer-form{
+  background:#fff;border-radius:12px;padding:18px;margin-bottom:12px;
+  border:2px solid #96751A;
+}
+.buyer-form h3{margin:0 0 12px;font-size:15px;color:#0f0d0a}
+.buyer-form-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.buyer-form-grid .full{grid-column:1/-1}
+.buyer-form-grid label{display:block;font-size:11px;color:#6b7280;font-weight:600;margin-bottom:3px}
+.buyer-form-grid input,
+.buyer-form-grid select,
+.buyer-form-grid textarea{
+  width:100%;padding:7px 10px;border:1.5px solid #e5e7eb;
+  border-radius:6px;font-size:13px;background:#f9fafb;font-family:inherit;
+}
+.buyer-form-grid input:focus,.buyer-form-grid select:focus,.buyer-form-grid textarea:focus{outline:none;border-color:#96751A;background:#fff}
+.buyer-form-grid textarea{min-height:50px;resize:vertical}
+.buyer-form-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:12px;padding-top:12px;border-top:1px solid #e5e7eb}
+
+/* Blast form (when sending to multiple buyers) */
+.blast-modal-card{background:#fff;border-radius:12px;padding:18px;border:2px solid #d97706}
+.blast-modal-card h3{margin:0 0 6px;font-size:15px;color:#92400e}
+.blast-modal-card .recipients{font-size:11px;color:#6b7280;margin-bottom:10px;background:#fef3c7;padding:7px 10px;border-radius:6px}
+.blast-modal-card label{display:block;font-size:11px;color:#6b7280;font-weight:600;margin-bottom:3px;margin-top:8px}
+.blast-modal-card input,
+.blast-modal-card textarea{
+  width:100%;padding:8px 10px;border:1.5px solid #e5e7eb;border-radius:6px;
+  font-size:13px;font-family:inherit;background:#fff;
+}
+.blast-modal-card textarea{min-height:140px;resize:vertical;font-family:inherit}
+.blast-modal-card .hint{font-size:11px;color:#9ca3af;margin-top:4px}
+.blast-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:14px}
+
+.sms-consent-block{
+  background:#fef3c7;border:1.5px solid #fde68a;border-radius:8px;
+  padding:10px 12px;margin-top:8px;
+}
+.sms-consent-block.granted{background:#dcfce7;border-color:#bbf7d0}
+.sms-consent-block.revoked{background:#fee2e2;border-color:#fecaca}
+.sms-consent-row{display:flex;align-items:center;gap:8px;font-size:12px;color:#92400e}
+.sms-consent-block.granted .sms-consent-row{color:#166534}
+.sms-consent-block.revoked .sms-consent-row{color:#991b1b}
+.sms-consent-row label{font-weight:600;flex:1}
+.sms-consent-row select{
+  padding:5px 8px;border:1px solid #d1d5db;border-radius:5px;
+  font-size:12px;background:#fff;font-family:inherit;
+}
+.sms-cell-row{display:flex;gap:6px;margin-top:6px}
+.sms-cell-row select{flex:1;padding:5px 8px;border:1px solid #d1d5db;border-radius:5px;font-size:12px;background:#fff;font-family:inherit}
+
+/* Messages on deal detail */
+.msg-thread{display:flex;flex-direction:column;gap:8px;margin-bottom:12px;max-height:340px;overflow-y:auto;padding:4px 0}
+.msg-bubble{max-width:78%;padding:8px 12px;border-radius:14px;font-size:13px;line-height:1.4;word-wrap:break-word}
+.msg-bubble.out{align-self:flex-end;background:#D4AF37;color:#0f0d0a;border-bottom-right-radius:4px}
+.msg-bubble.in{align-self:flex-start;background:#f3f4f6;color:#0f0d0a;border-bottom-left-radius:4px}
+.msg-bubble.failed{background:#fee2e2;color:#991b1b}
+.msg-bubble .meta{font-size:10px;opacity:.6;margin-top:3px}
+.msg-empty{text-align:center;color:#9ca3af;font-size:12px;padding:24px 8px;font-style:italic}
+.msg-compose{display:flex;gap:6px;align-items:flex-end}
+.msg-compose textarea{
+  flex:1;padding:8px 11px;border:1.5px solid #e5e7eb;border-radius:18px;
+  font-size:13px;min-height:36px;max-height:120px;resize:none;background:#f9fafb;font-family:inherit;
+}
+.msg-compose textarea:focus{outline:none;border-color:#96751A;background:#fff}
+.msg-send-btn{
+  width:36px;height:36px;border-radius:50%;background:#96751A;
+  color:#fff;border:none;font-size:16px;cursor:pointer;flex-shrink:0;
+  display:flex;align-items:center;justify-content:center;
+}
+.msg-send-btn:disabled{opacity:.4;cursor:not-allowed}
+.msg-compose-warn{font-size:11px;color:#92400e;background:#fef3c7;padding:8px 10px;border-radius:7px;margin-bottom:8px}
+
+/* Drip campaigns block */
+.drip-list{display:flex;flex-direction:column;gap:5px}
+.drip-row{
+  display:flex;align-items:center;gap:8px;padding:9px 11px;
+  background:#f9fafb;border-radius:7px;font-size:12px;
+}
+.drip-row .lbl{flex:1;font-weight:600;color:#0f0d0a}
+.drip-row .status{
+  font-size:10px;padding:2px 7px;border-radius:3px;
+  font-weight:600;letter-spacing:.3px;text-transform:uppercase;
+}
+.drip-row .status.active{background:#dcfce7;color:#166534}
+.drip-row .status.paused{background:#fef3c7;color:#92400e}
+.drip-row .status.completed{background:#e5e7eb;color:#374151}
+.drip-row .status.opted_out{background:#fee2e2;color:#991b1b}
+.drip-row button{
+  background:transparent;border:1px solid #d1d5db;color:#374151;
+  padding:4px 9px;border-radius:5px;font-size:11px;cursor:pointer;font-family:inherit;
+}
+.drip-row button:hover{background:#fff;border-color:#96751A;color:#96751A}
+.drip-start-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px}
+.drip-start-btn{
+  padding:9px 10px;background:#fff;border:1.5px dashed #d1d5db;
+  border-radius:7px;font-size:12px;font-weight:600;cursor:pointer;
+  text-align:left;color:#374151;font-family:inherit;
+}
+.drip-start-btn:hover{border-color:#96751A;color:#96751A;background:#faf3e0}
+.drip-start-btn:disabled{opacity:.5;cursor:not-allowed}
+.drip-start-btn .sub{font-size:10px;color:#9ca3af;font-weight:400;display:block;margin-top:1px}
+
+/* Inbox view */
+#convPanel{position:fixed;inset:0;z-index:75;background:#f5f5f4;display:none;flex-direction:column}
+#convPanel.open{display:flex}
+.st-head{flex:0 0 auto;display:flex;align-items:center;gap:10px;padding:12px 14px;
+  background:#0f0d0a;color:#fff;box-shadow:0 2px 8px rgba(0,0,0,.2)}
+.st-back{background:none;border:none;color:#f5e6b8;font-size:14px;font-weight:700;
+  font-family:inherit;cursor:pointer;padding:0;white-space:nowrap}
+.st-who{flex:1;min-width:0}
+.st-name{font-size:15px;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.st-sub{font-size:11px;opacity:.65;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.st-call{background:rgba(255,255,255,.14);border:none;border-radius:8px;color:#fff;
+  font-size:17px;padding:7px 11px;cursor:pointer}
+.st-body{flex:1;overflow-y:auto;padding:14px;-webkit-overflow-scrolling:touch}
+.st-day{text-align:center;font-size:11px;color:#9ca3af;font-weight:700;margin:12px 0 8px}
+.st-msg{max-width:78%;padding:9px 13px;border-radius:16px;font-size:14px;line-height:1.4;
+  margin-bottom:3px;overflow-wrap:anywhere;white-space:pre-wrap}
+.st-in{background:#fff;border:1px solid #e5e7eb;border-bottom-left-radius:5px;margin-right:auto}
+.st-out{background:#0f0d0a;color:#f5e6b8;border-bottom-right-radius:5px;margin-left:auto}
+.st-msg{cursor:pointer}
+.st-stamp{font-size:10px;color:#9ca3af;margin-bottom:10px}
+.st-stamp.out{text-align:right}
+.st-del{display:none;margin:-2px 0 10px;font-size:11px;font-weight:700;color:#b91c1c;
+  background:#fef2f2;border:1px solid #fca5a5;border-radius:8px;padding:6px 10px;
+  font-family:inherit;cursor:pointer}
+.st-del.out{margin-left:auto}
+.st-del.show{display:block}
+.st-compose{flex:0 0 auto;display:flex;gap:8px;padding:10px 12px;background:#fff;
+  border-top:1px solid #e5e7eb;padding-bottom:calc(10px + env(safe-area-inset-bottom))}
+.st-compose textarea{flex:1;resize:none;max-height:110px;border:1px solid #d1d5db;border-radius:18px;
+  padding:10px 14px;font-size:15px;font-family:inherit;outline:none}
+.st-compose button{flex:0 0 auto;background:#0f0d0a;color:#f5e6b8;border:none;border-radius:18px;
+  padding:0 18px;font-size:14px;font-weight:700;font-family:inherit;cursor:pointer}
+.st-compose button:disabled{opacity:.5}
+.st-warn{margin:0 14px 10px;padding:9px 12px;border-radius:8px;background:#fffbeb;
+  border:1px solid #fcd34d;color:#92400e;font-size:11px;line-height:1.4}
+
+#inboxView{display:none}
+.ib-switch{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:0 0 10px}
+.ib-tab{padding:10px;border:1px solid #e5e7eb;border-radius:9px;background:#fff;color:#374151;
+  font-size:13px;font-weight:700;font-family:inherit;cursor:pointer}
+.ib-tab.active{background:#0f0d0a;border-color:#0f0d0a;color:#f5e6b8}
+.vm-card{border:1px solid #e5e7eb;border-radius:11px;background:#fff;padding:12px;margin-bottom:9px}
+.vm-card.unheard{border-color:#D4AF37;background:#fffdf5;border-width:2px}
+.vm-top{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:2px}
+.vm-from{font-size:15px;font-weight:800;color:#0f0d0a}
+.vm-when{font-size:11px;color:#6b7280;white-space:nowrap}
+.vm-meta{font-size:12px;color:#6b7280;margin-bottom:8px}
+.vm-card audio{width:100%;height:36px;margin-bottom:8px}
+.vm-acts{display:flex;gap:6px;flex-wrap:wrap}
+.vm-acts button{flex:1;min-width:88px;padding:9px 6px;border-radius:8px;border:1px solid #e5e7eb;
+  background:#fff;font-size:12px;font-weight:700;font-family:inherit;cursor:pointer;color:#374151}
+.vm-acts button.danger{color:#b91c1c;border-color:#fca5a5}
+.vm-acts button.primary{background:#0f0d0a;border-color:#0f0d0a;color:#f5e6b8}
+body.view-inbox #cards,body.view-inbox #pageNav,body.view-inbox #pipelineView{display:none}
+body.view-inbox #inboxView{display:block}
+body.view-inbox header .callerid{display:none}
+.inbox-list{display:flex;flex-direction:column;gap:6px}
+.inbox-row{
+  background:#fff;border-radius:9px;padding:12px 14px;cursor:pointer;
+  border:1px solid #e5e7eb;display:flex;gap:10px;align-items:flex-start;
+}
+.inbox-row:hover{border-color:#96751A;background:#f9fafb}
+.inbox-row .who{flex:1;min-width:0}
+.inbox-row .who .name{font-size:13px;font-weight:600;color:#0f0d0a}
+.inbox-row .who .addr{font-size:11px;color:#6b7280;margin-top:1px}
+.inbox-row .who .preview{font-size:12px;color:#374151;margin-top:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.inbox-row .ct{
+  background:#D4AF37;color:#0f0d0a;font-size:10px;font-weight:600;
+  padding:2px 7px;border-radius:10px;flex-shrink:0;
+}
+.inbox-empty{text-align:center;color:#9ca3af;font-size:13px;padding:40px 12px}
+/* Mail (email via Spacemail) view */
+#mailView{display:none}
+body.view-mail #cards,body.view-mail #pageNav,body.view-mail #pipelineView,body.view-mail #inboxView,body.view-mail #buyersView,body.view-mail #realtorsView,body.view-mail .search-bar-wrap,body.view-mail .filter-row{display:none}
+body.view-mail #mailView{display:block}
+body.view-mail header .callerid{display:none}
+.mail-row{background:#fff;border-radius:9px;padding:12px 14px;cursor:pointer;border:1px solid #e5e7eb;display:flex;gap:10px;align-items:flex-start}
+.mail-row:hover{border-color:#96751A;background:#f9fafb}
+.mail-row.unread{border-left:3px solid #96751A}
+.mail-row .who{flex:1;min-width:0}
+.mail-row .who .name{font-size:13px;font-weight:600;color:#0f0d0a;display:flex;align-items:center;gap:6px}
+.mail-row .who .addr{font-size:11px;color:#6b7280;margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mail-row .who .subj{font-size:12px;color:#374151;margin-top:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mail-row .when{font-size:10px;color:#9ca3af;flex-shrink:0;white-space:nowrap}
+.mail-unread-dot{width:8px;height:8px;border-radius:50%;background:#96751A;flex-shrink:0}
+.mail-iframe{width:100%;min-height:300px;border:1px solid #e5e7eb;border-radius:8px;background:#fff}
+.mail-meta{font-size:12px;color:#6b7280;margin-bottom:4px}
+.mail-meta b{color:#0f0d0a}
+.mail-folder-row{margin:0 0 10px}
+.mail-folder-row select,.mail-actions select{width:100%;padding:9px 10px;border:1.5px solid #d1d5db;border-radius:8px;font-size:14px;background:#fff;color:#0f0d0a;font-family:inherit}
+.mail-actions{display:flex;gap:8px;margin-top:8px}
+.mail-actions select{flex:1}
+.mail-actions .btn-danger{padding:9px 14px;font-size:13px}
+.mail-attach-btn{display:inline-flex!important;align-items:center;gap:6px;padding:8px 12px;border:1.5px dashed #96751A;border-radius:8px;color:#96751A!important;font-weight:700;cursor:pointer;background:#fffdf5}
+.mail-attach-list{display:flex;flex-direction:column;gap:5px;margin-top:8px}
+.mail-attach-chip{display:flex;align-items:center;gap:6px;font-size:12px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:7px;padding:6px 9px}
+.mail-attach-chip span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mail-attach-chip em{color:#6b7280;font-style:normal}
+.mail-attach-chip button{background:none;border:none;color:#b91c1c;cursor:pointer;font-size:13px}
+
+/* SMS settings in settings modal */
+.sms-settings-section{
+  background:#f9fafb;border-radius:8px;padding:12px 14px;margin-top:10px;
+}
+.sms-settings-section h3{margin:0 0 8px;font-size:13px;color:#0f0d0a}
+.sms-settings-section .row{display:flex;flex-direction:column;gap:4px;margin-bottom:8px}
+.sms-settings-section label{font-size:11px;color:#6b7280;font-weight:600}
+.sms-settings-section input,.sms-settings-section select{
+  padding:7px 10px;border:1.5px solid #d1d5db;border-radius:6px;font-size:13px;background:#fff;font-family:inherit;
+}
+
+@media(max-width:640px){
+  .pipe-col{flex:0 0 200px;min-width:200px}
+  .dd-prop-grid{grid-template-columns:1fr}
+  .dd-stage-btn{font-size:10px;padding:6px 2px}
+  .drip-start-grid{grid-template-columns:1fr}
+}
+/* ═══════════════════════════════════════════════════════════
+   CALL RECORDING
+   ═══════════════════════════════════════════════════════════ */
+.rec-pill{background:#b91c1c;color:#fff;border:none;border-radius:999px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;flex:0 0 auto}
+.rec-pill.paused{background:#4b5563}
+.rec-pill .rec-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#fff;margin-right:5px;vertical-align:middle;animation:recblink 1.4s infinite}
+.rec-pill.paused .rec-dot{animation:none;opacity:.5}
+@keyframes recblink{0%,100%{opacity:1}50%{opacity:.25}}
+.rv-row{background:#fff;border:1.5px solid #e5e7eb;border-radius:10px;padding:12px 14px;margin-bottom:8px}
+.rv-row.reviewed{border-color:#bbf7d0;background:#f8fdfa}
+.rv-head{display:flex;gap:10px;align-items:flex-start;margin-bottom:8px}
+.rv-who{flex:1;min-width:0}
+.rv-who .nm{font-size:14px;font-weight:600;color:#0f0d0a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rv-who .mt{font-size:11px;color:#6b7280;margin-top:2px}
+.rv-dur{font-size:11px;font-weight:700;color:#96751A;background:#faf3e0;border:1px solid #e8d29a;border-radius:6px;padding:3px 8px;flex-shrink:0}
+.rv-row audio{width:100%;margin-bottom:8px}
+.rv-score{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}
+.rv-chk{font-size:11px;font-weight:600;padding:5px 10px;border-radius:999px;border:1.5px solid #d1d5db;background:#fff;color:#6b7280;cursor:pointer;user-select:none}
+.rv-chk.on{background:#047857;border-color:#047857;color:#fff}
+.rv-note{width:100%;border:1.5px solid #e5e7eb;border-radius:7px;padding:8px 10px;font-size:13px;font-family:inherit;min-height:44px;resize:vertical;background:#f9fafb}
+.rv-note:focus{outline:none;border-color:#96751A;background:#fff}
+.rv-save{margin-top:6px;padding:7px 14px;background:#D4AF37;color:#0f0d0a;border:none;border-radius:7px;font-size:12px;font-weight:700;cursor:pointer}
+.rec-set{background:#f9fafb;border-radius:8px;padding:12px 14px;margin-top:10px}
+.rec-set h3{margin:0 0 8px;font-size:13px;color:#0f0d0a}
+.rec-set label{display:block;font-size:11px;color:#6b7280;font-weight:600;margin:8px 0 4px}
+.rec-set input,.rec-set select,.rec-set textarea{width:100%;padding:8px 10px;border:1.5px solid #d1d5db;border-radius:6px;font-size:13px;background:#fff;font-family:inherit}
+.rec-set textarea{min-height:52px;resize:vertical}
+.rec-legal{font-size:11px;color:#92400e;background:#fef3c7;border-radius:6px;padding:8px 10px;margin-top:8px;line-height:1.5}
+
+/* ═══════════════════════════════════════════════════════════
+   POWER DIAL — wrap-up pause between calls
+   ═══════════════════════════════════════════════════════════ */
+#pdWrapUp{background:#1c1917;border-radius:10px;padding:12px 14px;margin-top:10px;border:1px solid #96751A}
+#pdWrapUp .wu-top{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+#pdWrapUp .wu-lbl{font-size:13px;font-weight:700;color:#f5e6b8;flex:1;min-width:0}
+#pdWrapUp .wu-lbl span{display:block;font-weight:400;font-size:11px;color:#9ca3af;margin-top:2px}
+#pdWrapUp .wu-count{font-family:ui-monospace,monospace;font-size:26px;font-weight:700;color:#fff;min-width:38px;text-align:center}
+#pdWrapUp .wu-btns{display:flex;gap:6px;margin-top:10px;flex-wrap:wrap}
+#pdWrapUp .wu-btns button{flex:1 1 auto;padding:9px 12px;border-radius:7px;font-size:12px;font-weight:700;cursor:pointer;border:1.5px solid #374151;background:#374151;color:#e5e7eb;font-family:inherit}
+#pdWrapUp .wu-btns button:hover{background:#4b5563}
+#pdWrapUp .wu-go{background:#D4AF37;border-color:#D4AF37;color:#0f0d0a}
+#pdWrapUp .wu-hold{background:#b45309;border-color:#b45309;color:#fff}
+#pdWrapUp .wu-hold.on{background:#f59e0b;border-color:#f59e0b;color:#0f0d0a}
+/* ══════════════════════════════════════════════════════════════
+   ANDROID / VIEW-SWITCHING FIXES  (added 2026-08-17)
+   Keep this block last in the stylesheet so it wins on specificity.
+   ══════════════════════════════════════════════════════════════ */
+
+/* --- Section tabs: one row that expands into a menu ---
+   The tab strip used to scroll sideways, so Realtors / D4D sat
+   off-screen. It now collapses to a single bar showing the view
+   you're on; tapping it opens the full list.
+   The list expands IN FLOW (not absolutely positioned) because
+   header has overflow:hidden and would clip a floating menu. --- */
+#viewMenuBtn{
+  display:flex;align-items:center;justify-content:space-between;gap:8px;
+  width:100%;margin-top:8px;padding:9px 12px;
+  background:#2a2e36;border:1px solid rgba(255,255,255,.12);
+  border-radius:8px;color:#fff;font-size:13px;font-weight:700;
+  font-family:inherit;cursor:pointer;
+}
+#viewMenuBtn .vm-caret{font-size:10px;opacity:.7;transition:transform .15s}
+#viewMenuBtn.open .vm-caret{transform:rotate(180deg)}
+#viewMenuBtn .vm-hint{font-size:10px;font-weight:600;opacity:.55;letter-spacing:.03em}
+
+.view-tabs{
+  display:none;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:4px;
+  margin-top:5px;
+  overflow:visible;
+  flex-wrap:wrap;
+}
+.view-tabs.open{display:grid}
+.view-tabs::-webkit-scrollbar{display:none}
+.view-tab{
+  flex:none;
+  min-width:0;
+  padding:11px 8px;
+  font-size:13px;
+  line-height:1.2;
+  text-align:left;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+
+/* --- Header counter: long build strings must wrap, not overflow --- */
+#counter{overflow-wrap:anywhere;word-break:break-word}
+.title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* --- Exactly one view container visible at a time --- */
+body:not(.view-pipeline) #pipelineView,
+body:not(.view-inbox)    #inboxView,
+body:not(.view-mail)     #mailView,
+body:not(.view-buyers)   #buyersView,
+body:not(.view-realtors) #realtorsView,
+body:not(.view-d4d)      #d4dView{display:none!important}
+
+/* --- Dialer-only chrome is hidden on every other tab ---
+   (This was the bug: Hide-colors, State filter and Start Power Dialing
+   stayed on screen underneath the Realtors / Mail / Buyers views.)
+   #powerDialBar is deliberately NOT hidden, so an in-progress power
+   dial session can still be paused or stopped from any tab. */
+body:not(.view-dialer) #cards,
+body:not(.view-dialer) #pageNav,
+body:not(.view-dialer) .search-bar-wrap,
+body:not(.view-dialer) .filter-row,
+body:not(.view-dialer) .state-filter-row,
+body:not(.view-dialer) #listToolsModal,
+body:not(.view-dialer) #pdStartWrap,
+body:not(.view-dialer) #pdSetupScreen{display:none!important}
+body:not(.view-dialer) header .callerid{display:none}
+
+/* --- Android: no element may push the page sideways --- */
+html,body{overflow-x:hidden;max-width:100%}
+main{max-width:100%}
+
+/* --- iPhone home-screen app layout ---
+   overflow-x:hidden turned <body> into its own inner scroll box, which on
+   iPhone stops short of the bottom (blank strip) and slides the header up
+   under the status bar. "clip" hides sideways overflow without that. */
+@supports (overflow:clip){
+  html,body{overflow-x:clip;overflow-y:visible}
+}
+header{padding-top:calc(12px + env(safe-area-inset-top,0px))}
+main{padding-bottom:calc(100px + env(safe-area-inset-bottom,0px))}
+
+/* --- iPhone: tap-to-zoom is blocked by maximum-scale=1 in the viewport
+   tag, so fields keep their original compact sizes. --- */
+html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
+
+/* --- Add Lead form --- */
+#addLeadModal .al-row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+#addLeadModal .al-row .field{margin-bottom:14px;min-width:0}
+#addLeadModal select{display:block;width:100%;padding:10px 12px;background:#f9fafb;border:2px solid #d1d5db;border-radius:7px}
+#addLeadModal .al-check{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600;margin:4px 0 14px}
+#addLeadModal .al-check input{width:20px;height:20px}
+#addLeadModal .al-msg{font-size:13px;margin-top:10px;min-height:18px}
+@media (max-width:420px){#addLeadModal .al-row{grid-template-columns:1fr}}
+
+/* --- iPhone home-screen app: keep every screen's top below the clock/battery bar ---
+   (Deal detail, text threads and pop-up windows used to slide their
+   Back / Close buttons under the status bar, trapping you on that screen.) */
+.dd-head{padding-top:calc(12px + env(safe-area-inset-top,0px))}
+.st-head{padding-top:calc(12px + env(safe-area-inset-top,0px))}
+.modal{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+.modal-box{max-height:calc(100vh - 60px - env(safe-area-inset-top,0px) - env(safe-area-inset-bottom,0px))}
+@supports (height:100dvh){
+  .modal-box{max-height:calc(100dvh - 60px - env(safe-area-inset-top,0px) - env(safe-area-inset-bottom,0px))}
+}
+#login,#profilePicker{padding-top:calc(20px + env(safe-area-inset-top,0px))}
+.toast-stack{bottom:calc(18px + env(safe-area-inset-bottom,0px))}
+
+/* --- Call with: My phone / Dialer switch --- */
+.dial-mode-btn{margin-left:auto;display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border-radius:999px;
+  border:1px solid rgba(255,255,255,.25);background:#2a2e36;color:#fff;font-size:11px;font-weight:700;font-family:inherit;cursor:pointer}
+.dial-mode-btn .dm-opt{opacity:.5;font-weight:600}
+.dial-mode-btn .dm-opt.on{opacity:1}
+.dial-mode-btn .dm-sep{opacity:.35}
+body.my-phone-mode .dial-mode-btn{background:#c2410c;border-color:#fb923c}
+body.my-phone-mode #cidSelect,body.my-phone-mode #cidLabel,body.my-phone-mode #cidDot{display:none}
+#myPhoneNote{display:none;font-size:11px;color:#fed7aa}
+body.my-phone-mode #myPhoneNote{display:inline}
+body.my-phone-mode .phone .badge:last-child{background:#ffedd5;color:#9a3412}
+</style>
+</head>
+<body class="view-dialer">
+
+<noscript>
+  <div style="background:#fee2e2;color:#991b1b;padding:14px;text-align:center;font-weight:600">
+    JavaScript is required for this app to work.
+  </div>
+</noscript>
+
+<!-- ─── Login screen ─── -->
+<div id="login">
+  <div class="box">
+    <div class="logo">📞</div>
+    <h1>Win-Win CRM Dialer</h1>
+    <p>Enter the team password to continue</p>
+    <form id="loginForm">
+      <input type="password" id="pwInput" autocomplete="current-password" placeholder="Team password" required>
+      <button type="submit" id="loginBtn">Sign in</button>
+      <div class="err" id="loginErr"></div>
+    </form>
+  </div>
+</div>
+
+<!-- ─── App ─── -->
+<div id="app" class="hide">
+
+<header>
+  <div class="title-row">
+    <span class="title">Win-Win CRM Dialer</span>
+    <button id="profileBadge" type="button" class="hide">—</button>
+    <span id="syncBadge" class="sync-badge">…</span>
+  </div>
+  <div id="counter" class="muted">Loading…</div>
+  <button type="button" id="viewMenuBtn">
+    <span id="viewMenuLabel">📞 Dialer</span>
+    <span class="vm-hint">SECTIONS</span>
+    <span class="vm-caret">▼</span>
+  </button>
+  <div class="view-tabs" id="viewTabs">
+    <button class="view-tab active" data-view="dialer">📞 Dialer</button>
+    <button class="view-tab" data-view="pipeline">📋 Pipeline <span id="pipeBadge" style="font-size:10px;opacity:.6"></span></button>
+    <button class="view-tab" data-view="inbox">💬 Inbox <span id="inboxBadge" style="font-size:10px;opacity:.6"></span></button>
+    <button class="view-tab" data-view="mail">📧 Mail <span id="mailBadge" style="font-size:10px;opacity:.6"></span></button>
+    <button class="view-tab" data-view="buyers">💰 Buyers <span id="buyersBadge" style="font-size:10px;opacity:.6"></span></button>
+    <button class="view-tab" data-view="realtors">🏡 Realtors</button>
+    <button class="view-tab" data-view="d4d">🚗 D4D <span id="d4dBadge" style="font-size:10px;opacity:.6"></span></button>
+  </div>
+  <div class="header-controls">
+    <label><input type="checkbox" id="hideCalled">&nbsp;Hide called</label>
+    <label><input type="checkbox" id="hideOthersAssigned">&nbsp;Hide others' leads</label>
+    <button class="header-link" data-open="manualDialModal">☎ Dial a number</button>
+    <button class="header-link" data-open="numbersModal">📞 Numbers</button>
+    <button class="header-link" data-open="logModal">📊 Log</button>
+    <button class="header-link" data-open="recModal">🎙 Recordings</button>
+    <button class="header-link" data-open="uploadModal">⬆ Upload List</button>
+    <button class="header-link" data-open="addLeadModal">➕ Add Lead</button>
+    <button class="header-link" data-open="settingsModal">⚙ Settings</button>
+  </div>
+  <div class="callerid">
+    <span class="dot warn" id="cidDot"></span>
+    <span id="cidLabel">Caller ID:</span>
+    <select id="cidSelect"><option value="">— not configured —</option></select>
+    <span id="myPhoneNote">Calls open your phone app · seller sees your cell</span>
+    <button type="button" id="dialModeBtn" class="dial-mode-btn" aria-pressed="false" title="Switch between calling from your own phone and calling through the dialer">
+      <span class="dm-opt" data-m="dialer">☎️ Dialer</span><span class="dm-sep">|</span><span class="dm-opt" data-m="mine">📱 My phone</span>
+    </button>
+  </div>
+</header>
+
+<main>
+  <div class="search-bar-wrap">
+    <input type="text" id="leadSearch" placeholder="🔍 Search by name, address, or phone…" autocomplete="off">
+    <button id="leadSearchClear" class="hide">✕</button>
+  </div>
+  <div class="filter-row" id="filterRow">
+    <button class="filter-chip" id="filterMyLeads">👤 My leads</button>
+    <button class="filter-chip" id="filterWebLeads">🌐 Website <span id="webLeadCount"></span></button>
+    <button class="filter-chip filter-clear hide" id="filterClear">✕ Clear filter</button>
+  </div>
+  <div class="state-filter-row" id="stateFilterRow">
+    <span class="filter-lbl">List:</span>
+    <select id="listFilterSel"><option value="">All lists</option></select>
+    <span class="filter-lbl">State:</span>
+    <select id="stateFilterSel"></select>
+    <button type="button" id="listToolsBtn" class="postcard-btn" style="padding:5px 9px">⚙ Manage</button>
+  </div>
+  <div id="powerDialBar" class="hide">
+    <div class="pd-session">
+      <div class="pd-left">
+        <span class="pd-pulse">⚡</span>
+        <span id="pdCounter" style="font-size:13px;font-weight:600;color:#fff"></span>
+      </div>
+      <div class="pd-actions">
+        <button id="pdPause" class="pd-btn">⏸ Pause</button>
+        <button id="pdPrev" class="pd-btn">← Back</button>
+        <button id="pdSkip" class="pd-btn">Skip →</button>
+        <button id="pdStop" class="pd-btn pd-stop">■ Stop</button>
+      </div>
+    </div>
+    <div id="pdNowDialing" class="pd-now hide">
+      <div class="pd-now-lbl">Now dialing</div>
+      <div class="pd-now-name" id="pdNowName">—</div>
+      <div class="pd-now-sub" id="pdNowAddr"></div>
+      <div class="pd-now-row">
+        <span class="pd-now-phone" id="pdNowPhone"></span>
+        <span class="pd-now-state" id="pdNowState">Dialing…</span>
+      </div>
+    </div>
+    <div id="pdPausedNote" class="pd-paused-note hide">
+      Paused — finishing this lead, then holding. Your line stays open.
+    </div>
+    <div style="font-size:11px;color:#9ca3af;text-align:center;padding:4px 0">
+      Call the highlighted lead below → tap <b style="color:#fff">Mark as called</b> to auto-advance
+    </div>
+    <div id="pdWrapUp" class="hide">
+      <div class="wu-top">
+        <div class="wu-lbl">Wrap-up<span id="pdWrapWho">Log the call — status and notes</span></div>
+        <div class="wu-count" id="pdWrapCount">10</div>
+      </div>
+      <div class="wu-btns">
+        <button class="wu-hold" id="pdWrapHold">⏸ Hold</button>
+        <button id="pdWrapPlus">+20s</button>
+        <button class="wu-go" id="pdWrapGo">Next lead →</button>
+      </div>
+    </div>
+  </div>
+  <div id="pdStartWrap">
+    <button id="pdStartBtn" class="pd-start-btn">⚡ Start Power Dialing</button>
+  </div>
+
+  <!-- Power dial setup modal -->
+  <div id="pdSetupScreen" class="hide" style="background:#fff;border-radius:14px;border:1.5px solid #e5e7eb;padding:20px;margin-bottom:12px">
+    <div style="font-size:16px;font-weight:700;color:#0f0d0a;margin-bottom:16px">⚡ Power Dial Setup</div>
+
+    <div class="pd-setup-field">
+      <label>Which list to call</label>
+      <select id="pdListFilter"><option value="">Every list</option></select>
+    </div>
+
+    <div class="pd-setup-field">
+      <label>Filter by stage</label>
+      <select id="pdStageFilter">
+        <option value="">All uncalled leads (default)</option>
+        <option value="hot">🔥 Hot Lead</option>
+        <option value="warm">☀️ Warm Lead</option>
+        <option value="callback">📞 Call Back</option>
+        <option value="voicemail">📱 Left Voicemail</option>
+        <option value="noanswer">🔕 No Answer</option>
+        <option value="notinterested">👎 Not Interested</option>
+        <option value="wrong">❌ Wrong Number</option>
+      </select>
+      <div style="font-size:11px;color:#6b7280;margin-top:4px">Picking a stage calls leads already tagged with that status, regardless of "called" state.</div>
+    </div>
+
+    <div class="pd-setup-field">
+      <label>Filter by state</label>
+      <select id="pdStateFilter"></select>
+      <div style="font-size:11px;color:#6b7280;margin-top:4px">Synced with the state filter on the main list.</div>
+    </div>
+
+    <div class="pd-setup-field">
+      <label>Script for this session</label>
+      <select id="pdScriptSel"></select>
+      <div style="font-size:11px;color:#6b7280;margin-top:4px">Opens automatically on every connect, pre-filled with that lead's name and property. You can still switch scripts mid-call.</div>
+    </div>
+
+    <div class="pd-setup-field">
+      <label>Answering machine → auto voicemail</label>
+      <select id="pdAutoVm">
+        <option value="1">✅ On — drop the AI voicemail automatically after the beep</option>
+        <option value="0">Off — I'll tap VM Drop myself</option>
+      </select>
+      <div style="font-size:11px;color:#6b7280;margin-top:4px">Twilio listens for a machine. When it hears the greeting end, the voicemail plays and the dialer moves to the next lead. Voice and wording are in Settings.</div>
+    </div>
+
+    <div class="pd-setup-field">
+      <label>Who is dialing</label>
+      <select id="pdProfileSel"></select>
+    </div>
+
+    <div class="pd-setup-field">
+      <label>Dial from number</label>
+      <select id="pdCallerIdSel"></select>
+    </div>
+
+    <div class="pd-setup-field">
+      <label>Your phone (will ring you first)</label>
+      <input type="tel" id="pdAgentPhone" placeholder="+15551234567">
+    </div>
+
+    <div class="pd-setup-field">
+      <label>Pause between calls (wrap-up time)</label>
+      <select id="pdWrapSecs">
+        <option value="0">No pause — dial straight through</option>
+        <option value="10" selected>10 seconds</option>
+        <option value="20">20 seconds</option>
+        <option value="30">30 seconds</option>
+        <option value="-1">Wait for me — advance only when I tap</option>
+      </select>
+      <div style="font-size:11px;color:#6b7280;margin-top:4px">Time to log the call before the next number dials. You can extend or skip the pause on the fly.</div>
+    </div>
+
+    <div id="pdSetupCount" style="font-size:13px;color:#6b7280;margin-bottom:14px"></div>
+
+    <div style="display:flex;gap:8px">
+      <button id="pdSetupCancel" class="btn-ghost" style="flex:1">Cancel</button>
+      <button id="pdSetupStart" class="btn-primary" style="flex:2">📞 Call My Phone & Start</button>
+    </div>
+  </div>
+  <div id="cards"></div>
+  <div class="page-nav" id="pageNav"></div>
+
+  <!-- Pipeline view -->
+  <div id="pipelineView">
+    <div class="pipe-toolbar">
+      <div class="pipe-summary" id="pipeSummary">—</div>
+      <button class="header-link on-light" id="pipeMetricsBtn">📊 Metrics</button>
+      <button class="header-link on-light" id="pipeDeadBtn">💀 Dead <span id="pipeDeadCount"></span></button>
+    </div>
+    <div class="pipe-board" id="pipeBoard"></div>
+  </div>
+
+  <!-- Buyers CSV upload -->
+  <div class="modal" id="buyerUploadModal">
+    <div class="modal-box">
+      <div class="modal-head">
+        <h3>Upload buyers</h3>
+        <button data-close="buyerUploadModal">✕</button>
+      </div>
+      <div class="modal-body">
+        <div style="font-size:12px;color:#6b7280;line-height:1.5;margin-bottom:12px">
+          Any CSV with a name column works. Columns are matched by their headers —
+          nothing to map by hand. No address needed.
+        </div>
+        <details style="margin-bottom:14px">
+          <summary style="font-size:12px;font-weight:700;color:#96751A;cursor:pointer">Which headers are recognised</summary>
+          <div style="font-size:11px;color:#6b7280;line-height:1.7;margin-top:8px">
+            <b>Name</b> — name, buyer, buyer name, company, business<br>
+            <b>Company</b> — company, business name, llc, entity<br>
+            <b>Phone</b> — phone, phone number, mobile, cell, tel<br>
+            <b>Email</b> — email, e-mail, contact email<br>
+            <b>Website</b> — website, site, url, web<br>
+            <b>Socials</b> — social, socials, linkedin, facebook, instagram, ig, twitter, x, tiktok, youtube<br>
+            <b>Buy box</b> — buy box, criteria, buying criteria<br>
+            <b>Types</b> — property types, asset type<br>
+            <b>Areas</b> — areas, preferred areas, markets, zips<br>
+            <b>Price</b> — min price, max price, budget<br>
+            <b>Notes</b> — notes, comments<br>
+            <b>City / State</b> — city, state (optional)
+          </div>
+        </details>
+        <input type="file" id="buyerCsvFile" accept=".csv,text/csv" style="width:100%;padding:10px;border:1px dashed #d1d5db;border-radius:9px;background:#fafafa">
+        <div id="buyerCsvPreview" class="hide" style="margin-top:14px"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- List / bulk lead tools -->
+  <div class="modal" id="listToolsModal">
+    <div class="modal-box">
+      <div class="modal-head">
+        <h3>Manage these leads</h3>
+        <button data-close="listToolsModal">✕</button>
+      </div>
+      <div class="modal-body">
+        <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:9px;padding:11px;margin-bottom:14px">
+          <div style="font-size:13px;font-weight:700;color:#0f0d0a" id="ltCount">—</div>
+          <div style="font-size:11px;color:#6b7280;margin-top:3px">Everything below applies to the leads currently showing, after your search, state, list and colour filters.</div>
+        </div>
+
+        <div class="field">
+          <label>Put these leads on a list</label>
+          <input type="text" id="ltListName" placeholder="e.g. Tulsa Absentee — Aug 2026" list="ltListSuggestions">
+          <datalist id="ltListSuggestions"></datalist>
+          <button class="btn-ghost" id="ltSetList" style="width:100%;margin-top:8px">🏷 Save to this list</button>
+          <div style="font-size:11px;color:#6b7280;margin-top:5px">Leave it blank and save to clear the list off them. This is also how leads imported before lists existed get named.</div>
+        </div>
+
+        <div class="field" style="border-top:1px solid #e5e7eb;padding-top:14px;margin-top:6px">
+          <label>Leads with no list yet</label>
+          <div style="font-size:11px;color:#6b7280;margin-bottom:8px">Anything imported before lists existed. This sorts them into lists by the day they were uploaded, so each old upload becomes its own list.</div>
+          <button class="btn-ghost" id="ltBackfill" style="width:100%">🗂 Sort old leads into lists by upload date</button>
+        </div>
+
+        <div class="field" style="border-top:1px solid #e5e7eb;padding-top:14px;margin-top:6px">
+          <label style="color:#b91c1c">Delete these leads permanently</label>
+          <div style="font-size:11px;color:#6b7280;margin-bottom:8px">Removes the leads, their phone numbers, notes and call history. Recordings stay in Twilio. This cannot be undone.</div>
+          <button class="btn-ghost" id="ltDelete" style="width:100%;color:#b91c1c;border-color:#fca5a5">🗑 Delete <span id="ltDelCount"></span></button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Dead reason picker -->
+  <div class="modal" id="deadModal">
+    <div class="modal-box">
+      <div class="modal-head">
+        <h3>Why didn't it work?</h3>
+        <button class="modal-close" id="deadClose">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="dead-reasons" id="deadReasons"></div>
+        <label style="display:block;font-size:12px;font-weight:600;color:#6b7280;margin:14px 0 4px">
+          Anything worth remembering (optional)
+        </label>
+        <textarea class="notes-ta" id="deadNotes" rows="3"
+          placeholder="e.g. wanted 240k, best buyer was at 205k"></textarea>
+        <div id="deadErr" class="hide" style="margin-top:12px;padding:10px 12px;border-radius:8px;background:#fef2f2;border:1px solid #fca5a5;color:#991b1b;font-size:12px;line-height:1.45;overflow-wrap:anywhere"></div>
+        <button class="btn-primary" id="deadSave" style="width:100%;margin-top:14px" disabled>
+          Mark deal dead
+        </button>
+        <div style="font-size:11px;color:#6b7280;text-align:center;margin-top:8px">
+          Stays in your metrics — you can revive it later.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Dead deals list -->
+  <div class="modal" id="deadListModal">
+    <div class="modal-box">
+      <div class="modal-head">
+        <h3>Dead deals</h3>
+        <button class="modal-close" id="deadListClose">✕</button>
+      </div>
+      <div class="modal-body" id="deadListBody">Loading…</div>
+    </div>
+  </div>
+
+  <!-- Metrics -->
+  <div class="modal" id="metricsModal">
+    <div class="modal-box">
+      <div class="modal-head">
+        <h3>Pipeline metrics</h3>
+        <button class="modal-close" id="metricsClose">✕</button>
+      </div>
+      <div class="modal-body" id="metricsBody">Loading…</div>
+    </div>
+  </div>
+
+  <!-- Inbox view -->
+  <div id="inboxView">
+    <div class="pipe-toolbar">
+      <div class="pipe-summary" id="inboxSummary">—</div>
+      <button class="header-link on-light" id="inboxRefresh">↻ Refresh</button>
+    </div>
+    <div class="ib-switch">
+      <button class="ib-tab active" data-ibtab="texts">💬 Texts</button>
+      <button class="ib-tab" data-ibtab="vm">📬 Voicemail <span id="vmCount"></span></button>
+    </div>
+    <div class="inbox-list" id="inboxList"></div>
+    <div class="inbox-list hide" id="vmList"></div>
+  </div>
+
+  <!-- Mail (email) view -->
+  <div id="mailView">
+    <div class="mail-folder-row">
+      <select id="mailFolderSel"><option value="INBOX">📥 Inbox</option></select>
+    </div>
+    <div class="pipe-toolbar">
+      <div class="pipe-summary" id="mailSummary">—</div>
+      <div style="display:flex;gap:8px">
+        <button class="header-link on-light" id="mailCompose">✏️ Compose</button>
+        <button class="header-link on-light" id="mailRefresh">↻ Refresh</button>
+      </div>
+    </div>
+    <div class="inbox-list" id="mailList"></div>
+  </div>
+
+  <!-- Buyers view -->
+  <div id="buyersView">
+    <div class="buyers-toolbar">
+      <div class="pipe-summary" id="buyersSummary">—</div>
+      <div class="buyers-actions">
+        <button class="header-link" id="buyersBlastSelected" style="background:#D4AF37;color:#0f0d0a" disabled>📧 Blast selected (0)</button>
+        <button class="header-link on-light" id="buyersUpload">⬆ Upload CSV</button>
+        <button class="header-link on-light" id="buyersAddNew">+ Add buyer</button>
+      </div>
+    </div>
+    <div id="buyerFormHolder"></div>
+    <div class="buyers-list" id="buyersList"></div>
+  </div>
+</main>
+
+</div><!-- /#app -->
+
+<!-- ─── Modals (filled via JS template literals) ─── -->
+<div class="modal" id="numbersModal">
+  <div class="modal-box">
+    <div class="modal-head">
+      <h3>📞 Phone Numbers</h3>
+      <button class="modal-close" data-close="numbersModal">✕</button>
+    </div>
+    <div class="modal-tabs">
+      <button class="modal-tab active" data-tab="owned">Owned</button>
+      <button class="modal-tab" data-tab="search">Search &amp; Buy</button>
+    </div>
+    <div class="modal-body">
+      <div class="tab-pane active" id="tab-owned">
+        <p style="font-size:13px;color:#6b7280;margin:0 0 10px">Pick which number to use as caller ID. The active number is what sellers see.</p>
+        <div id="ownedList" class="list-loading">Loading…</div>
+      </div>
+      <div class="tab-pane" id="tab-search">
+        <div class="area-search">
+          <input type="text" id="searchAreaCode" inputmode="numeric" placeholder="Area code (e.g. 508)" maxlength="3">
+          <input type="text" id="searchContains" placeholder="Contains digits (optional)" maxlength="10">
+          <button class="btn-primary" id="searchBtn">Search</button>
+        </div>
+        <p style="font-size:12px;color:#6b7280;margin:0 0 10px">Twilio US local numbers · ~$1.15/mo + per-minute usage.</p>
+        <div id="searchResults"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="logModal">
+  <div class="modal-box">
+    <div class="modal-head">
+      <h3>📊 Call Log &amp; KPIs</h3>
+      <button class="modal-close" data-close="logModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="log-filters">
+        <select id="filterRange">
+          <option value="1">Today</option>
+          <option value="7" selected>Last 7 days</option>
+          <option value="30">Last 30 days</option>
+          <option value="90">Last 90 days</option>
+        </select>
+        <select id="filterFrom"><option value="">All caller IDs</option></select>
+        <select id="filterStatus">
+          <option value="">All statuses</option>
+          <option value="completed">Completed</option>
+          <option value="no-answer">No answer</option>
+          <option value="busy">Busy</option>
+          <option value="failed">Failed</option>
+          <option value="canceled">Canceled</option>
+        </select>
+        <button class="btn-secondary" id="refreshLog">↻ Refresh</button>
+      </div>
+      <div class="kpi-grid" id="kpiGrid"></div>
+      <h4 style="font-size:13px;margin:16px 0 8px;color:#374151">Recent calls</h4>
+      <div style="overflow-x:auto"><table class="log-table" id="logTable">
+        <thead><tr>
+          <th>Time</th><th>To</th><th class="col-hide-sm">From</th>
+          <th>Status</th><th>Dur</th><th class="col-hide-sm">Lead</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table></div>
+      <div class="csv-export"><button class="btn-ghost" id="exportCsv">⬇ Export CSV</button></div>
+    </div>
+  </div>
+</div>
+
+<div id="d4dView">
+  <div class="d4d-bar">
+    <button class="btn-primary d4d-mode on" id="d4dModeMap">🗺 Map</button>
+    <button class="btn-ghost d4d-mode" id="d4dModeList">📋 List</button>
+    <button class="btn-ghost d4d-follow" id="d4dFollowBtn">📍 Follow</button>
+    <button class="btn-ghost d4d-sat" id="d4dSatBtn">🛰 Satellite</button>
+    <button class="btn-ghost" id="d4dPinHereBtn">➕ Pin here</button>
+    <span class="d4d-count" id="d4dCount"></span>
+  </div>
+  <div id="d4dMapWrap">
+    <div id="d4dMap"></div>
+    <div class="d4d-hint">Tap any house on the map to add it to your Driving-for-Dollars list.</div>
+  </div>
+  <div id="d4dListWrap" class="hide"></div>
+
+  <div class="d4d-sheet hide" id="d4dSheet">
+    <h3 id="d4dSheetTitle">Add to D4D list</h3>
+    <input type="text" id="d4dAddr" placeholder="Address" autocomplete="off">
+    <div class="d4d-tagrow" id="d4dTagRow"></div>
+    <textarea id="d4dNotes" placeholder="Notes — condition, why it caught your eye…"></textarea>
+    <div class="row">
+      <button class="btn-ghost" id="d4dPhotoBtn">📷 Add photo</button>
+    </div>
+    <input type="file" id="d4dPhotoInput" accept="image/*" capture="environment" class="hide">
+    <div id="d4dPhotoPreviewWrap" class="hide" style="margin-top:8px">
+      <img id="d4dPhotoPreview" style="max-width:100%;max-height:140px;border-radius:8px" alt="Photo preview">
+    </div>
+    <div class="row" id="d4dEditActs">
+      <button class="btn-ghost hide" id="d4dSheetDelete" style="color:#b91c1c">🗑 Delete</button>
+      <button class="btn-ghost hide" id="d4dSheetToDialer">➡ Send to Dialer</button>
+    </div>
+    <div class="row">
+      <button class="btn-ghost" id="d4dSheetCancel">Cancel</button>
+      <button class="btn-primary" id="d4dSheetSave">💾 Save</button>
+    </div>
+  </div>
+</div>
+
+<div id="realtorsView">
+  <div class="realtor-search-bar">
+    <input type="text" id="realtorZip" placeholder="Enter zip code (e.g. 11735)" maxlength="10" autocomplete="off">
+    <button class="btn-primary" id="realtorSearchBtn">🔍 Search</button>
+  </div>
+  <div id="realtorStatus" style="font-size:13px;color:#6b7280;padding:8px 0;min-height:24px;display:flex;align-items:center;gap:10px">
+    <span id="realtorStatusText"></span>
+    <button id="realtorShuffleBtn" class="btn-ghost hide" style="font-size:12px;padding:5px 12px">🔀 Shuffle</button>
+  </div>
+  <div id="realtorResults"></div>
+</div>
+
+<div class="modal" id="addLeadModal">
+  <div class="modal-box">
+    <div class="modal-head">
+      <h3>➕ Add a lead</h3>
+      <button class="modal-close" data-close="addLeadModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="field">
+        <label>Owner name</label>
+        <input type="text" id="alOwners" placeholder="e.g. Chad Busch" autocomplete="off">
+      </div>
+      <div class="field">
+        <label>Property address *</label>
+        <input type="text" id="alAddress" placeholder="1000 Coddington Pl, Charlotte, NC 28211" autocomplete="off">
+      </div>
+      <div class="field">
+        <label>Mailing address (if different)</label>
+        <input type="text" id="alMailing" placeholder="Leave blank if same" autocomplete="off">
+      </div>
+      <div class="al-row">
+        <div class="field">
+          <label>Phone 1 *</label>
+          <input type="tel" id="alPhone1" placeholder="(704) 555-1234" autocomplete="off">
+        </div>
+        <div class="field">
+          <label>Phone 1 type</label>
+          <select id="alPhone1Type"><option value="Mobile">Mobile</option><option value="Landline">Landline</option><option value="">Unknown</option></select>
+        </div>
+      </div>
+      <div class="al-row">
+        <div class="field">
+          <label>Phone 2</label>
+          <input type="tel" id="alPhone2" placeholder="Optional" autocomplete="off">
+        </div>
+        <div class="field">
+          <label>Phone 3</label>
+          <input type="tel" id="alPhone3" placeholder="Optional" autocomplete="off">
+        </div>
+      </div>
+      <div class="field">
+        <label>Email</label>
+        <input type="email" id="alEmail" placeholder="Optional" autocomplete="off">
+      </div>
+      <div class="al-row">
+        <div class="field">
+          <label>List</label>
+          <input type="text" id="alList" list="alListOptions" placeholder="Manual Leads" autocomplete="off">
+          <datalist id="alListOptions"></datalist>
+        </div>
+        <div class="field">
+          <label>Lead source</label>
+          <select id="alSource">
+            <option value="Manual">Manual entry</option>
+            <option value="IMN Leads">IMN Leads</option>
+            <option value="Referral">Referral</option>
+            <option value="Driving for Dollars">Driving for Dollars</option>
+            <option value="Inbound call">Inbound call</option>
+            <option value="Other">Other</option>
+          </select>
+        </div>
+      </div>
+      <div class="field">
+        <label>Notes (motivation, asking price, timeline…)</label>
+        <textarea id="alNotes" rows="4" placeholder="e.g. Financial hardship, wants to sell in 30 days, asking $300k"></textarea>
+      </div>
+      <label class="al-check"><input type="checkbox" id="alHot" checked> 🔴 Highlight red (call ASAP)</label>
+      <button class="btn-primary" id="alSave" style="width:100%">➕ Add to dialer</button>
+      <div class="al-msg" id="alMsg"></div>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="manualDialModal">
+  <div class="modal-box">
+    <div class="modal-head">
+      <h3>☎ Dial a number</h3>
+      <button class="modal-close" data-close="manualDialModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="field">
+        <label>Phone number</label>
+        <input type="tel" id="manualDialNumber" placeholder="(555) 123-4567" autocomplete="off">
+      </div>
+      <div class="field">
+        <label>Name / note (optional)</label>
+        <input type="text" id="manualDialLabel" placeholder="e.g. Title company, lender, etc.">
+      </div>
+      <button class="btn-primary" id="manualDialGo" style="width:100%;margin-top:8px">📞 Call</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="postcardModal">
+  <div class="modal-box">
+    <div class="modal-head">
+      <h3>📬 Send Postcard</h3>
+      <button class="modal-close" data-close="postcardModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="field">
+        <label>Sending to</label>
+        <div id="postcardRecipient" style="font-size:13px;color:#0f0d0a;font-weight:600"></div>
+        <div id="postcardAddress" style="font-size:12px;color:#6b7280;margin-top:2px"></div>
+      </div>
+      <div class="field">
+        <label>Message tone</label>
+        <select id="postcardTone">
+          <option value="warm">Warm & personal</option>
+          <option value="friendly">Friendly & direct</option>
+          <option value="folksy">Down-to-earth</option>
+          <option value="pro">Professional & confident</option>
+          <option value="custom">Custom…</option>
+        </select>
+      </div>
+      <div class="field hide" id="postcardCustomWrap">
+        <label>Custom message</label>
+        <textarea id="postcardCustomMsg" rows="3" placeholder="Write your own message…"></textarea>
+      </div>
+      <div style="font-size:11px;color:#6b7280;margin:2px 0 8px">Mailed via standard/marketing class — typically 5–14 days to arrive.</div>
+      <button class="btn-primary" id="postcardSendBtn" style="width:100%">📬 Send Postcard</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="mailReadModal">
+  <div class="modal-box">
+    <div class="modal-head">
+      <h3 id="mailReadSubject" style="font-size:15px">Message</h3>
+      <button class="modal-close" data-close="mailReadModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div id="mailReadMeta"></div>
+      <iframe id="mailReadFrame" class="mail-iframe" sandbox=""></iframe>
+      <button class="btn-primary" id="mailReplyBtn" style="width:100%;margin-top:12px">↩ Reply</button>
+      <div class="mail-actions">
+        <select id="mailMoveSel"><option value="">📁 Move to…</option></select>
+        <button class="btn-danger" id="mailDeleteBtn">🗑 Delete</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="mailComposeModal">
+  <div class="modal-box">
+    <div class="modal-head">
+      <h3>✉️ New email</h3>
+      <button class="modal-close" data-close="mailComposeModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="field"><label>To</label><input type="email" id="composeTo" placeholder="name@example.com" autocomplete="off"></div>
+      <div class="field"><label>Subject</label><input type="text" id="composeSubject" placeholder="Subject"></div>
+      <div class="field"><label>Message</label><textarea id="composeBody" rows="8" placeholder="Write your message…"></textarea></div>
+      <div class="field">
+        <label class="mail-attach-btn">📎 Attach files<input type="file" id="composeFiles" multiple style="display:none"></label>
+        <div id="composeAttachList" class="mail-attach-list"></div>
+      </div>
+      <button class="btn-primary" id="composeSend" style="width:100%;margin-top:8px">📤 Send</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="uploadModal">
+  <div class="modal-box">
+    <div class="modal-head">
+      <h3>⬆ Upload Property List</h3>
+      <button class="modal-close" data-close="uploadModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <p style="font-size:13px;color:#6b7280;margin:0 0 12px">Upload a CSV exported from your skip-trace tool (Batch Skip Tracing, REI Sift, PropStream, etc.). Columns are auto-detected.</p>
+      <label class="upload-drop" id="dropZone">
+        <input type="file" id="csvFile" accept=".csv,text/csv">
+        <div class="icon">📄</div>
+        <div class="lbl">Tap or drop a CSV file here</div>
+        <div class="sub">Or click to browse</div>
+      </label>
+      <div id="uploadPreview" class="hide">
+        <div style="font-size:13px;margin:14px 0 6px;font-weight:600">Detected: <span id="uploadFileName"></span></div>
+        <div style="margin-bottom:10px">
+          <div style="font-size:11px;font-weight:600;color:#6b7280;margin-bottom:6px">COLUMN TEMPLATE</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+            <button class="upload-template-btn active" data-template="va" style="padding:8px;border:2px solid #96751A;background:#faf3e0;color:#96751A;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer">📋 VA Leads</button>
+            <button class="upload-template-btn" data-template="propertyreach" style="padding:8px;border:2px solid #d1d5db;background:#fff;color:#374151;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer">🏠 PropertyReach</button>
+            <button class="upload-template-btn" data-template="lux" style="padding:8px;border:2px solid #d1d5db;background:#fff;color:#374151;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer">💎 LUX Leads</button>
+            <button class="upload-template-btn" data-template="custom" style="padding:8px;border:2px solid #d1d5db;background:#fff;color:#374151;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer">🗂️ Custom</button>
+          </div>
+        </div>
+        <div style="font-size:12px;color:#6b7280;margin-bottom:8px">Map your CSV columns to the dialer fields. Phone columns can be repeated — they're combined automatically.</div>
+        <div class="col-map" id="colMap"></div>
+        <div style="background:#fef2f2;border:1px solid #fca5a5;border-radius:7px;padding:10px;font-size:12px;color:#991b1b;margin-bottom:10px">
+          <label style="display:flex;gap:6px;align-items:center;cursor:pointer">
+            <input type="checkbox" id="replaceExisting">
+            <span>⚠️ <b>Replace ALL existing leads</b> — permanently deletes everything first. Leave unchecked to add to existing list.</span>
+          </label>
+        </div>
+        <div style="background:#faf3e0;border:1px solid #e8d29a;border-radius:7px;padding:10px;font-size:12px;color:#96751A;margin-bottom:10px">
+          <label style="display:flex;gap:6px;align-items:center;cursor:pointer">
+            <input type="checkbox" id="skipDuplicates" checked>
+            <span><b>Skip duplicates</b> — don't upload addresses or phone numbers already in your list.</span>
+          </label>
+        </div>
+        <div style="background:#f0fdf4;border:1px solid #86efac;border-radius:7px;padding:10px;font-size:12px;color:#166534;margin-bottom:10px">
+          <label style="display:flex;gap:6px;align-items:center;cursor:pointer">
+            <input type="checkbox" id="scrubDnc" checked>
+            <span><b>Scrub DNC numbers</b> — drop any phone flagged Do Not Call in the file. Unchecked, they still import but are tagged <b>DNC</b> on the lead.</span>
+          </label>
+        </div>
+        <div style="margin-bottom:10px">
+          <div style="font-size:12px;font-weight:600;color:#374151;margin-bottom:6px">🏷️ List name (optional)</div>
+          <input type="text" id="uploadListNameManual" placeholder="e.g. WPB Lux — Aug 2026" style="width:100%;padding:9px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;background:#fff">
+          <div style="font-size:11px;color:#6b7280;margin-top:4px">Leave this blank and the list is named after the file you uploaded. Every upload becomes its own list you can dial on its own.</div>
+        </div>
+        <div id="uploadStats" style="font-size:12px;color:#6b7280;margin-bottom:10px"></div>
+        <div style="margin-bottom:12px">
+          <div style="font-size:12px;font-weight:600;color:#374151;margin-bottom:6px">🎨 List color tag (optional)</div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <button type="button" class="list-color-btn" data-listcolor="none" style="background:#e5e7eb;border:2px solid #0f0d0a;border-radius:50%;width:26px;height:26px" title="None"></button>
+            <button type="button" class="list-color-btn" data-listcolor="red" style="background:#ef4444;border:2px solid transparent;border-radius:50%;width:26px;height:26px" title="Red"></button>
+            <button type="button" class="list-color-btn" data-listcolor="orange" style="background:#f97316;border:2px solid transparent;border-radius:50%;width:26px;height:26px" title="Orange"></button>
+            <button type="button" class="list-color-btn" data-listcolor="yellow" style="background:#f59e0b;border:2px solid transparent;border-radius:50%;width:26px;height:26px" title="Yellow"></button>
+            <button type="button" class="list-color-btn" data-listcolor="green" style="background:#10b981;border:2px solid transparent;border-radius:50%;width:26px;height:26px" title="Green"></button>
+            <button type="button" class="list-color-btn" data-listcolor="blue" style="background:#3b82f6;border:2px solid transparent;border-radius:50%;width:26px;height:26px" title="Blue"></button>
+            <button type="button" class="list-color-btn" data-listcolor="purple" style="background:#8b5cf6;border:2px solid transparent;border-radius:50%;width:26px;height:26px" title="Purple"></button>
+          </div>
+        </div>
+        <div style="margin-bottom:12px">
+          <div style="font-size:12px;font-weight:600;color:#374151;margin-bottom:6px">📞 Assign list to caller (optional)</div>
+          <select id="uploadAssignTo" style="width:100%;padding:9px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;background:#fff">
+            <option value="">— Unassigned —</option>
+          </select>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn-ghost" id="uploadCancel">Cancel</button>
+          <button class="btn-primary" id="uploadGo" style="flex:1">Import</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="settingsModal">
+  <div class="modal-box">
+    <div class="modal-head">
+      <h3>⚙ Settings</h3>
+      <button class="modal-close" data-close="settingsModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="field">
+        <label>Your phone (Twilio rings YOU first when you place a call)</label>
+        <input type="text" id="settingsForwardPhone" placeholder="+15085551234 or 5085551234">
+        <div style="font-size:11px;color:#6b7280;margin-top:4px">This is the number Twilio bridges to on THIS device. Saved locally — it only updates a teammate's stored callback number if you confirm the prompt, so logging into someone else's profile on a borrowed phone won't silently overwrite their number.</div>
+        <div id="apiVersionLine" style="font-size:11px;font-weight:700;margin-top:8px;color:#6b7280">Backend: checking…</div>
+        <button class="btn-ghost" id="testPhoneBtn" style="width:100%;margin-top:8px">📞 Ring this phone now (test)</button>
+        <div id="testPhoneResult" class="hide" style="margin-top:8px;padding:10px 12px;border-radius:8px;font-size:12px;line-height:1.45;overflow-wrap:anywhere"></div>
+      </div>
+      <div class="field" style="border-top:1px solid #e5e7eb;padding-top:14px;margin-top:4px">
+        <label>📞 When someone calls your Twilio number</label>
+        <select id="voiceScreen">
+          <option value="1">Screen callers — ask them to press 1 first</option>
+          <option value="0">Connect straight through (no screening)</option>
+        </select>
+        <div style="font-size:11px;color:#6b7280;margin-top:4px">Screening is what stops your phone ringing with nobody there. Robodialers never press a key, so they never reach you — they get the voicemail box instead.</div>
+      </div>
+      <div class="field">
+        <label>Greeting before connecting</label>
+        <textarea id="voiceGreeting" rows="2" placeholder="Thanks for calling Win Win Properties. Press 1 to be connected, or stay on the line to leave a message."></textarea>
+      </div>
+      <div class="field">
+        <label>Voicemail greeting</label>
+        <textarea id="voiceVmGreeting" rows="3" placeholder="You have reached Win Win Properties. Please leave your name, number, and the property address after the tone."></textarea>
+        <div style="font-size:11px;color:#6b7280;margin-top:4px">Played when nobody picks up. Messages land in Inbox → 📬 Voicemail.</div>
+      </div>
+      <div class="field">
+        <label>Ring your phone for (seconds) before voicemail</label>
+        <input type="number" id="voiceRingSeconds" min="10" max="60" placeholder="25">
+        <button class="btn-ghost" id="voiceSettingsSave" style="width:100%;margin-top:8px">Save call handling</button>
+      </div>
+
+      <div class="field">
+        <label>Company name (used in call scripts)</label>
+        <input type="text" id="settingsCompany" placeholder="Win-Win Property Solutions">
+        <div style="font-size:11px;color:#6b7280;margin-top:4px">Fills <code>{Company}</code> everywhere it appears in a script.</div>
+      </div>
+      <div class="field">
+        <label>Website (used in call scripts)</label>
+        <input type="text" id="settingsWebsite" placeholder="winwinproperties.net">
+        <div style="font-size:11px;color:#6b7280;margin-top:4px">Fills <code>{Website}</code> — what you read out when a seller asks where to look you up.</div>
+      </div>
+      <div class="field">
+        <label>Backend URL</label>
+        <input type="text" id="settingsBackendUrl" placeholder="/api">
+        <div style="font-size:11px;color:#6b7280;margin-top:4px">Default <code>/api</code> works if you're using Netlify. Change if hosting the function elsewhere.</div>
+      </div>
+      <div class="field">
+        <label>Voicemail drop — your recorded message</label>
+        <div id="vmRecordStatus" style="font-size:12px;color:#6b7280;margin-bottom:8px">Checking…</div>
+        <button type="button" id="vmRecordBtn" class="btn-secondary">🎙️ Record my voicemail message</button>
+        <div style="font-size:11px;color:#6b7280;margin-top:4px">Taps call your phone — answer it, talk after the beep, then press # when done. Used automatically when you tap 📨 VM Drop during a call.</div>
+      </div>
+      <div class="field">
+        <label>Voicemail drop mode</label>
+        <select id="settingsVmMode">
+          <option value="ai">🤖 AI voice — personalized per property (uses message below)</option>
+          <option value="recording">🎙️ My recorded audio (message below is only the fallback)</option>
+        </select>
+        <div style="font-size:11px;color:#6b7280;margin-top:4px">AI mode speaks the message below in a natural human-sounding voice and fills in the seller's name and property address automatically. Recorded mode plays your own recording (same message for every lead).</div>
+      </div>
+      <div class="field">
+        <label>AI voice</label>
+        <select id="settingsVmVoice">
+          <option value="Polly.Ruth-Generative">Ruth — female, most natural (Generative)</option>
+          <option value="Polly.Matthew-Generative">Matthew — male, most natural (Generative)</option>
+          <option value="Polly.Danielle-Generative">Danielle — female (Generative)</option>
+          <option value="Polly.Joanna-Neural">Joanna — female (Neural)</option>
+          <option value="Polly.Matthew-Neural">Matthew — male (Neural)</option>
+          <option value="Polly.Stephen-Neural">Stephen — male (Neural)</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Voicemail drop message (text-to-speech fallback)</label>
+        <textarea id="settingsVmMessage" rows="3" placeholder="Message played when you tap VM Drop"></textarea>
+        <div style="font-size:11px;color:#6b7280;margin-top:4px">Placeholders: <code>{FirstName}</code>, <code>{Address}</code>, <code>{CallbackNumber}</code> — filled in per lead automatically when the voicemail is dropped.</div>
+        <div style="font-size:11px;color:#6b7280;margin-top:4px">Only used if you haven't recorded a message above. Saved on this device only.</div>
+      </div>
+
+      <!-- SMS settings (shared across team) -->
+      <div class="sms-settings-section">
+        <h3>💬 SMS / Texting (team-wide)</h3>
+        <div class="row">
+          <label>SMS sending number</label>
+          <select id="smsFromSelect"><option value="">— pick a Twilio number —</option></select>
+          <div style="font-size:11px;color:#6b7280">Which of your Twilio numbers sends drips and manual texts. Must be SMS-capable.</div>
+        </div>
+        <div class="row">
+          <label>Your name (used in templates)</label>
+          <input type="text" id="smsBizName" placeholder="e.g. Tony">
+          <div style="font-size:11px;color:#6b7280">Replaces <code>{your_name}</code> in drip messages.</div>
+        </div>
+        <button class="btn-primary" id="smsConfigSave" style="width:100%;margin-top:4px">Save SMS settings</button>
+        <div style="font-size:11px;color:#92400e;background:#fef3c7;padding:8px 10px;border-radius:6px;margin-top:8px">
+          <b>Reminder:</b> A2P 10DLC registration with Twilio must be approved before SMS reliably delivers. See README.
+        </div>
+      </div>
+
+      <!-- Call recording (team-wide) -->
+      <div class="rec-set">
+        <h3>🎙 Call Recording (team-wide)</h3>
+        <label style="display:flex;align-items:center;gap:7px;font-size:13px;color:#0f0d0a;margin-top:0">
+          <input type="checkbox" id="recEnabled" style="width:auto"> Record outbound calls
+        </label>
+        <label>Disclosure voice</label>
+        <select id="recVoice">
+          <option value="Polly.Ruth-Generative">Ruth — female, most natural (Generative)</option>
+          <option value="Polly.Matthew-Generative">Matthew — male, most natural (Generative)</option>
+          <option value="Polly.Danielle-Generative">Danielle — female (Generative)</option>
+          <option value="Polly.Joanna-Neural">Joanna — female (Neural)</option>
+          <option value="Polly.Matthew-Neural">Matthew — male (Neural)</option>
+          <option value="Polly.Stephen-Neural">Stephen — male (Neural)</option>
+        </select>
+        <label>Disclosure mode</label>
+        <select id="recMode">
+          <option value="ai">🤖 AI voice — speaks the line below</option>
+          <option value="audio">🎙️ Recorded audio file</option>
+        </select>
+        <label>Recorded audio URL (used in audio mode)</label>
+        <input type="url" id="recAudioUrl" placeholder="https://…/disclosure.mp3">
+        <label>What the seller hears</label>
+        <textarea id="recText"></textarea>
+        <label>Delete recordings after (days)</label>
+        <input type="number" id="recRetention" min="1" max="365">
+        <button class="btn-primary" id="recSave" style="width:100%;margin-top:10px">Save recording settings</button>
+        <div class="rec-legal"><b>Why this plays on every call:</b> Florida requires all parties to consent before a call is recorded, and two of your three markets are Florida. The property state tells you where the house is, not where the owner is sitting — so the line plays on every call rather than branching by state.</div>
+      </div>
+
+      <hr style="border:none;border-top:1px solid #e5e7eb;margin:16px 0">
+      <button class="btn-primary" id="settingsSave" style="width:100%">Save device settings</button>
+      <button class="btn-ghost" id="signOut" style="width:100%;margin-top:8px">Sign out</button>
+    </div>
+  </div>
+</div>
+
+<!-- Live-call drawer -->
+<div class="calldrawer" id="callDrawer">
+  <div class="row1">
+    <div class="who">
+      <div class="name" id="cdName">—</div>
+      <div class="num" id="cdNum">—</div>
+    </div>
+    <div class="state" id="cdState">…</div>
+  </div>
+  <div class="row2">
+    <span class="timer" id="cdTimer">00:00</span>
+    <button class="cd-script" id="cdScript" title="Show the call script">📜 Script</button>
+    <button class="rec-pill hide" id="recPill" title="Pause recording — use it the moment they start reading out account numbers"><span class="rec-dot"></span>REC</button>
+    <span class="from" id="cdFrom"></span>
+  </div>
+  <div class="btns">
+    <button class="skip-btn" id="cdNextNum" title="Try this lead's next phone number">⏭ Next #</button>
+    <button class="skip-btn" id="cdNextLead" title="Skip to the next lead">⏭⏭ Next lead</button>
+    <button class="vm-drop" id="cdVoicemail" title="Drop voicemail">📨 VM Drop</button>
+    <button class="hangup" id="cdHangup">🔴 End Call</button>
+  </div>
+</div>
+
+<!-- Live call script panel -->
+<div class="scriptpanel" id="scriptPanel">
+  <div class="sp-head">
+    <div class="sp-title" id="spTitle">Call Script<span id="spSub"></span></div>
+    <select id="spSelect" title="Choose script"></select>
+    <button class="sp-close" id="spClose" title="Hide script">✕</button>
+  </div>
+  <div class="sp-body" id="spBody"></div>
+  <div class="sp-foot">
+    <label><input type="checkbox" id="spAuto" checked> Auto-open on call</label>
+    <span style="margin-left:auto">Tap a section to expand</span>
+  </div>
+</div>
+
+<!-- SMS conversation (full-screen overlay) -->
+<div id="convPanel">
+  <div class="st-head">
+    <button class="st-back" id="stBack">← Inbox</button>
+    <div class="st-who">
+      <div class="st-name" id="stName">—</div>
+      <div class="st-sub" id="stSub"></div>
+    </div>
+    <button class="st-call" id="stCall" title="Call this number">📞</button>
+    <button class="st-call" id="stWipe" title="Delete this conversation">🗑</button>
+  </div>
+  <div class="st-body" id="stBody"></div>
+  <div class="st-compose">
+    <textarea id="stInput" rows="1" placeholder="Type a reply…"></textarea>
+    <button id="stSend">Send</button>
+  </div>
+</div>
+
+<!-- Deal Detail panel (full-screen overlay) -->
+<div id="dealDetail">
+  <div class="dd-head">
+    <div class="dd-head-row">
+      <button class="dd-back" id="ddBack">← Pipeline</button>
+      <div class="dd-title" id="ddTitle">—<span class="sub" id="ddSub"></span></div>
+      <button class="dd-dead" id="ddDead">💀 Mark dead</button>
+      <button class="dd-archive" id="ddArchive">Archive</button>
+    </div>
+    <div class="dd-stage-bar" id="ddStageBar"></div>
+  </div>
+  <div class="dd-body" id="ddBody">Loading…</div>
+</div>
+
+<!-- Profile picker (shown on first load if no profile set) -->
+<div id="profilePicker">
+  <div class="box">
+    <h2 id="ppTitle">Who's calling today?</h2>
+    <p>Pick your profile so calls and deals get attributed to you. Sticks to this device.</p>
+    <div class="profile-list" id="ppList"></div>
+    <div style="font-size:11px;color:#9ca3af;margin:8px 0 6px" id="ppAddLabel">Or add a new caller:</div>
+    <form class="profile-new" id="ppNewForm" style="flex-direction:column;align-items:stretch">
+      <input type="text" id="ppNewName" placeholder="First name" maxlength="40" required>
+      <input type="password" id="ppNewPass" placeholder="Their own password (6+ characters)" autocomplete="new-password">
+      <button type="submit">Add caller</button>
+    </form>
+    <div style="font-size:11px;color:#9ca3af;margin-top:8px" id="ppAddHint">
+      A caller signs in with their own password — it's what identifies them, so
+      there's no name to pick and no way to sign in as someone else.
+    </div>
+  </div>
+</div>
+
+<!-- Call recordings review queue -->
+<div class="modal" id="recModal">
+  <div class="modal-box">
+    <div class="modal-head">
+      <h3>🎙 Call Recordings</h3>
+      <button class="modal-close" data-close="recModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="log-filters">
+        <select id="recRange">
+          <option value="1">Today</option>
+          <option value="7" selected>Last 7 days</option>
+          <option value="30">Last 30 days</option>
+        </select>
+        <select id="recMinDur">
+          <option value="90" selected>Real conversations (90s+)</option>
+          <option value="30">30s and up</option>
+          <option value="0">Everything</option>
+        </select>
+        <button class="btn-secondary" id="recRefresh">↻ Refresh</button>
+      </div>
+      <div style="font-size:12px;color:#6b7280;margin-bottom:10px" id="recSummary">—</div>
+      <div id="recList"></div>
+    </div>
+  </div>
+</div>
+
+<div class="toast-stack" id="toastStack"></div>
+
+<script>
+/* ═══════════════════════════════════════════════════════════════
+   CALL BOOKLET — single-file frontend.
+   Talks to a Netlify Function backend (see netlify/functions/api.js)
+   ═══════════════════════════════════════════════════════════════ */
+(function(){
+
+// ── Config ──────────────────────────────────────────────────────
+const LS = {
+  pwd:'cb_pwd', backend:'cb_backend',
+  forward:'cb_forward', active:'cb_active',
+  profileId:'cb_profile_id', profileName:'cb_profile_name',
+  hideOthers:'cb_hide_others', listFilter:'cb_list_filter',
+  vmMessage:'cb_vm_message', vmMode:'cb_vm_mode', vmVoice:'cb_vm_voice', stateFilter:'cb_state_filter',
+  vmAuto:'cb_vm_auto',
+  company:'cb_company', website:'cb_website',
+};
+const DEFAULT_COMPANY = 'Win-Win Property Solutions';
+const DEFAULT_WEBSITE = 'winwinproperties.net';
+const companyName = () => localStorage.getItem(LS.company) || DEFAULT_COMPANY;
+const companySite = () => localStorage.getItem(LS.website) || DEFAULT_WEBSITE;
+// Bump this on every deploy so you can see which build is actually live
+const BUILD_ID = 'build 2026-10-14-compsworker';
+const DEFAULT_VM_MESSAGE = "Hi {FirstName}, we are calling from Win Win Properties to give you a quick offer on your property at {Address}. Give us a call back at {CallbackNumber}, or find us online at win win properties dot net. That's W W W dot winwinproperties dot net. Thanks, and have a great day.";
+let backend  = localStorage.getItem(LS.backend) || '/api';
+let password = localStorage.getItem(LS.pwd) || '';
+let forwardPhone   = localStorage.getItem(LS.forward) || '';
+let activeCallerId = localStorage.getItem(LS.active)  || '';
+// "My phone" mode: calls open the phone's own dialer (tel:) instead of Twilio.
+let useMyPhone = false;
+try { useMyPhone = localStorage.getItem('ww_use_my_phone') === '1'; } catch {}
+
+// ── Tiny DOM helpers ────────────────────────────────────────────
+const $  = id => document.getElementById(id);
+const el = html => { const t=document.createElement('template'); t.innerHTML=html.trim(); return t.content.firstChild; };
+function badge(s,t){ const b=$('syncBadge'); b.className='sync-badge '+s; b.textContent=t; }
+
+// ── Toast ───────────────────────────────────────────────────────
+function toast(msg, kind){
+  const t = el(`<div class="toast ${kind||''}">${escapeHtml(msg)}</div>`);
+  $('toastStack').appendChild(t);
+  setTimeout(()=>{ t.style.transition='opacity .3s'; t.style.opacity='0'; setTimeout(()=>t.remove(),300); }, 3300);
+}
+function escapeHtml(s){ return String(s==null?'':s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+
+// Convert Google Drive share links to direct open URLs
+function convertDriveUrl(url){
+  if(!url) return url;
+  const m = url.match(/drive\.google\.com\/file\/d\/([^\/\?]+)/);
+  if(m) return 'https://drive.google.com/file/d/'+m[1]+'/view?usp=sharing';
+  const m2 = url.match(/drive\.google\.com\/open\?id=([^&]+)/);
+  if(m2) return 'https://drive.google.com/file/d/'+m2[1]+'/view?usp=sharing';
+  return url;
+}
+// ── API client ──────────────────────────────────────────────────
+// ════════════════════════════════════════════════════════════════
+// COMPS AGENT — the 📊 Comps button asks a Claude agent to run the
+// lookup in PropStream in the owner's signed-in Chrome. The computer
+// must be on with Chrome open. Results come back here when it's done.
+// ════════════════════════════════════════════════════════════════
+const compsOpen   = new Set();   // property ids with the panel open
+const compsState  = {};          // pid -> latest request row (or null)
+const compsPolls  = {};          // pid -> interval id
+let compsDefaults = null;
+let compsConfigured = true;
+let compsMode = 'worker';
+let compsWorkerSeen = null;   // last time the laptop worker checked in
+
+async function loadCompsDefaults(){
+  if(compsDefaults) return compsDefaults;
+  try{
+    const j = await api('get-comps-defaults');
+    compsDefaults = j.filters; compsConfigured = !!j.configured; compsMode = j.mode || 'worker';
+  }catch(e){ compsDefaults = {radius_miles:0.5,months_back:6,sqft_pct:20,beds_plus_minus:1,baths_plus_minus:1,year_built_plus_minus:15,same_property_type:true,sold_only:true,max_comps:10,notes:''}; }
+  return compsDefaults;
+}
+
+const cpMoney = n => (n==null||isNaN(n)) ? '—' : '$' + Math.round(Number(n)).toLocaleString();
+const cpNum   = n => (n==null||isNaN(n)) ? '—' : Number(n).toLocaleString();
+
+function compsFilterFormHtml(pid, f){
+  const id = escapeHtml(pid);
+  const n = (k,label,step) => `<label>${label}<input type="number" step="${step||1}" data-cf="${k}" value="${escapeHtml(f[k])}"></label>`;
+  return `
+    <div class="cp-grid" data-cf-form="${id}">
+      ${n('radius_miles','Radius (miles)','0.1')}
+      ${n('months_back','Sold within (months)')}
+      ${n('sqft_pct','Sq ft ± %')}
+      ${n('beds_plus_minus','Beds ±')}
+      ${n('baths_plus_minus','Baths ±','0.5')}
+      ${n('year_built_plus_minus','Year built ±')}
+      ${n('max_comps','Max comps')}
+      <label class="cp-check"><input type="checkbox" data-cf="same_property_type"${f.same_property_type?' checked':''}> Same property type</label>
+      <label class="cp-check"><input type="checkbox" data-cf="sold_only"${f.sold_only?' checked':''}> Sold only</label>
+    </div>
+    <label>Anything else for the agent<input type="text" data-cf="notes" value="${escapeHtml(f.notes||'')}" placeholder="e.g. skip new construction"></label>
+    <div class="cp-actions">
+      <button type="button" class="cp-btn" data-comps-run="${id}">▶ Run in PropStream</button>
+      <button type="button" class="cp-btn ghost" data-comps-save="${id}">Save as my defaults</button>
+    </div>`;
+}
+
+function readCompsForm(pid){
+  const panel = document.getElementById('compsPanel-' + pid);
+  const f = {...(compsDefaults||{})};
+  if(!panel) return f;
+  panel.querySelectorAll('[data-cf]').forEach(el => {
+    const k = el.getAttribute('data-cf');
+    f[k] = el.type === 'checkbox' ? el.checked : (el.type === 'number' ? parseFloat(el.value) : el.value);
+  });
+  return f;
+}
+
+function compsPanelHtml(pid){
+  const r = compsState[pid];
+  const f = (r && r.filters) || compsDefaults || {};
+  const setupNote = compsConfigured ? '' : (compsMode === 'routine'
+    ? `<div class="cp-err">The comps agent isn't connected yet. Add COMPS_ROUTINE_ID and COMPS_ROUTINE_TOKEN in Netlify.</div>`
+    : `<div class="cp-err">The comps worker isn't set up yet: AGENT_KEY is missing in Netlify.</div>`);
+  const workerAge = compsWorkerSeen ? (Date.now() - new Date(compsWorkerSeen).getTime()) : Infinity;
+  const workerOffline = compsMode !== 'routine' && workerAge > 60*1000;
+  if(r === undefined) return `<div class="cp-status"><span class="cp-spin"></span> Loading…</div>`;
+  const watch = r && r.session_url ? ` · <a href="${escapeHtml(r.session_url)}" target="_blank" rel="noopener">watch the agent</a>` : '';
+  if(r && (r.status === 'queued' || r.status === 'running')){
+    const msg = r.progress || (r.status === 'queued'
+      ? (compsMode === 'routine' ? 'Starting the agent on your computer…' : 'Waiting for the comps worker on your computer…')
+      : 'Pulling comps in PropStream…');
+    const offline = (r.status === 'queued' && workerOffline)
+      ? `<div class="cp-err">The comps worker on your laptop isn't running. Double-click <b>Start Comps Worker</b> on the laptop (Chrome open, signed in to PropStream). This job will start as soon as it's on.</div>` : '';
+    return `<div class="cp-status"><span class="cp-spin"></span> ${escapeHtml(msg)}</div>${offline}
+      <div class="cp-meta">Usually 2–5 minutes. Keep the laptop on with Chrome open and the worker window running${watch}.</div>`;
+  }
+  let head = '';
+  if(r && r.status === 'error'){
+    head = `<div class="cp-err">⚠ ${escapeHtml(r.error || 'The lookup failed')}</div><div class="cp-meta">Started ${new Date(r.created_at).toLocaleString()}${watch}</div>`;
+  } else if(r && r.status === 'done'){
+    const s = r.summary || {}, comps = r.comps || [];
+    const rows = comps.map(c => `<tr>
+        <td>${escapeHtml(c.address)}</td><td>${escapeHtml(c.sold_date||'—')}</td><td>${cpMoney(c.sold_price)}</td>
+        <td>${c.beds??'—'}/${c.baths??'—'}</td><td>${cpNum(c.sqft)}</td>
+        <td>${c.sold_price&&c.sqft ? cpMoney(c.sold_price/c.sqft) : '—'}</td>
+        <td>${c.year_built||'—'}</td><td>${c.distance_miles!=null ? Number(c.distance_miles).toFixed(2)+' mi' : '—'}</td></tr>`).join('');
+    head = `
+      <div class="cp-sum">
+        <span>Comps: <b>${comps.length}</b></span>
+        <span>Median sold: <b>${cpMoney(s.median_price)}</b></span>
+        <span>Median $/sqft: <b>${cpMoney(s.median_price_per_sqft)}</b></span>
+        ${s.estimated_arv ? `<span>Est. ARV: <b>${cpMoney(s.estimated_arv)}</b></span>` : ''}
+      </div>
+      ${s.note ? `<div>${escapeHtml(s.note)}</div>` : ''}
+      ${comps.length ? `<div class="cp-table-wrap"><table>
+        <thead><tr><th>Address</th><th>Sold</th><th>Price</th><th>Bd/Ba</th><th>Sq ft</th><th>$/sqft</th><th>Built</th><th>Dist.</th></tr></thead>
+        <tbody>${rows}</tbody></table></div>` : '<div>No sales matched these filters. Try a wider radius or more months.</div>'}
+      <div class="cp-meta">From PropStream · ${new Date(r.finished_at||r.created_at).toLocaleString()}${r.requested_by?' · by '+escapeHtml(r.requested_by):''}${watch}</div>
+      <details style="margin-top:6px"><summary style="cursor:pointer;font-weight:600">Run again with different filters</summary>${compsFilterFormHtml(pid, f)}</details>`;
+    return setupNote + head;
+  }
+  return setupNote + head + compsFilterFormHtml(pid, f);
+}
+
+function paintCompsPanel(pid){
+  const el = document.getElementById('compsPanel-' + pid);
+  if(el) el.innerHTML = compsPanelHtml(pid);
+}
+
+function startCompsPoll(pid){
+  if(compsPolls[pid]) return;
+  const started = Date.now();
+  compsPolls[pid] = setInterval(async () => {
+    try{
+      const j = await api('get-comps&propertyId=' + encodeURIComponent(pid));
+      compsState[pid] = j.request; if(j.workerSeenAt !== undefined) compsWorkerSeen = j.workerSeenAt;
+      paintCompsPanel(pid);
+      const st = j.request && j.request.status;
+      if(st === 'done' || st === 'error' || Date.now() - started > 20*60*1000){
+        clearInterval(compsPolls[pid]); delete compsPolls[pid];
+        if(st === 'done') toast('Comps ready: ' + (j.request.address||''), 'ok');
+        if(st === 'error') toast('Comps failed: ' + (j.request.error||''), 'err');
+      }
+    }catch(e){ /* keep polling through blips */ }
+  }, 8000);
+}
+
+async function toggleCompsPanel(pid){
+  pid = String(pid);
+  const el = document.getElementById('compsPanel-' + pid);
+  if(compsOpen.has(pid)){ compsOpen.delete(pid); if(el){ el.classList.add('hide'); } return; }
+  compsOpen.add(pid);
+  if(el){ el.classList.remove('hide'); el.innerHTML = compsPanelHtml(pid); }
+  await loadCompsDefaults();
+  try{
+    const j = await api('get-comps&propertyId=' + encodeURIComponent(pid));
+    compsState[pid] = j.request; if(j.workerSeenAt !== undefined) compsWorkerSeen = j.workerSeenAt;
+  }catch(e){ compsState[pid] = null; toast(e.message,'err'); }
+  paintCompsPanel(pid);
+  const st = compsState[pid] && compsState[pid].status;
+  if(st === 'queued' || st === 'running') startCompsPoll(pid);
+}
+
+async function runComps(pid){
+  pid = String(pid);
+  const p = properties.find(x => String(x.id) === pid);
+  const address = p ? p.property_address : (document.querySelector(`[data-card-id="${CSS.escape(pid)}"] .property`)||{}).textContent;
+  if(!address){ toast('This lead has no property address','err'); return; }
+  const filters = readCompsForm(pid);
+  compsState[pid] = { status:'queued', filters, created_at:new Date().toISOString() };
+  paintCompsPanel(pid);
+  try{
+    const j = await api('request-comps', {method:'POST', body:{propertyId:pid, address, filters}});
+    compsState[pid] = j.request; if(j.workerSeenAt !== undefined) compsWorkerSeen = j.workerSeenAt;
+    if(j.alreadyRunning) toast('Comps for this property are already running','ok');
+    paintCompsPanel(pid);
+    startCompsPoll(pid);
+  }catch(e){
+    compsState[pid] = { status:'error', error:e.message, filters, created_at:new Date().toISOString() };
+    paintCompsPanel(pid);
+  }
+}
+
+async function saveCompsDefaults(pid){
+  try{
+    const j = await api('set-comps-defaults', {method:'POST', body:{filters: readCompsForm(String(pid))}});
+    compsDefaults = j.filters; toast('Saved as your default comp filters','ok');
+  }catch(e){ toast(e.message,'err'); }
+}
+
+async function api(action, opts){
+  if(!password) throw new Error('Not signed in');
+  // Split action like "search-numbers&areaCode=516" into name + extra params
+  let actionName = action, extra = '';
+  const amp = action.indexOf('&');
+  if(amp >= 0){
+    actionName = action.slice(0, amp);
+    extra = action.slice(amp); // keeps the leading &
+  }
+  const url = backend + (backend.includes('?')?'&':'?') + 'action=' + encodeURIComponent(actionName) + extra;
+  const init = {
+    method: opts?.method || 'GET',
+    headers: { 'X-Access-Password': password, ...(opts?.body ? {'Content-Type':'application/json'} : {}) },
+    body: opts?.body ? JSON.stringify(opts.body) : undefined,
   };
-}
-const ok  = (body, code = 200) => ({ statusCode: code, headers: corsHeaders(), body: JSON.stringify(body) });
-const err = (msg,  code = 400) => ({ statusCode: code, headers: corsHeaders(), body: JSON.stringify({ error: msg }) });
-
-// ── Per-caller logins ─────────────────────────────────────────
-// This app shipped with one ACCESS_PASSWORD the whole team shared, which
-// meant a login said nothing about WHO was on the line and couldn't be
-// revoked for one person without changing it for everybody. Each caller
-// now has their own password hashed onto their profile row. The password
-// is what identifies them, so there's no username to type and no profile
-// picker to impersonate someone through.
-const authCrypto = require('crypto');
-
-function hashPassword(pw) {
-  return authCrypto.createHash('sha256').update(String(pw), 'utf8').digest('hex');
+  let r;
+  try { r = await fetch(url, init); }
+  catch(e){ throw new Error('Network error reaching backend'); }
+  let j; try { j = await r.json(); } catch { j = null; }
+  if(!r.ok){
+    const e = new Error((j && (j.error||j.message)) || ('HTTP '+r.status));
+    e.status = r.status;
+    throw e;
+  }
+  return j;
 }
 
-// Returns {name, role, profileId} or null if the password matches nobody.
-async function identifyUser(provided) {
-  if (!provided) return null;
-  const owner = process.env.ACCESS_PASSWORD;
-  // Owner password short-circuits — no DB round trip on the common path.
-  if (owner && provided === owner) return { name: 'Owner', role: 'admin', profileId: null };
-  const hash = hashPassword(provided);
-  const { json } = await supa(
-    `/profiles?password_hash=eq.${encodeURIComponent(hash)}&is_active=is.true&select=id,name&limit=1`
-  );
-  const p = Array.isArray(json) && json[0];
-  if (!p) return null;
-  return { name: p.name, role: 'caller', profileId: p.id };
+// ── Phone formatting ────────────────────────────────────────────
+function toE164(s){
+  if(!s) return '';
+  let raw = String(s).trim();
+  // Excel/skip-trace exports often hand back floats: "3057614716.0" — drop the decimal tail
+  raw = raw.replace(/\.\d+$/, '');
+  const d = raw.replace(/\D/g,'');
+  if(d.length===10) return '+1'+d;
+  if(d.length===11 && d[0]==='1') return '+'+d;
+  if(raw.startsWith('+') && d.length>=11 && d.length<=15) return '+'+d;
+  return ''; // anything else is not a dialable US number — don't fabricate one
 }
-
-// ── Twilio helpers ────────────────────────────────────────────
-function twilioAuth() {
-  const sid    = process.env.TWILIO_API_KEY_SID;
-  const secret = process.env.TWILIO_API_KEY_SECRET;
-  if (sid && secret) return 'Basic ' + Buffer.from(`${sid}:${secret}`).toString('base64');
-  const aSid  = process.env.TWILIO_ACCOUNT_SID;
-  const token = process.env.TWILIO_AUTH_TOKEN;
-  if (aSid && token) return 'Basic ' + Buffer.from(`${aSid}:${token}`).toString('base64');
-  throw new Error('Twilio credentials not configured');
-}
-function twilioSid() {
-  const s = process.env.TWILIO_ACCOUNT_SID;
-  if (!s) throw new Error('TWILIO_ACCOUNT_SID is required');
+function fmtPhone(s){
+  if(!s) return '';
+  const d = String(s).replace(/\D/g,'').replace(/^1/,'');
+  if(d.length===10) return `(${d.slice(0,3)}) ${d.slice(3,6)}-${d.slice(6)}`;
   return s;
 }
-async function tw(path, method = 'GET', formObj) {
-  const init = { method, headers: { Authorization: twilioAuth() } };
-  if (formObj) {
-    const body = new URLSearchParams();
-    for (const [k, v] of Object.entries(formObj)) {
-      if (v === undefined || v === null) continue;
-      body.append(k, String(v));
-    }
-    init.body = body.toString();
-    init.headers['Content-Type'] = 'application/x-www-form-urlencoded';
-  }
-  const r = await fetch(TWILIO_BASE + path, init);
-  const text = await r.text();
-  let json; try { json = JSON.parse(text); } catch { json = { raw: text }; }
-  if (!r.ok) {
-    const e = new Error((json && (json.message || json.error_message)) || `HTTP ${r.status}`);
-    e.code = r.status;
-    throw e;
-  }
-  return json;
+function fmtDuration(sec){
+  if(!sec) return '—';
+  const m = Math.floor(sec/60), s = sec%60;
+  return m+':'+String(s).padStart(2,'0');
 }
-// ── PostGrid (postcards) ─────────────────────────────────────────
-function postgridMode() {
-  return (process.env.POSTGRID_MODE || 'test').toLowerCase() === 'live' ? 'live' : 'test';
-}
-function postgridApiKey() {
-  return postgridMode() === 'live'
-    ? process.env.POSTGRID_LIVE_API_KEY
-    : process.env.POSTGRID_TEST_API_KEY;
-}
-async function postgrid(path, params) {
-  const key = postgridApiKey();
-  if (!key) throw new Error('PostGrid API key not configured');
-  const body = new URLSearchParams();
-  const flatten = (obj, prefix) => {
-    for (const [k, v] of Object.entries(obj || {})) {
-      if (v === null || v === undefined || v === '') continue;
-      const paramKey = prefix ? `${prefix}[${k}]` : k;
-      if (typeof v === 'object' && !Array.isArray(v)) flatten(v, paramKey);
-      else body.append(paramKey, v);
-    }
-  };
-  flatten(params, '');
-  const res = await fetch(`https://api.postgrid.com${path}`, {
-    method: 'POST',
-    headers: { 'x-api-key': key, 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: body.toString(),
-  });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    const msg = (json && json.error && json.error.message) || `PostGrid error ${res.status}`;
-    throw new Error(msg);
-  }
-  return json;
-}
-// Parses "123 Main St, Tulsa, OK 74107" style free-text addresses into
-// the structured fields PostGrid's `to`/`from` objects expect.
-function parseMailingAddress(raw) {
-  const out = { addressLine1: '', city: '', provinceOrState: '', postalOrZip: '', countryCode: 'US' };
-  const parts = String(raw || '').split(',').map(s => s.trim()).filter(Boolean);
-  if (parts.length >= 3) {
-    out.addressLine1 = parts[0];
-    out.city = parts[1];
-    const stateZip = parts.slice(2).join(' ').trim();
-    const m = stateZip.match(/^([A-Za-z]{2})\s*([0-9]{5})?/);
-    if (m) { out.provinceOrState = m[1].toUpperCase(); if (m[2]) out.postalOrZip = m[2]; }
-  } else if (parts.length === 2) {
-    out.addressLine1 = parts[0];
-    const m = parts[1].match(/^([A-Za-z]{2})\s*([0-9]{5})?/);
-    if (m) { out.provinceOrState = m[1].toUpperCase(); if (m[2]) out.postalOrZip = m[2]; }
-    else out.city = parts[1];
-  } else if (parts.length === 1) {
-    out.addressLine1 = parts[0];
-  }
-  return out;
+function fmtTalkTime(sec){
+  if(!sec) return '0m';
+  const h = Math.floor(sec/3600), m = Math.floor((sec%3600)/60), s = sec%60;
+  if(h) return h+'h '+m+'m';
+  if(m) return m+'m '+s+'s';
+  return s+'s';
 }
 
-function escapeXml(s) {
-  return String(s).replace(/[<>&"']/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&apos;'}[c]));
+// ── Login flow ──────────────────────────────────────────────────
+// The backend answers 'ping' with who this password belongs to:
+// {name, role:'admin'|'caller', profileId}. A caller is pinned to their
+// own profile — the picker never opens for them.
+let currentUser = null;
+
+function isAdmin(){ return !currentUser || currentUser.role === 'admin'; }
+
+function applyUser(){
+  if(currentUser && currentUser.role === 'caller' && currentUser.profileId){
+    activeProfileId   = currentUser.profileId;
+    activeProfileName = currentUser.name;
+    localStorage.setItem(LS.profileId, activeProfileId);
+    localStorage.setItem(LS.profileName, activeProfileName);
+    $('profilePicker').classList.remove('open');
+  }
+  updateProfileBadge();
 }
 
-// ── Voicemail drop recording — auth-embedded playback URL ──────
-// Twilio recording media requires HTTP Basic Auth by default. Rather
-// than store a secret at rest, we rebuild this URL on demand from
-// env credentials + the stored (non-secret) RecordingSid.
-// Returns a URL the browser can actually play.
-// It points back at this function (action=recording), which attaches the
-// Twilio credentials server-side and streams the audio through.
-//
-// The old version embedded user:pass directly in the api.twilio.com URL.
-// That (a) shipped the Twilio auth token to every browser and (b) doesn't
-// play anyway — Chrome and Safari strip embedded credentials from media
-// requests, which is why recordings were silent.
-function recordingPlaybackUrl(recordingSid) {
-  return `/api?action=recording&sid=${encodeURIComponent(recordingSid)}`;
-}
-
-// TwiML played when we call a rep's own phone to record their VM drop message
-function handleRecordVmTwiml(event) {
-  const qs = event.queryStringParameters || {};
-  const baseUrl = APP_BASE_URL;
-  const profileId = qs.profileId || '';
-  const statusCb = `${baseUrl}?action=record-vm-status&profileId=${encodeURIComponent(profileId)}`;
-  const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response>
-    <Say voice="alice">Record your voicemail drop message after the tone. Press pound when you're finished.</Say>
-    <Record maxLength="120" playBeep="true" finishOnKey="#" trim="trim-silence" recordingStatusCallback="${escapeXml(statusCb)}" recordingStatusCallbackEvent="completed" />
-    <Say voice="alice">Got it. That message is saved. Goodbye.</Say>
-  </Response>`;
-  return { statusCode: 200, headers: { 'Content-Type': 'text/xml' }, body: twiml };
-}
-
-// Twilio POSTs here once the recording above is finalized
-async function handleRecordVmStatus(event) {
+$('loginForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const pw = $('pwInput').value;
+  if(!pw) return;
+  $('loginBtn').disabled = true;
+  $('loginErr').textContent = '';
+  const oldPwd = password;
+  password = pw;
   try {
-    const params = parseFormEncoded(event.body || '');
-    const qs = event.queryStringParameters || {};
-    const profileId = qs.profileId || '';
-    const recordingSid = params.RecordingSid || '';
-    const duration = parseInt(params.RecordingDuration || '0', 10) || 0;
-    if (profileId && recordingSid) {
-      await supa(`/profiles?id=eq.${encodeURIComponent(profileId)}`, 'PATCH', {
-        vm_recording_sid: recordingSid,
-        vm_recording_duration: duration,
-        vm_recorded_at: new Date().toISOString(),
+    const j = await api('ping');
+    currentUser = j.user || null;
+    localStorage.setItem(LS.pwd, pw);
+    showApp();
+    boot();
+  } catch (err) {
+    password = oldPwd;
+    $('loginErr').textContent = err.status === 401 ? 'Wrong password' : (err.message || 'Failed');
+    $('loginBtn').disabled = false;
+  }
+});
+
+function showLogin(){
+  $('login').classList.remove('hide');
+  $('app').classList.add('hide');
+  $('pwInput').value = '';
+  $('pwInput').focus();
+}
+function showApp(){
+  $('login').classList.add('hide');
+  $('app').classList.remove('hide');
+}
+
+// ── State ───────────────────────────────────────────────────────
+let properties = [];   // [{id, owners, property_address, mailing_address, phones, lead}]
+let savedContracts = []; // [{url, filename}] — uploaded contracts available to send
+let ownedNumbers = [];
+let activeProfileId   = parseInt(localStorage.getItem(LS.profileId), 10) || null;
+let activeProfileName = localStorage.getItem(LS.profileName) || '';
+let allProfiles = [];
+let pipelineDeals = [];   // populated by loadPipeline()
+let currentView = 'dialer';
+let openDealId = null;
+let openDealData = null;
+let logRows = [];
+const PAGE_SIZE = 20;
+let page = 1;
+let searchQuery = '';
+let assignFilter = ''; // profile id to filter by, '' = show all
+let webOnlyFilter = false;              // show only website leads
+let webLeadIndex = {};                  // property_id -> {source, web_lead_at, lead_seen}
+let announcedWebLeads = new Set();      // ids we've already toasted about
+const WEB_LEAD_FN = '/.netlify/functions/web-lead';
+let hideOthersAssigned = localStorage.getItem(LS.hideOthers) === '1'; // hide leads assigned to OTHER teammates
+let selectedListColor = 'none'; // color tag applied to uploaded list
+let currentUploadTemplate = 'va'; // active upload column template
+const HL_COLORS = {
+  red:    { border:'#ef4444', bg:'#fff5f5' },
+  orange: { border:'#f97316', bg:'#fff7ed' },
+  yellow: { border:'#f59e0b', bg:'#fffbeb' },
+  green:  { border:'#10b981', bg:'#f0fdf4' },
+  blue:   { border:'#3b82f6', bg:'#eff6ff' },
+  purple: { border:'#8b5cf6', bg:'#f5f3ff' },
+};
+let listFilter   = localStorage.getItem('cb_list_filter') || '';
+let pdListFilter = '';
+
+// ── State filter (parsed from the free-text property address) ───
+const US_STATES = [
+  ['AL','Alabama'],['AK','Alaska'],['AZ','Arizona'],['AR','Arkansas'],['CA','California'],
+  ['CO','Colorado'],['CT','Connecticut'],['DE','Delaware'],['DC','Washington DC'],['FL','Florida'],
+  ['GA','Georgia'],['HI','Hawaii'],['ID','Idaho'],['IL','Illinois'],['IN','Indiana'],
+  ['IA','Iowa'],['KS','Kansas'],['KY','Kentucky'],['LA','Louisiana'],['ME','Maine'],
+  ['MD','Maryland'],['MA','Massachusetts'],['MI','Michigan'],['MN','Minnesota'],['MS','Mississippi'],
+  ['MO','Missouri'],['MT','Montana'],['NE','Nebraska'],['NV','Nevada'],['NH','New Hampshire'],
+  ['NJ','New Jersey'],['NM','New Mexico'],['NY','New York'],['NC','North Carolina'],['ND','North Dakota'],
+  ['OH','Ohio'],['OK','Oklahoma'],['OR','Oregon'],['PA','Pennsylvania'],['RI','Rhode Island'],
+  ['SC','South Carolina'],['SD','South Dakota'],['TN','Tennessee'],['TX','Texas'],['UT','Utah'],
+  ['VT','Vermont'],['VA','Virginia'],['WA','Washington'],['WV','West Virginia'],['WI','Wisconsin'],
+  ['WY','Wyoming'],
+];
+const US_STATE_CODES = new Set(US_STATES.map(s => s[0]));
+function extractState(address){
+  if(!address) return '';
+  // Matches ", OK 74107", ", OK, 74107", or a trailing ", OK" with no zip
+  const m = String(address).match(/,\s*([A-Za-z]{2})\b(?!\w)(?:[\s,-]*\d{5})?\s*$/);
+  const code = m ? m[1].toUpperCase() : '';
+  return US_STATE_CODES.has(code) ? code : '';
+}
+
+// ── County assessor record links per market ─────────────────────
+const ASSESSOR_LINKS = {
+  OK: 'https://assessor.tulsacounty.org/Property/Search',                                              // Tulsa County
+  GA: 'https://qpublic.schneidercorp.com/Application.aspx?App=DekalbCountyGA&Layer=Parcels&PageType=Search', // DeKalb County
+  VA: 'https://www.webgis.net/va/fluvanna/',                                                           // Fluvanna County
+  DE: 'https://www3.newcastlede.gov/parcel/search/',                                                   // New Castle County
+};
+function assessorUrl(addr){
+  const st = extractState(addr || '');
+  if(st && ASSESSOR_LINKS[st]) return ASSESSOR_LINKS[st];
+  return 'https://www.google.com/search?q=' + encodeURIComponent((addr || '') + ' county assessor property records');
+}
+let stateFilter = localStorage.getItem(LS.stateFilter) || '';
+
+function getFilteredProperties(){
+  let list = properties;
+  if(searchQuery.trim()){
+    const q = searchQuery.trim().toLowerCase();
+    list = list.filter(p => {
+      const owners = (p.owners||'').toLowerCase();
+      const addr = (p.property_address||'').toLowerCase();
+      const phones = (p.phones||[]).map(ph => (ph.e164||'').replace(/\D/g,'')).join(' ');
+      const qDigits = q.replace(/\D/g,'');
+      return owners.includes(q) || addr.includes(q) || (qDigits.length>=3 && phones.includes(qDigits));
+    });
+  }
+  if(assignFilter){
+    list = list.filter(p => String((p.lead||{}).assigned_to) === String(assignFilter));
+  }
+  if(webOnlyFilter){
+    list = list.filter(p => !!webLeadIndex[p.id]);
+  }
+  if(hideOthersAssigned){
+    list = list.filter(p => {
+      const a = (p.lead||{}).assigned_to;
+      return a == null || a === '' || String(a) === String(activeProfileId);
+    });
+  }
+  if(stateFilter){
+    list = list.filter(p => extractState(p.property_address) === stateFilter);
+  }
+  if(listFilter){
+    list = listFilter === '__none__'
+      ? list.filter(p => !(p.list_name || '').trim())
+      : list.filter(p => (p.list_name || '') === listFilter);
+  }
+  return list;
+}
+
+// ── Named lists ───────────────────────────────────────────────
+// Every distinct list name currently in the data, for the filter and
+// the power dialer.
+function allListNames(){
+  const seen = new Map();
+  properties.forEach(p => {
+    const n = (p.list_name || '').trim();
+    if(n) seen.set(n, (seen.get(n) || 0) + 1);
+  });
+  return [...seen.entries()].sort((a,b) => a[0].localeCompare(b[0]));
+}
+
+function populateListSelects(){
+  const names = allListNames();
+  const unlabeled = properties.filter(p => !(p.list_name || '').trim()).length;
+  const opts = '<option value="">All lists</option>' +
+    names.map(([n,c]) => `<option value="${escapeHtml(n)}">${escapeHtml(n)} (${c})</option>`).join('') +
+    (unlabeled ? `<option value="__none__">— No list (${unlabeled})</option>` : '');
+
+  const sel = $('listFilterSel');
+  if(sel){ sel.innerHTML = opts; sel.value = listFilter; }
+
+  const pdSel = $('pdListFilter');
+  if(pdSel){
+    pdSel.innerHTML = '<option value="">Every list</option>' +
+      names.map(([n,c]) => `<option value="${escapeHtml(n)}">${escapeHtml(n)} (${c})</option>`).join('') +
+      (unlabeled ? `<option value="__none__">— No list (${unlabeled})</option>` : '');
+    pdSel.value = pdListFilter;
+  }
+
+  const dl = $('ltListSuggestions');
+  if(dl) dl.innerHTML = names.map(([n]) => `<option value="${escapeHtml(n)}"></option>`).join('');
+}
+
+function setListFilter(v){
+  listFilter = v || '';
+  localStorage.setItem(LS.listFilter, listFilter);
+  page = 1;
+  renderPage();
+}
+let activeCall = null;
+const noteSaveTimers = {};
+
+// ── Modal / tab handling ────────────────────────────────────────
+document.addEventListener('click', e => {
+  const open = e.target.closest('[data-open]');
+  if(open){ openModal(open.dataset.open); return; }
+  const close = e.target.closest('[data-close]');
+  if(close){ $(close.dataset.close).classList.remove('open'); return; }
+  const tab = e.target.closest('.modal-tab');
+  if(tab){
+    tab.parentElement.querySelectorAll('.modal-tab').forEach(b => b.classList.toggle('active', b===tab));
+    const modal = tab.closest('.modal');
+    modal.querySelectorAll('.tab-pane').forEach(p => p.classList.toggle('active', p.id === 'tab-'+tab.dataset.tab));
+  }
+});
+function openModal(id){
+  $(id).classList.add('open');
+  if(id==='addLeadModal') prepAddLeadForm();
+  if(id==='numbersModal') loadOwnedNumbers();
+  if(id==='logModal')    loadLog();
+  if(id==='recModal')    loadCallRecordings();
+  if(id==='settingsModal'){
+    $('settingsForwardPhone').value = forwardPhone;
+    $('settingsBackendUrl').value   = backend;
+    $('settingsVmMessage').value    = localStorage.getItem(LS.vmMessage) || DEFAULT_VM_MESSAGE;
+    $('settingsVmMode').value       = localStorage.getItem(LS.vmMode) || 'ai';
+    $('settingsVmVoice').value      = localStorage.getItem(LS.vmVoice) || 'Polly.Ruth-Generative';
+    $('settingsCompany').value      = companyName();
+    $('settingsWebsite').value      = companySite();
+    refreshVmRecordStatus();
+    loadRecConfig();
+  }
+  if(id==='uploadModal'){
+    $('uploadPreview').classList.add('hide');
+    $('csvFile').value = '';
+    if($('scrubDnc')) $('scrubDnc').checked = true;
+    if($('uploadListNameManual')) $('uploadListNameManual').value = '';
+    currentUploadTemplate = 'va';
+    document.querySelectorAll('.upload-template-btn').forEach(b => {
+      const active = b.dataset.template === 'va';
+      b.style.borderColor = active ? '#96751A' : '#d1d5db';
+      b.style.background  = active ? '#faf3e0' : '#fff';
+      b.style.color       = active ? '#96751A' : '#374151';
+    });
+    document.querySelectorAll('.list-color-btn').forEach(b => {
+      b.style.borderColor = b.dataset.listcolor === 'none' ? '#0f0d0a' : 'transparent';
+    });
+    selectedListColor = 'none';
+  }
+}
+
+// ── Header bits: caller-ID, counter ─────────────────────────────
+function refreshCallerStrip(){
+  const sel = $('cidSelect');
+  sel.innerHTML = '';
+  if(!ownedNumbers.length){
+    sel.innerHTML = '<option value="">— no numbers owned —</option>';
+    $('cidDot').className = 'dot warn';
+    return;
+  }
+  ownedNumbers.forEach(n => {
+    const opt = document.createElement('option');
+    opt.value = n.phoneNumber;
+    opt.textContent = fmtPhone(n.phoneNumber) + (n.friendlyName && n.friendlyName!==n.phoneNumber ? ' · '+n.friendlyName : '');
+    if(n.phoneNumber === activeCallerId) opt.selected = true;
+    sel.appendChild(opt);
+  });
+  if(!activeCallerId || !ownedNumbers.find(n => n.phoneNumber === activeCallerId)){
+    activeCallerId = ownedNumbers[0].phoneNumber;
+    localStorage.setItem(LS.active, activeCallerId);
+    sel.value = activeCallerId;
+  }
+  $('cidDot').className = (activeCallerId && forwardPhone) ? 'dot live' : 'dot warn';
+}
+$('cidSelect').addEventListener('change', e => {
+  activeCallerId = e.target.value;
+  localStorage.setItem(LS.active, activeCallerId);
+  refreshCallerStrip();
+  toast('Caller ID set to '+fmtPhone(activeCallerId),'ok');
+});
+function applyDialMode(){
+  document.body.classList.toggle('my-phone-mode', useMyPhone);
+  const b = $('dialModeBtn');
+  if(b){
+    b.setAttribute('aria-pressed', useMyPhone ? 'true' : 'false');
+    b.querySelectorAll('.dm-opt').forEach(o => o.classList.toggle('on', (o.dataset.m === 'mine') === useMyPhone));
+  }
+}
+$('dialModeBtn').addEventListener('click', () => {
+  if(activeCall){ toast('Finish the current call before switching','err'); return; }
+  useMyPhone = !useMyPhone;
+  try { localStorage.setItem('ww_use_my_phone', useMyPhone ? '1' : '0'); } catch {}
+  applyDialMode();
+  toast(useMyPhone ? 'Calling from your phone. Numbers open your phone app.' : 'Calling through the dialer', 'ok');
+});
+applyDialMode();
+
+// Open the phone's own dialer for a number and mark the lead called.
+function callFromMyPhone(e164, p){
+  const num = toE164(e164) || String(e164||'').replace(/[^\d+]/g,'');
+  if(!num){ toast('That number is not dialable','err'); return; }
+  if(p && p.lead && !p.lead.called){
+    p.lead.called = true;
+    api('update-lead', {method:'POST', body:{propertyId:p.id, called:true}}).catch(err=>toast(err.message,'err'));
+    renderPage(); refreshCounter();
+  }
+  window.location.href = 'tel:' + num;
+}
+
+// iPhone home-screen apps can stay shifted up after the keyboard closes,
+// which hides the top of the screen. Nudge the page back when typing ends.
+document.addEventListener('focusout', () => {
+  setTimeout(() => {
+    const a = document.activeElement;
+    if(a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) return;
+    window.scrollTo(window.scrollX, window.scrollY);
+  }, 60);
+});
+
+function refreshCounter(){
+  let called=0,hot=0,warm=0,callback=0;
+  for(const p of properties){
+    const e = p.lead;
+    if(e.called || e.lead_status) called++;
+    if(e.lead_status==='hot') hot++;
+    if(e.lead_status==='warm') warm++;
+    if(e.lead_status==='callback') callback++;
+  }
+  const total = properties.length;
+  const parts = ['<b>'+called+'</b> called'];
+  if(hot)      parts.push('🔥 '+hot+' hot');
+  if(warm)     parts.push('☀️ '+warm+' warm');
+  if(callback) parts.push('📞 '+callback+' callback');
+  parts.push('<b>'+(total-called)+'</b> remaining');
+  parts.push('<span style="opacity:.55;font-size:11px">'+BUILD_ID+'</span>');
+  $('counter').innerHTML = parts.join(' · ');
+}
+
+// ── Render properties ───────────────────────────────────────────
+const STATUS_OPTIONS = [
+  ['', '— Select lead status'],
+  ['hot',           '🔥 Hot Lead'],
+  ['warm',          '☀️ Warm Lead'],
+  ['callback',      '📞 Call Back'],
+  ['voicemail',     '📱 Left Voicemail'],
+  ['noanswer',      '🔕 No Answer'],
+  ['notinterested', '👎 Not Interested'],
+  ['wrong',         '❌ Wrong Number'],
+];
+const STATUS_COLORS = {
+  hot:           {border:'#16a34a',bg:'#f0fdf4',pip:'#16a34a'},
+  warm:          {border:'#d97706',bg:'#fffbeb',pip:'#d97706'},
+  callback:      {border:'#2563eb',bg:'#eff6ff',pip:'#2563eb'},
+  voicemail:     {border:'#7c3aed',bg:'#faf5ff',pip:'#7c3aed'},
+  noanswer:      {border:'#9ca3af',bg:'#f9fafb',pip:'#9ca3af'},
+  notinterested: {border:'#9ca3af',bg:'#f9fafb',pip:'#9ca3af'},
+  wrong:         {border:'#9ca3af',bg:'#f9fafb',pip:'#9ca3af'},
+};
+
+// ── Lead spec chips ─────────────────────────────────────────────
+// Property facts arrive from the CSV import folded into the notes as
+// "Lot: 9,348 sqft (0.21 ac) · Sqft: 1700 · Year Built: 1974". Pull that line
+// back apart so the card shows real fields instead of a wall of text, and so
+// each card only renders the fields that lead actually has.
+const SPEC_ICONS = {
+  'lot':'📐', 'lot size':'📐', 'sqft':'🏠', 'square footage':'🏠', 'building sqft':'🏠',
+  'year built':'🗓', 'bed/bath':'🛏', 'beds/baths':'🛏', 'owner 2':'👤',
+  'zoning':'🗺', 'apn':'🔖', 'county':'📍',
+};
+const SPEC_GOLD = ['lot','lot size','zoning']; // the numbers that decide a teardown
+function parseLeadSpecs(text){
+  const raw = String(text||'');
+  if(!raw.trim()) return { specs:[], rest:raw };
+  const lines = raw.split('\n');
+  const specs = [];
+  const keep = [];
+  lines.forEach(line => {
+    const parts = line.split('·').map(s => s.trim()).filter(Boolean);
+    const parsed = parts.map(pt => {
+      const m = pt.match(/^([A-Za-z0-9 \/]{2,16}):\s*(.+)$/);
+      return m ? { k:m[1].trim(), v:m[2].trim() } : null;
+    });
+    // Only a spec line if every segment is Key: value AND it's either the
+    // importer's multi-part line or a key we recognise — otherwise a genuine
+    // note like "Roof: needs work" would get eaten and shown as a chip.
+    const isSpecLine = parts.length && parsed.every(Boolean) &&
+      (parts.length > 1 || SPEC_ICONS[parsed[0].k.toLowerCase()]);
+    if(isSpecLine) parsed.forEach(s => specs.push(s));
+    else keep.push(line);
+  });
+  return { specs, rest: keep.join('\n').trim() };
+}
+// Which card layout to use for this lead. Set at import from the upload
+// template (stored on list_name), with a data fallback for older leads.
+function detectCardView(p, lead, specs){
+  const list = String(p.list_name || lead.list_name || '').toLowerCase();
+  if(/lux/.test(list)) return 'lux';
+  if(/^va leads/.test(list) || /va lead/.test(list)) return 'va';
+  const has = k => specs.some(sp => sp.k.toLowerCase() === k);
+  // Older leads imported before formats were stamped: infer from the fields present
+  if(has('lot') || has('lot size') || has('zoning') || has('apn')) return 'lux';
+  if((lead.recording_url||'').trim()) return 'va';
+  return 'standard';
+}
+// LUX cards lead with the land numbers — that's what decides a teardown
+const LAND_KEYS = [['Lot','lot size'], ['Sqft','building sqft'], ['Zoning','zone'], ['Year Built','built']];
+function landStripHtml(specs){
+  const get = name => {
+    const hit = specs.find(sp => sp.k.toLowerCase() === name.toLowerCase());
+    return hit ? hit.v : '';
+  };
+  const items = LAND_KEYS.map(([k]) => ({ k, v: get(k) }));
+  if(!items.some(i => i.v)) return ''; // nothing to show — skip the strip entirely
+  return `<div class="land-strip">` + items.map(i =>
+    `<div class="ls-item"><div class="ls-k">${escapeHtml(i.k)}</div>
+     <div class="ls-v${i.v?'':' missing'}">${escapeHtml(i.v || '—')}</div></div>`
+  ).join('') + `</div>`;
+}
+function specChipsHtml(p, lead, specs, view){
+  const chips = [];
+  const listName = (p.list_name || lead.list_name || '').trim();
+  if(listName) chips.push(`<span class="chip list">🏷 ${escapeHtml(listName)}</span>`);
+  const inStrip = view === 'lux' ? LAND_KEYS.map(([k]) => k.toLowerCase()) : [];
+  specs.forEach(s => {
+    if(inStrip.includes(s.k.toLowerCase())) return; // already in the land strip
+    const key = s.k.toLowerCase();
+    const icon = SPEC_ICONS[key] || 'ℹ️';
+    const gold = SPEC_GOLD.includes(key) ? ' gold' : '';
+    chips.push(`<span class="chip${gold}">${icon} ${escapeHtml(s.k)}: ${escapeHtml(s.v)}</span>`);
+  });
+  const phones = p.phones || [];
+  const dnc = phones.filter(ph => /dnc|do not call/i.test(String(ph.type||''))).length;
+  if(phones.length && dnc === phones.length) chips.push(`<span class="chip warn">⛔ All numbers DNC</span>`);
+  else if(dnc) chips.push(`<span class="chip warn">⛔ ${dnc} DNC</span>`);
+  return chips.length ? `<div class="spec-chips">${chips.join('')}</div>` : '';
+}
+
+function renderPage(){
+  if(!properties.length){
+    $('cards').innerHTML = `
+      <div class="empty-state">
+        <div class="icon">📋</div>
+        <h2>No properties loaded</h2>
+        <p>Upload a CSV of skip-traced properties to get started.</p>
+        <button class="btn-primary" data-open="uploadModal">⬆ Upload CSV</button>
+      </div>`;
+    $('pageNav').innerHTML = '';
+    return;
+  }
+  const filtered = getFilteredProperties();
+  if(searchQuery.trim() && !filtered.length){
+    $('cards').innerHTML = `
+      <div class="empty-state">
+        <div class="icon">🔍</div>
+        <h2>No matches</h2>
+        <p>No leads found for "${escapeHtml(searchQuery)}"</p>
+      </div>`;
+    $('pageNav').innerHTML = '';
+    return;
+  }
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  page = Math.max(1, Math.min(page, totalPages));
+  const start = (page-1) * PAGE_SIZE;
+  const slice = filtered.slice(start, start+PAGE_SIZE);
+
+  const out = [];
+  slice.forEach((p, i) => {
+    const idx = start + i + 1;
+    const lead = p.lead || {called:false, lead_status:'', notes:''};
+    const notesToggleLabel = p.va_lead ? '📋 VA Notes' : '🏠 Property Info';
+    const notesSummaryLabel = p.va_lead ? '📋 VA / pre-existing notes' : '🏠 Property info / pre-existing notes';
+    const called = lead.called || !!lead.lead_status;
+    const sc = lead.lead_status ? STATUS_COLORS[lead.lead_status] : null;
+    const highlightStyles = {
+      red:    { border:'#ef4444', bg:'#fff5f5' },
+      orange: { border:'#f97316', bg:'#fff7ed' },
+      yellow: { border:'#f59e0b', bg:'#fffbeb' },
+      green:  { border:'#10b981', bg:'#f0fdf4' },
+      blue:   { border:'#3b82f6', bg:'#eff6ff' },
+      purple: { border:'#8b5cf6', bg:'#f5f3ff' },
+    };
+    const hl = lead.highlight ? highlightStyles[lead.highlight] : null;
+    const style = sc ? `border-color:${sc.border};background:${sc.bg}` :
+                  hl ? `border-color:${hl.border};background:${hl.bg};border-width:3px` :
+                  called ? 'border-color:#047857;background:#ecfdf5' : '';
+    const pipBg = sc ? sc.pip : 'transparent';
+    const assignedProfile = lead.assigned_to != null ? allProfiles.find(pr => String(pr.id) === String(lead.assigned_to)) : null;
+    const phoneHtml = (p.phones||[]).map((ph,j) => {
+      const parts = String(ph.type||'').split('·').map(s => s.trim()).filter(Boolean);
+      const isDnc  = parts.some(t => /^(dnc|do not call)$/i.test(t));
+      const kind   = parts.find(t => !/^(dnc|do not call)$/i.test(t)) || '';
+      const isMob  = /mob|cell|wireless/i.test(kind);
+      const kindCls = kind ? (isMob ? ' mob' : ' land') : '';
+      return `
+      <button class="phone${isDnc?' dnc':''}" data-call data-pid="${escapeHtml(p.id)}" data-phidx="${j}">
+        <span class="num">${escapeHtml(fmtPhone(ph.e164))}</span>
+        ${kind ? `<span class="badge${kindCls}">${escapeHtml(kind)}</span>` : ''}
+        ${isDnc ? `<span class="badge dnc-badge">⛔ DNC</span>` : ''}
+        <span class="badge">📞 Call</span>
+      </button>`;
+    }).join('');
+    const { specs:leadSpecs, rest:leadNotesText } = parseLeadSpecs(lead.va_notes);
+    const cardView  = detectCardView(p, lead, leadSpecs);
+    const chipsHtml = specChipsHtml(p, lead, leadSpecs, cardView);
+    const landHtml  = cardView === 'lux' ? landStripHtml(leadSpecs) : '';
+    const viewTag   = cardView === 'lux' ? '<span class="view-tag lux">LUX</span>'
+                    : cardView === 'va'  ? '<span class="view-tag va">VA</span>' : '';
+    const statusOptions = STATUS_OPTIONS.map(([v,l]) => `<option value="${v}"${v===(lead.lead_status||'')?' selected':''}>${l}</option>`).join('');
+
+    out.push(`
+      <div class="card view-${cardView}${called?' called':''}" data-id="${escapeHtml(p.id)}" data-card-id="${escapeHtml(p.id)}" style="${style}">
+        <div class="card-top">
+          <div class="card-info">
+            <div class="owners">${escapeHtml(p.owners||'(no name)')}${p.va_lead?` <span class="va-lead-tag">VA</span>`:''}${viewTag}</div>
+            <div class="property">${escapeHtml(p.property_address||'')}</div>
+            ${p.mailing_address ? `<div class="mailing">Mail: ${escapeHtml(p.mailing_address)}</div>` : ''}
+            ${landHtml}
+            ${chipsHtml}
+            ${p.property_address ? `<div class="research-links">
+              <a href="https://www.zillow.com/homes/${encodeURIComponent(p.property_address)}_rb/" target="_blank" rel="noopener" class="research-link zillow">🏠 Zillow</a>
+              <a href="https://www.google.com/maps/place/?q=${encodeURIComponent(p.property_address)}" target="_blank" rel="noopener" class="research-link maps">🗺 Street View</a>
+              <a href="${assessorUrl(p.property_address)}" target="_blank" rel="noopener" class="research-link assessor">🏛 Assessor</a>
+              <button type="button" class="research-link comps" data-comps="${escapeHtml(p.id)}">📊 Comps</button>
+            </div>
+            <div class="comps-panel${compsOpen.has(String(p.id))?'':' hide'}" id="compsPanel-${escapeHtml(p.id)}">${compsOpen.has(String(p.id)) ? compsPanelHtml(p.id) : ''}</div>` : ''}
+          </div>
+          <div class="idx-badge">
+            <span class="status-pip" style="background:${pipBg}"></span>
+            <span class="idx-num">#${idx}</span>
+          </div>
+        </div>
+        ${leadNotesText ? `
+        <div class="pre-call-section">
+          <button class="pre-call-toggle" onclick="this.nextElementSibling.classList.toggle('hide');this.classList.toggle('open')">
+            ${notesToggleLabel} <span class="toggle-arrow">▼</span>
+          </button>
+          <div class="pre-call-content hide">${escapeHtml(leadNotesText)}</div>
+        </div>` : ''}
+        ${(lead.recording_url||'').trim() ? `
+        <a href="${escapeHtml(convertDriveUrl(lead.recording_url))}" target="_blank" rel="noopener" class="listen-btn">
+          ▶ Tap to Listen
+        </a>` : ''}
+        <div class="pre-call-section">
+          <button class="pre-call-toggle" onclick="this.nextElementSibling.classList.toggle('hide');this.classList.toggle('open')">
+            📝 Live Notepad <span class="toggle-arrow">▼</span>
+          </button>
+          <div class="pre-call-content hide" style="padding:8px">
+            <textarea class="notes-ta" data-notes data-id="${escapeHtml(p.id)}" rows="6" style="margin-top:0" placeholder="Type notes during the call — auto-saves to this lead's notes…">${escapeHtml(lead.notes||'')}</textarea>
+            <div style="font-size:10px;color:#6b7280;margin-top:4px">Auto-saves to the dialer notes for this lead.</div>
+          </div>
+        </div>
+        <div class="pre-call-section">
+          <button class="pre-call-toggle" onclick="this.nextElementSibling.classList.toggle('hide');this.classList.toggle('open')">
+            📄 Send Documents <span class="toggle-arrow">▼</span>
+          </button>
+          <div class="pre-call-content hide doc-send" data-doc-pid="${escapeHtml(p.id)}">
+            <div class="iq-field">
+              <label>Which document?</label>
+              <select data-doc-type style="width:100%;padding:9px 10px;border:1.5px solid #d1d5db;border-radius:7px;font-size:14px;background:#fff">
+                <option value="ps">✍️ Purchase &amp; Sale Agreement (e-sign)</option>
+                <option value="assignment">✍️ Assignment Agreement (e-sign)</option>
+                <option value="pdf">📎 Other document (email a PDF)</option>
+              </select>
+            </div>
+
+            <div data-doc-pane="ps">
+            <div class="esign-form" data-esign-pid="${escapeHtml(p.id)}">
+              <div class="iq-field">
+                <label>Seller Name</label>
+                <input type="text" data-esign-name value="${escapeHtml(p.owners||'')}">
+              </div>
+              <div class="iq-field">
+                <label>Seller Email</label>
+                <input type="email" data-esign-email placeholder="Seller's email" value="${escapeHtml(p.email||lead.email||'')}">
+              </div>
+              <div class="iq-field">
+                <label>Seller Cell (for text delivery)</label>
+                <input type="tel" data-esign-phone placeholder="+1..." value="${escapeHtml((p.phones&&p.phones[0]&&p.phones[0].e164)||'')}">
+              </div>
+              <div class="iq-field">
+                <label>Purchase Price</label>
+                <input type="text" data-esign-price placeholder="$0" inputmode="decimal">
+              </div>
+              <div class="iq-field">
+                <label>Earnest Money (optional — defaults to $100)</label>
+                <input type="text" data-esign-earnest placeholder="$100" inputmode="decimal">
+              </div>
+              <div class="iq-field">
+                <label>Closing Date</label>
+                <input type="date" data-esign-closing>
+              </div>
+              <div class="iq-field">
+                <label>Send Via</label>
+                <select data-esign-deliver>
+                  <option value="email">📧 Email only</option>
+                  <option value="sms">📱 Text only</option>
+                  <option value="both">📧 Email + 📱 Text</option>
+                </select>
+              </div>
+              <button class="iq-save-btn" data-sendesign="${escapeHtml(p.id)}" style="background:#0891b2">✍️ Send for Signature</button>
+            </div>
+            </div>
+
+            <div data-doc-pane="assignment" class="hide">
+            <div class="assign-form" data-assign-pid="${escapeHtml(p.id)}">
+              <div class="iq-field">
+                <label>Buyer Name</label>
+                <input type="text" data-assign-name placeholder="Buyer / assignee name">
+              </div>
+              <div class="iq-field">
+                <label>Buyer Email</label>
+                <input type="email" data-assign-email placeholder="Buyer's email">
+              </div>
+              <div class="iq-field">
+                <label>Buyer Cell (for text delivery)</label>
+                <input type="tel" data-assign-phone placeholder="+1...">
+              </div>
+              <div class="iq-field">
+                <label>Assignment Fee</label>
+                <input type="text" data-assign-fee placeholder="$0" inputmode="decimal">
+              </div>
+              <div class="iq-field">
+                <label>Non-refundable Deposit (blank = full fee)</label>
+                <input type="text" data-assign-deposit placeholder="" inputmode="decimal">
+              </div>
+              <div class="iq-field">
+                <label>Send Via</label>
+                <select data-assign-deliver>
+                  <option value="email">📧 Email only</option>
+                  <option value="sms">📱 Text only</option>
+                  <option value="both">📧 Email + 📱 Text</option>
+                </select>
+              </div>
+              <button class="iq-save-btn" data-sendassign-card="${escapeHtml(p.id)}" style="background:#7c3aed">✍️ Send for Signature</button>
+            </div>
+            </div>
+
+            <div data-doc-pane="pdf" class="hide">
+            <div class="contract-send-form" data-contract-pid="${escapeHtml(p.id)}">
+              <div class="iq-field">
+                <label>To Email</label>
+                <input type="email" data-contract-email placeholder="Seller's email" value="${escapeHtml(p.email||lead.email||'')}">
+              </div>
+              <div class="iq-field">
+                <label>Subject</label>
+                <input type="text" data-contract-subject value="Contract for ${escapeHtml(p.property_address||'your property')}">
+              </div>
+              <div class="iq-field">
+                <label>Message</label>
+                <textarea data-contract-message rows="4">Hi ${escapeHtml(p.owners||'there')},\n\nPlease find your contract via the link below.\n\nLet me know if you have any questions.\n\nBest regards</textarea>
+              </div>
+              <div class="iq-field">
+                <label>Document PDF</label>
+                <div style="display:flex;gap:8px;align-items:center">
+                  <select data-contract-select style="flex:1;padding:8px 10px;border:1.5px solid #d1d5db;border-radius:7px;font-size:14px">
+                    <option value="">— pick an uploaded document —</option>
+                  </select>
+                  <label style="background:#f3f4f6;border:1.5px solid #d1d5db;border-radius:7px;padding:8px 10px;font-size:13px;cursor:pointer;white-space:nowrap">
+                    + Upload new
+                    <input type="file" accept=".pdf,.doc,.docx" data-contract-file style="display:none">
+                  </label>
+                </div>
+                <div data-contract-filename style="font-size:11px;color:#6b7280;margin-top:4px"></div>
+              </div>
+              <button class="iq-save-btn" data-sendcontract="${escapeHtml(p.id)}" style="background:#7c3aed">📤 Send Document</button>
+            </div>
+            </div>
+
+            <div class="esign-status-wrap" data-esign-pid="${escapeHtml(p.id)}" style="margin-top:10px;border-top:1px solid #f3f4f6;padding-top:8px">
+              <button class="iq-save-btn" data-esign-status="${escapeHtml(p.id)}" style="background:#374151">🔄 Check Signature Status</button>
+              <div data-esign-statusbox style="font-size:12px;margin-top:8px"></div>
+            </div>
+          </div>
+        </div>
+        <div class="phones">${phoneHtml || '<div class="muted" style="font-size:12px">No phone numbers</div>'}</div>
+        <div class="postcard-row">
+          <button class="postcard-btn" data-sendpostcard="${escapeHtml(p.id)}">📬 Send Postcard</button>
+          ${p.postcard_sent_at ? `<span class="postcard-sent">✅ Sent ${new Date(p.postcard_sent_at).toLocaleDateString()}</span>` : ''}
+        </div>
+        <div class="lead-tools">
+            <div class="lead-tools-row">
+              <span class="lead-tools-label">👤 Assign to</span>
+              <select class="assign-sel" data-assignsel data-id="${escapeHtml(p.id)}">
+                <option value="">— Unassigned —</option>
+                ${allProfiles.map(pr => `<option value="${escapeHtml(pr.id)}"${String(lead.assigned_to)===String(pr.id)?' selected':''}>${escapeHtml(pr.name)}</option>`).join('')}
+              </select>
+            </div>
+            ${assignedProfile ? `<div class="assigned-badge">Assigned to <strong>${escapeHtml(assignedProfile.name)}</strong></div>` : ''}
+            <div class="lead-tools-row">
+              <span class="lead-tools-label">🎨 Highlight</span>
+              <div class="hl-swatches" data-id="${escapeHtml(p.id)}">
+                ${['red','orange','yellow','green','blue','purple'].map(c => `<button type="button" class="hl-dot${lead.highlight===c?' active':''}" data-hl="${c}" data-id="${escapeHtml(p.id)}" style="background:${highlightStyles[c].border}" title="${c}"></button>`).join('')}
+                <button type="button" class="hl-dot hl-clear${!lead.highlight?' active':''}" data-hl="" data-id="${escapeHtml(p.id)}" title="No highlight">✕</button>
+              </div>
+            </div>
+          </div>
+        <button class="mark-btn${called?' is-called':''}" data-mark data-id="${escapeHtml(p.id)}">${called?'✓ Called — tap to undo':'Mark as called'}</button>
+        <button class="lead-buyer-btn" data-add-buyer data-id="${escapeHtml(p.id)}">🤝 Add to buyers</button>
+        <button class="lead-del-btn" data-del-lead data-id="${escapeHtml(p.id)}" data-who="${escapeHtml(p.owners||p.property_address||'this lead')}">🗑 Remove this lead</button>
+        <div class="call-info">
+          <select class="status-sel" data-status data-id="${escapeHtml(p.id)}">${statusOptions}</select>
+          <textarea class="notes-ta" data-notes data-id="${escapeHtml(p.id)}" rows="3" placeholder="Call notes — tap to type…">${escapeHtml(lead.notes||'')}</textarea>
+          <details class="va-notes-block"${(lead.va_notes||'').trim()?' open':''}>
+            <summary>${notesSummaryLabel}${(lead.va_notes||'').trim()?' ✓':''}</summary>
+            <textarea class="va-notes-ta" data-vanotes data-id="${escapeHtml(p.id)}" rows="4" placeholder="Paste VA notes or prior call summaries…">${escapeHtml(lead.va_notes||'')}</textarea>
+            <div data-recordings-container="${escapeHtml(p.id)}" id="rec-card-${escapeHtml(p.id)}" style="margin-top:8px"></div>
+          </details>
+          <div class="lead-tools" style="display:none"><!-- moved above --></div>
+        </div>
+      </div>`);
+  });
+  $('cards').innerHTML = out.join('');
+
+  $('pageNav').innerHTML = `
+    <button id="firstPage"${page<=1?' disabled':''}>« First</button>
+    <button id="prevPage"${page<=1?' disabled':''}>← Prev</button>
+    <span class="page-label">
+      Page <input type="number" id="pageJump" value="${page}" min="1" max="${totalPages}" inputmode="numeric" style="width:44px;text-align:center;padding:4px 2px;border:1px solid #d1d5db;border-radius:5px;font-size:13px;margin:0 3px">
+      of ${totalPages} · ${start+1}–${Math.min(start+slice.length, filtered.length)} of ${filtered.length}
+    </span>
+    <button id="nextPage"${page>=totalPages?' disabled':''}>Next →</button>
+    <button id="lastPage"${page>=totalPages?' disabled':''}>Last »</button>`;
+  $('prevPage')?.addEventListener('click', ()=>{ page--; renderPage(); window.scrollTo({top:0,behavior:'smooth'}); });
+  $('nextPage')?.addEventListener('click', ()=>{ page++; renderPage(); window.scrollTo({top:0,behavior:'smooth'}); });
+  $('firstPage')?.addEventListener('click', ()=>{ page=1; renderPage(); window.scrollTo({top:0,behavior:'smooth'}); });
+  $('lastPage')?.addEventListener('click', ()=>{ page=totalPages; renderPage(); window.scrollTo({top:0,behavior:'smooth'}); });
+  $('pageJump')?.addEventListener('keydown', e => { if(e.key==='Enter'){ e.target.blur(); } });
+  $('pageJump')?.addEventListener('change', e => {
+    const v = parseInt(e.target.value, 10);
+    if(!isFinite(v)) return;
+    const clamped = Math.max(1, Math.min(v, totalPages));
+    if(clamped !== page){ page = clamped; renderPage(); window.scrollTo({top:0,behavior:'smooth'}); }
+  });
+}
+
+// ── Card interactions ───────────────────────────────────────────
+$('hideCalled').addEventListener('change', e => {
+  document.body.classList.toggle('hide-called', e.target.checked);
+});
+$('hideOthersAssigned').addEventListener('change', e => {
+  hideOthersAssigned = e.target.checked;
+  localStorage.setItem(LS.hideOthers, hideOthersAssigned ? '1' : '0');
+  page = 1;
+  renderPage();
+});
+// ── State filter (shared by main list + power dialer) ───────────
+function populateStateSelect(sel, includeAllLabel){
+  if(!sel) return;
+  sel.innerHTML = `<option value="">${includeAllLabel}</option>` +
+    US_STATES.map(([code,name]) => `<option value="${code}">${name}</option>`).join('');
+  sel.value = stateFilter;
+}
+function setStateFilter(code){
+  stateFilter = code || '';
+  localStorage.setItem(LS.stateFilter, stateFilter);
+  if($('stateFilterSel')) $('stateFilterSel').value = stateFilter;
+  if($('pdStateFilter')) $('pdStateFilter').value = stateFilter;
+  page = 1;
+  renderPage();
+  if(!$('pdSetupScreen').classList.contains('hide')) pdUpdateCount();
+}
+populateStateSelect($('stateFilterSel'), 'All states');
+populateStateSelect($('pdStateFilter'), 'All states');
+$('stateFilterSel')?.addEventListener('change', e => setStateFilter(e.target.value));
+$('listFilterSel')?.addEventListener('change', e => setListFilter(e.target.value));
+$('pdListFilter')?.addEventListener('change', e => { pdListFilter = e.target.value; pdUpdateCount(); });
+
+// ── Bulk tools ────────────────────────────────────────────────
+$('listToolsBtn')?.addEventListener('click', () => {
+  const n = getFilteredProperties().length;
+  $('ltCount').textContent = n + ' lead' + (n===1?'':'s') + ' selected by your current filters';
+  $('ltDelCount').textContent = 'all ' + n;
+  $('ltListName').value = listFilter && listFilter !== '__none__' ? listFilter : '';
+  populateListSelects();
+  openModal('listToolsModal');
+});
+
+$('ltSetList')?.addEventListener('click', async () => {
+  const ids = getFilteredProperties().map(p => p.id);
+  if(!ids.length){ toast('No leads selected','err'); return; }
+  const name = $('ltListName').value.trim();
+  const btn = $('ltSetList');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  try {
+    await api('set-list-name', {method:'POST', body:{ ids, listName: name }});
+    // Update in place so the dropdown refreshes without a full reload
+    const idSet = new Set(ids.map(String));
+    properties.forEach(p => { if(idSet.has(String(p.id))) p.list_name = name; });
+    populateListSelects();
+    renderPage();
+    $('listToolsModal').classList.remove('open');
+    toast(name ? ids.length + ' leads saved to "' + name + '"' : 'List cleared off ' + ids.length + ' leads', 'ok');
+  } catch(e){ toast('Could not save: ' + e.message, 'err'); }
+  btn.disabled = false; btn.textContent = '🏷 Save to this list';
+});
+
+// Group every unlisted lead by its import date and name each group after
+// that date. Turns historic uploads into dialable lists without guesswork.
+$('ltBackfill')?.addEventListener('click', async () => {
+  const unlisted = properties.filter(p => !(p.list_name || '').trim());
+  if(!unlisted.length){ toast('Every lead already belongs to a list','ok'); return; }
+
+  const groups = new Map();
+  unlisted.forEach(p => {
+    const d = p.imported_at ? new Date(p.imported_at) : null;
+    const key = d && !isNaN(d)
+      ? d.toLocaleDateString(undefined, {month:'short', day:'numeric', year:'numeric'})
+      : 'Unknown date';
+    if(!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(p.id);
+  });
+
+  if(!confirm('Sort ' + unlisted.length + ' leads into ' + groups.size + ' list' +
+     (groups.size===1?'':'s') + ' by upload date?\n\nYou can rename any of them afterwards.')) return;
+
+  const btn = $('ltBackfill');
+  btn.disabled = true; btn.textContent = 'Sorting…';
+  try {
+    for(const [day, ids] of groups){
+      const name = 'Upload — ' + day;
+      await api('set-list-name', {method:'POST', body:{ ids, listName: name }});
+      const idSet = new Set(ids.map(String));
+      properties.forEach(p => { if(idSet.has(String(p.id))) p.list_name = name; });
+    }
+    populateListSelects();
+    renderPage();
+    $('listToolsModal').classList.remove('open');
+    toast(unlisted.length + ' leads sorted into ' + groups.size + ' lists','ok');
+  } catch(e){ toast('Could not sort: ' + e.message, 'err'); }
+  btn.disabled = false; btn.textContent = '🗂 Sort old leads into lists by upload date';
+});
+
+$('ltDelete')?.addEventListener('click', async () => {
+  const ids = getFilteredProperties().map(p => p.id);
+  if(!ids.length){ toast('No leads selected','err'); return; }
+  if(!confirm('Delete ' + ids.length + ' lead' + (ids.length===1?'':'s') + ' permanently?\n\nPhone numbers, notes and call history go with them. This cannot be undone.')) return;
+  // Second confirmation for anything big — this is unrecoverable.
+  if(ids.length > 25 && !confirm('That is ' + ids.length + ' leads. Are you certain?')) return;
+  const btn = $('ltDelete');
+  btn.disabled = true; btn.textContent = 'Deleting…';
+  try {
+    const r = await api('delete-properties', {method:'POST', body:{ ids }});
+    const idSet = new Set(ids.map(String));
+    properties = properties.filter(p => !idSet.has(String(p.id)));
+    populateListSelects();
+    page = 1;
+    renderPage();
+    refreshCounter();
+    $('listToolsModal').classList.remove('open');
+    toast((r.deleted || ids.length) + ' leads deleted','ok');
+  } catch(e){ toast('Could not delete: ' + e.message, 'err'); }
+  btn.disabled = false; btn.textContent = '🗑 Delete';
+});
+
+// ── Lead → buyer ──────────────────────────────────────────────
+// Someone on a cold call turns out to be an investor. Carry what we
+// already know across to the Buyers screen instead of retyping it.
+$('cards')?.addEventListener('click', e => {
+  const btn = e.target.closest('[data-add-buyer]');
+  if(!btn) return;
+  const p = properties.find(x => String(x.id) === String(btn.dataset.id));
+  if(!p){ toast('Could not find that lead','err'); return; }
+
+  const addr = p.property_address || '';
+  // "123 MAIN ST, DES MOINES, IA 50317" → city is the piece before the state
+  const parts = addr.split(',').map(x => x.trim()).filter(Boolean);
+  const state = extractState(addr);
+  let city = '';
+  if(parts.length >= 2){
+    const cand = parts[parts.length - 2];
+    city = /^[A-Za-z]{2}\b/.test(cand) && cand.length <= 3 ? (parts[parts.length - 3] || '') : cand;
+    if(state && new RegExp('^' + state + '\\b', 'i').test(city)) city = parts[parts.length - 3] || '';
+  }
+  const phone = (p.phones && p.phones[0] && p.phones[0].e164) || '';
+  const lead = p.lead || {};
+  const noteBits = [
+    addr ? 'Came in as a seller lead on ' + addr : '',
+    lead.notes ? String(lead.notes).trim() : '',
+  ].filter(Boolean);
+
+  switchView('buyers');
+  openBuyerForm({
+    name: p.owners || '',
+    phone: phone ? fmtPhone(phone) : '',
+    email: p.email || '',
+    city, state,
+    notes: noteBits.join('\n\n'),
+    active: true,
+    rating: 0,
+  }, true);
+  setTimeout(() => $('buyerFormHolder')?.scrollIntoView({behavior:'smooth', block:'start'}), 120);
+});
+
+// Single lead removal from its own card
+$('cards')?.addEventListener('click', async e => {
+  const btn = e.target.closest('[data-del-lead]');
+  if(!btn) return;
+  const id = btn.dataset.id;
+  if(!confirm('Remove ' + btn.dataset.who + '?\n\nTheir phone numbers, notes and call history go too. This cannot be undone.')) return;
+  btn.disabled = true; btn.textContent = 'Removing…';
+  try {
+    await api('delete-property', {method:'POST', body:{ id }});
+    properties = properties.filter(p => String(p.id) !== String(id));
+    populateListSelects();
+    renderPage();
+    refreshCounter();
+    toast('Lead removed','ok');
+  } catch(err){
+    btn.disabled = false; btn.textContent = '🗑 Remove this lead';
+    toast('Could not remove: ' + err.message, 'err');
+  }
+});
+$('pdStateFilter')?.addEventListener('change', e => setStateFilter(e.target.value));
+
+// ── Power Dialer ─────────────────────────────────────────────────
+let pdActive    = false;
+let pdIndex     = 0;
+let pdStageFilter = '';
+let pdActiveSid = null;
+let pdPollTimer = null;
+// Frozen queue of property IDs, captured when the session starts.
+// pdGetList() shrinks as leads are marked called, so walking it by
+// index skipped a lead every time. The queue never changes mid-session.
+let pdQueue     = [];
+let pdSession   = null;   // {callerId, agentPhone, profileId}
+// Conference mode: the agent dials in ONCE and stays on the line for
+// the whole session. pdConf is the conference name, pdAgentSid the
+// agent's leg. Ending that leg ends the session.
+let pdConf      = null;
+let pdAgentSid  = null;
+let pdWrapSecs  = 10;     // 0 = straight through · -1 = wait for a tap
+let pdWrapTimer = null;
+let pdWrapLeft  = 0;
+let pdWrapHeld  = false;
+// Pause: finish the lead you're on, then hold. The agent's leg stays up,
+// so resuming doesn't ring your phone again.
+let pdPaused    = false;
+// Auto voicemail drop when answering-machine detection says machine.
+let pdAutoVm    = localStorage.getItem('cb_vm_auto') !== '0';
+let pdVmDropped = false;   // one drop per lead, never two
+let pdVmDropping = false;
+
+// ── Now-dialing panel ─────────────────────────────────────────
+function pdShowNow(p, phone){
+  const box = $('pdNowDialing');
+  if(!box) return;
+  box.classList.remove('hide');
+  $('pdNowName').textContent  = p?.owners || 'Unknown owner';
+  $('pdNowAddr').textContent  = p?.property_address || '';
+  $('pdNowPhone').textContent = phone ? fmtPhone(phone) : '';
+  pdSetState('Dialing…', '');
+}
+function pdSetState(text, cls){
+  const el = $('pdNowState');
+  if(!el) return;
+  el.textContent = text;
+  el.className = 'pd-now-state' + (cls ? ' ' + cls : '');
+}
+function pdHideNow(){
+  $('pdNowDialing')?.classList.add('hide');
+}
+
+function pdGetList(){
+  let list = getFilteredProperties();
+  if(pdStageFilter){
+    list = list.filter(p => (p.lead||{}).lead_status === pdStageFilter);
+  } else {
+    list = list.filter(p => !(p.lead||{}).called);
+  }
+  if(pdListFilter){
+    list = pdListFilter === '__none__'
+      ? list.filter(p => !(p.list_name || '').trim())
+      : list.filter(p => (p.list_name || '') === pdListFilter);
+  }
+  return list;
+}
+
+// Show setup screen
+$('pdStartBtn').addEventListener('click', () => {
+  if(useMyPhone){ toast('Power dialing runs through the dialer. Tap ☎️ Dialer at the top to switch.','err'); return; }
+  $('pdStartWrap').classList.add('hide');
+  $('pdSetupScreen').classList.remove('hide');
+
+  // Populate profile dropdown
+  const psel = $('pdProfileSel');
+  psel.innerHTML = allProfiles.map(pr =>
+    `<option value="${escapeHtml(pr.id)}"${pr.id===activeProfileId?' selected':''}>${escapeHtml(pr.name)}</option>`
+  ).join('');
+
+  // Populate caller ID dropdown
+  const csel = $('pdCallerIdSel');
+  csel.innerHTML = ownedNumbers.map(n =>
+    `<option value="${escapeHtml(n.phoneNumber)}"${n.phoneNumber===activeCallerId?' selected':''}>${escapeHtml(fmtPhone(n.phoneNumber))}</option>`
+  ).join('');
+
+  populateListSelects();
+
+  // Populate script dropdown
+  const ssel = $('pdScriptSel');
+  if(ssel) ssel.innerHTML = Object.entries(CALL_SCRIPTS).map(([k,v]) =>
+    `<option value="${escapeHtml(k)}"${k===activeScriptKey?' selected':''}>${escapeHtml(v.name)}</option>`
+  ).join('');
+
+  // Auto-voicemail toggle (defaults on)
+  if($('pdAutoVm')) $('pdAutoVm').value = (localStorage.getItem(LS.vmAuto) === '0') ? '0' : '1';
+
+  // Pre-fill with the signed-in caller's own number
+  const me = allProfiles.find(pr => String(pr.id) === String(activeProfileId));
+  $('pdAgentPhone').value = (me && me.phone) || forwardPhone || '';
+
+  // Sync state filter with main list
+  if($('pdStateFilter')) $('pdStateFilter').value = stateFilter;
+
+  // Update count
+  pdUpdateCount();
+});
+
+function pdUpdateCount(){
+  pdStageFilter = $('pdStageFilter')?.value || '';
+  pdListFilter  = $('pdListFilter')?.value  || '';
+  const list = pdGetList();
+  $('pdSetupCount').textContent = `${list.length} lead${list.length===1?'':'s'} will be dialed`;
+}
+
+$('pdStageFilter')?.addEventListener('change', pdUpdateCount);
+
+$('pdSetupCancel').addEventListener('click', () => {
+  $('pdSetupScreen').classList.add('hide');
+  $('pdStartWrap').classList.remove('hide');
+});
+
+$('pdSetupStart').addEventListener('click', async () => {
+  const agentPhone = toE164($('pdAgentPhone').value.trim());
+  const callerId   = $('pdCallerIdSel').value;
+  const profileId  = $('pdProfileSel').value;
+  if(!agentPhone || agentPhone.length < 12){ toast('Enter your phone number','err'); return; }
+  if(!callerId){ toast('Select a caller ID number','err'); return; }
+
+  pdStageFilter = $('pdStageFilter')?.value || '';
+  pdListFilter  = $('pdListFilter')?.value  || '';
+  const list = pdGetList();
+  if(!list.length){ toast('No leads match your selection','err'); return; }
+
+  // Lock in the auto-voicemail choice for this session
+  if($('pdAutoVm')){
+    pdAutoVm = $('pdAutoVm').value === '1';
+    localStorage.setItem(LS.vmAuto, pdAutoVm ? '1' : '0');
+  }
+
+  // Lock in the script chosen for this session
+  if($('pdScriptSel') && $('pdScriptSel').value){
+    activeScriptKey = $('pdScriptSel').value;
+    localStorage.setItem('cb_script_key', activeScriptKey);
+  }
+
+  // Save agent phone for this session
+  forwardPhone = agentPhone;
+  localStorage.setItem(LS.forward, agentPhone);
+
+  // Close setup, show session bar
+  $('pdSetupScreen').classList.add('hide');
+  $('powerDialBar').classList.remove('hide');
+
+  // Freeze the queue. pdGetList() shrinks as leads get marked called,
+  // so an index into the live list skips a lead after every call.
+  pdQueue   = list.map(p => p.id);
+  pdSession = { callerId, agentPhone, profileId };
+  pdWrapSecs = parseInt($('pdWrapSecs')?.value ?? '10', 10);
+  pdActive  = true;
+  pdIndex   = 0;
+  pdActiveSid = null;
+  pdConf = null; pdAgentSid = null;
+  pdHideWrapUp();
+
+  // Ring the agent into the conference ONCE. Every lead after this
+  // is dialed into the same conference, so the phone never hangs up
+  // and calls back between numbers.
+  $('pdCounter').textContent = 'Calling your phone — answer and stay on';
+  try {
+    const st = await api('power-dial-start', {method:'POST', body:{
+      agentPhone, from: callerId, profileId,
+    }});
+    pdConf     = st.conference;
+    pdAgentSid = st.sid;
+  } catch(e){
+    toast('Could not start the session: '+e.message,'err');
+    pdStop();
+    return;
+  }
+
+  // Give the agent time to actually pick up before the first seller
+  // is dialed in — otherwise lead one rings into an empty conference.
+  toast('Answer your phone — first lead dials in 15 seconds','ok');
+  let waited = 0;
+  const warm = setInterval(() => {
+    if(!pdActive){ clearInterval(warm); return; }
+    waited++;
+    $('pdCounter').textContent = `Starting in ${Math.max(0, 15 - waited)}s — answer your phone`;
+    if(waited >= 15){
+      clearInterval(warm);
+      pdDialNext(pdQueue[0], callerId, agentPhone, profileId);
+    }
+  }, 1000);
+});
+
+// Dial one lead by property ID. The queue holds IDs rather than
+// objects so a re-render or reload can't leave us on a stale copy.
+async function pdDialNext(propertyId, callerId, agentPhone, profileId){
+  if(!pdActive || !propertyId) return;
+  pdHideWrapUp();
+
+  const p = properties.find(x => x.id === propertyId);
+  if(!p){ pdAdvance(); return; }
+
+  // Counter reads off the frozen queue — position, not a shrinking list
+  $('pdCounter').textContent = `Lead ${pdIndex+1} of ${pdQueue.length}`
+    + (pdConf ? ' · you stay connected' : '');
+
+  // Highlight card
+  if(currentView !== 'dialer') switchView('dialer');
+  const filtered = getFilteredProperties();
+  const globalIdx = filtered.findIndex(fp => fp.id === p.id);
+  if(globalIdx >= 0){ page = Math.floor(globalIdx / PAGE_SIZE) + 1; renderPage(); }
+  setTimeout(() => {
+    const card = document.querySelector(`[data-card-id="${CSS.escape(p.id)}"]`);
+    if(card){
+      document.querySelectorAll('.card.pd-active').forEach(c => c.classList.remove('pd-active'));
+      card.classList.add('pd-active');
+      card.scrollIntoView({ behavior:'smooth', block:'center' });
+    }
+  }, 150);
+
+  // Place the call via backend
+  const phone = p.phones?.[0]?.e164;
+  if(!phone){
+    toast(`Skipping ${p.owners||'lead'} — no phone number`,'err');
+    pdAdvance();
+    return;
+  }
+
+  try {
+    // Conference mode when a session is up, bridge mode otherwise.
+    const r = pdConf
+      ? await api('power-dial-lead', {method:'POST', body:{
+          to: phone,
+          from: callerId,
+          conference: pdConf,
+          propertyId: p.id,
+          profileId,
+        }})
+      : await api('power-dial-call', {method:'POST', body:{
+          to: phone,
+          from: callerId,
+          agentPhone,
+          sellerName: p.owners || 'your next lead',
+          propertyId: p.id,
+          profileId,
+        }});
+    pdActiveSid = r.sid;
+    pdShowNow(p, phone);
+    recPillShow(r.sid, r.recording);
+
+    // Bring up the live-call drawer for this lead. This is what puts the
+    // script on screen and re-enables VM Drop during a power dial session —
+    // the power dialer used to run without it, so neither ever appeared.
+    if(activeCall && activeCall.tickTimer) clearInterval(activeCall.tickTimer);
+    pdVmDropped = false; pdVmDropping = false;
+    activeCall = { sid:r.sid, btn:null, propertyId:p.id, phidx:0, startedAt:Date.now() };
+    showDrawer({
+      name: p.owners, num: phone, state:'Dialing…',
+      from: fmtPhone(callerId), addr: p.property_address, prop: p,
+    }, false);
+    activeCall.tickTimer = setInterval(updateDrawerTimer, 1000);
+    // Capture the id NOW. Reading it back after the call ends used to
+    // pull from a list that had already shifted, marking the wrong lead.
+    pdPollForCompletion(r.sid, p.id);
+  } catch(e){
+    toast('Call failed: '+e.message,'err');
+    setTimeout(() => pdAdvance(), 2000);
+  }
+}
+
+function pdPollForCompletion(sid, propertyId){
+  if(!pdActive) return;
+  clearTimeout(pdPollTimer);
+  pdPollTimer = setTimeout(async () => {
+    if(!pdActive) return;
+    try {
+      const r = await api(`call-status&sid=${encodeURIComponent(sid)}`);
+
+      // Machine picked up → drop the voicemail automatically
+      if(r.isMachine && pdAutoVm && !pdVmDropped && !pdVmDropping){
+        pdAutoDropVoicemail(sid, propertyId);
+      }
+
+      // Live state on the now-dialing panel
+      if(r.isMachine){
+        pdSetState(pdVmDropped ? 'Voicemail dropped' : 'Voicemail — safe to skip', 'vm');
+      } else if(r.isHuman){
+        pdSetState('Live — human answered', 'live');
+      } else if(r.status === 'in-progress'){
+        pdSetState('Connected', 'live');
+      } else if(r.status === 'ringing'){
+        pdSetState('Ringing', 'ringing');
+      }
+
+      if(['busy','failed','canceled'].includes(r.status)){
+        const why = explainCallEnd(r);
+        if(why) toast(r.status.toUpperCase() + ' — ' + why, 'err');
+      }
+      const done = ['completed','failed','busy','no-answer','canceled'].includes(r.status);
+      if(done){
+        // A voicemail drop in flight has to finish playing before we move on
+        if(pdVmDropping){ pdPollForCompletion(sid, propertyId); return; }
+        pdActiveSid = null;
+        // Tear down the call drawer / script panel for this lead
+        if(activeCall && activeCall.sid === sid){
+          finishCall(pdVmDropped ? 'Voicemail dropped' : 'Ended', false);
+        }
+        // Mark the lead we actually dialed
+        const p = properties.find(x => x.id === propertyId);
+        if(p){
+          if(!p.lead) p.lead = {};
+          p.lead.called = true;
+          api('update-lead', {method:'POST', body:{propertyId:p.id, called:true}}).catch(()=>{});
+          renderPage(); refreshCounter();
+        }
+        pdStartWrapUp(p);
+      } else {
+        pdPollForCompletion(sid, propertyId);
+      }
+    } catch(e){
+      pdPollForCompletion(sid, propertyId);
+    }
+  }, 3000);
+}
+
+// ── Wrap-up pause ──────────────────────────────────────────────
+// The window between hanging up and the next number dialing. Without
+// it there was nowhere to set a status or type a note — by the time
+// you'd tapped the dropdown the next call was already ringing.
+function pdStartWrapUp(p){
+  if(!pdActive) return;
+  const atEnd = pdIndex + 1 >= pdQueue.length;
+  if(atEnd){ toast('All leads dialed! 🎉','ok'); pdStop(); return; }
+
+  // No pause configured — go straight on, with a beat to let the
+  // "called" write land so the card doesn't flicker.
+  if(pdWrapSecs === 0){ setTimeout(() => pdAdvance(), 800); return; }
+
+  // The script panel covers the page, so it has to come down before the
+  // wrap-up bar can be seen or tapped.
+  closeScriptPanel();
+  const bar = $('pdWrapUp');
+  const who = $('pdWrapWho');
+  if(who) who.textContent = p ? ('Log ' + (p.owners || 'this lead') + ' — status and notes')
+                              : 'Log the call — status and notes';
+  pdWrapHeld = false;
+  $('pdWrapHold')?.classList.remove('on');
+  if($('pdWrapHold')) $('pdWrapHold').textContent = '⏸ Hold';
+  bar?.classList.remove('hide');
+  setTimeout(() => { try { bar?.scrollIntoView({behavior:'smooth', block:'center'}); } catch{} }, 120);
+
+  if(pdWrapSecs < 0){
+    // "Wait for me" — no countdown, advance only on the button
+    $('pdWrapCount').textContent = '—';
+    return;
+  }
+  pdWrapLeft = pdWrapSecs;
+  $('pdWrapCount').textContent = pdWrapLeft;
+  clearInterval(pdWrapTimer);
+  pdWrapTimer = setInterval(() => {
+    if(!pdActive){ clearInterval(pdWrapTimer); return; }
+    if(pdWrapHeld) return;
+    pdWrapLeft--;
+    $('pdWrapCount').textContent = Math.max(0, pdWrapLeft);
+    if(pdWrapLeft <= 0){ clearInterval(pdWrapTimer); pdAdvance(); }
+  }, 1000);
+}
+
+function pdHideWrapUp(){
+  clearInterval(pdWrapTimer);
+  pdWrapTimer = null;
+  pdWrapHeld = false;
+  $('pdWrapUp')?.classList.add('hide');
+}
+
+$('pdWrapGo')?.addEventListener('click', () => { if(pdActive) pdAdvance(); });
+$('pdWrapPlus')?.addEventListener('click', () => {
+  pdWrapLeft += 20;
+  $('pdWrapCount').textContent = pdWrapLeft;
+});
+$('pdWrapHold')?.addEventListener('click', () => {
+  pdWrapHeld = !pdWrapHeld;
+  const b = $('pdWrapHold');
+  b.classList.toggle('on', pdWrapHeld);
+  b.textContent = pdWrapHeld ? '▶ Resume' : '⏸ Hold';
+  if(pdWrapHeld) $('pdWrapCount').textContent = 'held';
+  else $('pdWrapCount').textContent = Math.max(0, pdWrapLeft);
+});
+
+function pdAdvance(){
+  if(!pdActive || !pdSession) return;
+  pdHideWrapUp();
+  // Paused — stop here rather than dialing the next lead. The agent's
+  // conference leg is untouched, so Resume picks up without re-ringing.
+  if(pdPaused){
+    pdHideNow();
+    $('pdCounter').textContent = `Paused at lead ${pdIndex+1} of ${pdQueue.length}`;
+    return;
+  }
+  pdIndex++;
+  if(pdIndex >= pdQueue.length){ toast('All leads dialed! 🎉','ok'); pdStop(); return; }
+  pdDialNext(pdQueue[pdIndex], pdSession.callerId, pdSession.agentPhone, pdSession.profileId);
+}
+
+// ── Pause / Resume ────────────────────────────────────────────
+function pdSetPaused(on){
+  pdPaused = on;
+  const b = $('pdPause');
+  if(b){
+    b.textContent = on ? '▶ Resume' : '⏸ Pause';
+    b.classList.toggle('paused', on);
+  }
+  $('pdPausedNote')?.classList.toggle('hide', !on);
+  if(on){
+    // Freeze the wrap-up countdown so it can't advance underneath you
+    clearInterval(pdWrapTimer);
+  }
+}
+
+$('pdPause')?.addEventListener('click', () => {
+  if(!pdActive) return;
+  if(pdPaused){
+    pdSetPaused(false);
+    // Resume from wherever we stopped. If a call is still live, let it
+    // finish on its own; the poller will advance when it ends.
+    if(!pdActiveSid){
+      pdIndex++;
+      if(pdIndex >= pdQueue.length){ toast('All leads dialed! 🎉','ok'); pdStop(); return; }
+      pdDialNext(pdQueue[pdIndex], pdSession.callerId, pdSession.agentPhone, pdSession.profileId);
+    }
+  } else {
+    pdSetPaused(true);
+    toast(pdActiveSid ? 'Pausing after this call' : 'Paused', 'ok');
+  }
+});
+
+function pdStop(){
+  pdActive = false;
+  pdSetPaused(false);
+  pdHideNow();
+  if(activeCall) finishCall('Session ended', false);
+  closeScriptPanel();
+  clearTimeout(pdPollTimer);
+  pdHideWrapUp();
+  // Drop the seller's leg, then the agent's — otherwise the agent sits
+  // in a silent conference after the session bar disappears.
+  if(pdActiveSid) api('end-call', {method:'POST', body:{sid:pdActiveSid}}).catch(()=>{});
+  if(pdAgentSid)  api('power-dial-end', {method:'POST', body:{sid:pdAgentSid}}).catch(()=>{});
+  pdActiveSid = null;
+  pdAgentSid = null;
+  pdConf = null;
+  recPillReset();
+  pdQueue = [];
+  pdSession = null;
+  $('pdStartWrap').classList.remove('hide');
+  $('powerDialBar').classList.add('hide');
+  $('pdSetupScreen').classList.add('hide');
+  document.querySelectorAll('.card.pd-active').forEach(c => c.classList.remove('pd-active'));
+}
+
+$('pdStop').addEventListener('click', pdStop);
+$('pdSkip').addEventListener('click', () => {
+  if(!pdActive) return;
+  clearTimeout(pdPollTimer);
+  if(pdActiveSid){
+    api('end-call', {method:'POST', body:{sid:pdActiveSid}}).catch(()=>{});
+    pdActiveSid = null;
+  }
+  pdAdvance();
+});
+$('pdPrev').addEventListener('click', () => {
+  if(!pdActive || !pdSession) return;
+  clearTimeout(pdPollTimer);
+  pdHideWrapUp();
+  if(pdActiveSid){
+    api('end-call', {method:'POST', body:{sid:pdActiveSid}}).catch(()=>{});
+    pdActiveSid = null;
+  }
+  pdIndex = Math.max(0, pdIndex - 1);
+  pdDialNext(pdQueue[pdIndex], pdSession.callerId, pdSession.agentPhone, pdSession.profileId);
+});
+
+// ── Add a lead manually ────────────────────────────────────────
+// Saves through the same import-properties action as CSV uploads
+// (replace:false, so nothing existing is ever wiped). An address that's
+// already in the dialer is skipped by the backend and reported here.
+function prepAddLeadForm(){
+  const lists = [...new Set(properties.map(p => (p.list_name||'').trim()).filter(Boolean))].sort();
+  $('alListOptions').innerHTML = lists.map(l => `<option value="${escapeHtml(l)}"></option>`).join('');
+  $('alMsg').textContent = '';
+  setTimeout(() => $('alOwners').focus(), 50);
+}
+function resetAddLeadForm(){
+  ['alOwners','alAddress','alMailing','alPhone1','alPhone2','alPhone3','alEmail','alNotes'].forEach(id => { $(id).value = ''; });
+  $('alPhone1Type').value = 'Mobile';
+  $('alHot').checked = true;
+}
+$('alSave').addEventListener('click', async () => {
+  const btn = $('alSave'), msg = $('alMsg');
+  const owners  = $('alOwners').value.trim();
+  const address = $('alAddress').value.trim();
+  const rawPhones = [
+    [$('alPhone1').value, $('alPhone1Type').value],
+    [$('alPhone2').value, ''],
+    [$('alPhone3').value, ''],
+  ];
+  const phones = [];
+  for(const [raw, type] of rawPhones){
+    if(!raw.trim()) continue;
+    const e164 = toE164(raw);
+    if(!e164){ msg.style.color = '#b91c1c'; msg.textContent = `"${raw}" doesn't look like a valid 10-digit phone number.`; return; }
+    if(!phones.some(p => p.e164 === e164)) phones.push({ e164, display: fmtPhone(e164), type });
+  }
+  if(!address){ msg.style.color = '#b91c1c'; msg.textContent = 'Property address is required.'; $('alAddress').focus(); return; }
+  if(!phones.length){ msg.style.color = '#b91c1c'; msg.textContent = 'Add at least one phone number so the lead can be dialed.'; $('alPhone1').focus(); return; }
+
+  const source = $('alSource').value;
+  const notes  = $('alNotes').value.trim();
+  const email  = $('alEmail').value.trim();
+  const vaNotes = [
+    `Source: ${source}`,
+    email ? `Email: ${email}` : '',
+    notes,
+  ].filter(Boolean).join('\n');
+
+  const id = 'manual-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7);
+  const prop = {
+    id,
+    owners,
+    property_address: address,
+    mailing_address: $('alMailing').value.trim(),
+    email,
+    va_notes: vaNotes,
+    highlight: $('alHot').checked ? 'red' : '',
+    list_name: $('alList').value.trim() || 'Manual Leads',
+    phones,
+  };
+
+  btn.disabled = true; btn.textContent = 'Saving…';
+  msg.style.color = '#6b7280'; msg.textContent = '';
+  try {
+    const r = await api('import-properties', { method:'POST', body:{ properties:[prop], replace:false } });
+    if(r && r.dupeAddressesSkipped && !r.imported){
+      msg.style.color = '#b45309';
+      msg.textContent = 'That address is already in the dialer — search for it instead of adding it again.';
+      return;
+    }
+    toast('➕ Lead added: ' + (owners || address), 'ok');
+    resetAddLeadForm();
+    $('addLeadModal').classList.remove('open');
+    await loadProperties();
+    // Jump straight to the new lead
+    $('leadSearch').value = address;
+    $('leadSearchClear').classList.remove('hide');
+    searchQuery = address;
+    page = 1;
+    renderPage();
+  } catch(e){
+    msg.style.color = '#b91c1c';
+    msg.textContent = 'Could not save: ' + e.message;
+  } finally {
+    btn.disabled = false; btn.textContent = '➕ Add to dialer';
+  }
+});
+
+// ── Search bar ────────────────────────────────────────────────
+let searchDebounce = null;
+$('leadSearch').addEventListener('input', e => {
+  clearTimeout(searchDebounce);
+  const val = e.target.value;
+  $('leadSearchClear').classList.toggle('hide', !val);
+  searchDebounce = setTimeout(() => {
+    searchQuery = val;
+    page = 1;
+    renderPage();
+  }, 200);
+});
+$('leadSearchClear').addEventListener('click', () => {
+  $('leadSearch').value = '';
+  $('leadSearchClear').classList.add('hide');
+  searchQuery = '';
+  page = 1;
+  renderPage();
+});
+
+// ── Filter buttons ────────────────────────────────────────────
+function updateFilterUI(){
+  $('filterMyLeads').classList.toggle('active', !!assignFilter);
+  $('filterClear').classList.toggle('hide', !assignFilter);
+}
+$('filterMyLeads').addEventListener('click', () => {
+  assignFilter = assignFilter ? '' : (activeProfileId || '');
+  if(!assignFilter) assignFilter = '';
+  page = 1;
+  updateFilterUI();
+  renderPage();
+});
+$('filterClear').addEventListener('click', () => {
+  assignFilter = '';
+  webOnlyFilter = false;
+  $('filterWebLeads').classList.remove('active');
+  page = 1;
+  updateFilterUI();
+  renderPage();
+});
+
+// ── Website leads ───────────────────────────────────────────────
+$('filterWebLeads').addEventListener('click', () => {
+  webOnlyFilter = !webOnlyFilter;
+  $('filterWebLeads').classList.toggle('active', webOnlyFilter);
+  $('filterClear').classList.toggle('hide', !webOnlyFilter && !assignFilter);
+  page = 1;
+  renderPage();
+  if(webOnlyFilter) markWebLeadsSeen();
+});
+
+async function webLeadFn(action){
+  const r = await fetch(WEB_LEAD_FN + '?action=' + action, {
+    method: 'POST',
+    headers: { 'Content-Type':'application/json', 'X-Access-Password': password },
+    body: '{}',
+  });
+  if(!r.ok) throw new Error('HTTP ' + r.status);
+  return r.json();
+}
+
+async function loadWebLeads(announce){
+  if(!password) return;
+  try {
+    const j = await webLeadFn('list');
+    webLeadIndex = {};
+    (j.leads || []).forEach(l => { webLeadIndex[l.property_id] = l; });
+    const unseen = (j.leads || []).filter(l => !l.lead_seen);
+    const chip = $('webLeadCount');
+    if(chip) chip.textContent = unseen.length ? '· ' + unseen.length : '';
+    const fresh = unseen.filter(l => !announcedWebLeads.has(l.property_id));
+    fresh.forEach(l => announcedWebLeads.add(l.property_id));
+    if(announce && fresh.length){
+      toast('🌐 ' + fresh.length + ' new website lead' + (fresh.length===1?'':'s') + '!', 'ok');
+      try { if(navigator.vibrate) navigator.vibrate([140,70,140]); } catch {}
+      pushWebLeadNotice(fresh.length);
+      loadProperties().catch(()=>{});
+    }
+    renderPage();
+  } catch(e){ /* silent — never block the dialer */ }
+}
+
+async function markWebLeadsSeen(){
+  try {
+    await webLeadFn('seen');
+    Object.values(webLeadIndex).forEach(l => { l.lead_seen = true; });
+    const chip = $('webLeadCount');
+    if(chip) chip.textContent = '';
+  } catch {}
+}
+
+function pushWebLeadNotice(n){
+  try {
+    if(!('Notification' in window)) return;
+    if(Notification.permission === 'granted'){
+      new Notification('New website lead', {
+        body: n + ' new lead' + (n===1?'':'s') + ' from winwinproperties.net',
+        tag: 'winwin-web-lead',
+      });
+    } else if(Notification.permission === 'default'){
+      Notification.requestPermission();
+    }
+  } catch {}
+}
+
+// Check for new website leads every 60 seconds
+setInterval(() => loadWebLeads(true), 60000);
+
+// ── Realtor Search ───────────────────────────────────────────────
+$('realtorSearchBtn').addEventListener('click', () => searchRealtors(false));
+$('realtorZip').addEventListener('keydown', e => { if(e.key==='Enter') searchRealtors(false); });
+$('realtorShuffleBtn').addEventListener('click', () => searchRealtors(true));
+
+let realtorPage = 0;
+let lastRealtorZip = '';
+
+async function searchRealtors(shuffle){
+  const zip = $('realtorZip').value.trim();
+  if(!zip){ toast('Enter a zip code first','err'); return; }
+  if(zip !== lastRealtorZip){ realtorPage = 0; lastRealtorZip = zip; }
+  else if(shuffle){ realtorPage++; }
+
+  const statusText = $('realtorStatusText');
+  const shuffleBtn = $('realtorShuffleBtn');
+  const resultsEl = $('realtorResults');
+  $('realtorSearchBtn').disabled = true;
+  $('realtorSearchBtn').textContent = 'Searching…';
+  shuffleBtn.disabled = true;
+  statusText.textContent = realtorPage === 0
+    ? 'Searching Realtor.com for 4★+ agents in ' + zip + '…'
+    : 'Shuffling to new agents…';
+  resultsEl.innerHTML = '';
+  try {
+    const data = await api('search-realtors', {method:'POST', body:{ zipCode: zip, page: realtorPage }});
+    const agents = data.agents || [];
+    if(!agents.length){
+      statusText.textContent = 'No 4+ star agents found in ' + zip;
+      shuffleBtn.classList.add('hide');
+    } else {
+      statusText.textContent = `Showing 4★+ agents in ${zip}${data.total > 20 ? ' · ' + data.total + ' total' : ''}`;
+      shuffleBtn.classList.remove('hide');
+      resultsEl.innerHTML = agents.map((a) => `
+        <div class="realtor-card">
+          ${a.photo
+            ? `<img src="${escapeHtml(a.photo)}" class="realtor-photo" onerror="this.style.display='none'">`
+            : `<div class="realtor-photo-placeholder">🏡</div>`}
+          <div class="realtor-info">
+            <div class="realtor-name">${escapeHtml(a.name)}</div>
+            <div class="realtor-brokerage">${escapeHtml(a.brokerage||'Independent')}</div>
+            <div class="realtor-stats">${[
+              a.rating ? `⭐ ${a.rating}${a.reviewCount?' ('+a.reviewCount+' reviews)':''}` : '',
+              a.sold ? `${a.sold} sold` : '',
+              a.listings ? `${a.listings} active` : '',
+              a.email ? `✉ ${a.email}` : ''
+            ].filter(Boolean).join(' · ')}</div>
+          </div>
+          <div class="realtor-actions">
+            ${a.phone
+              ? `<button class="realtor-call-btn" data-realtor-call="${escapeHtml(a.phone)}" data-realtor-name="${escapeHtml(a.name)}">📞 ${escapeHtml(a.phone)}</button>`
+              : a.profileUrl
+                ? `<a href="${escapeHtml(a.profileUrl)}" target="_blank" rel="noopener" class="realtor-call-btn" style="text-decoration:none;text-align:center">🔗 View Profile</a>`
+                : `<span style="font-size:11px;color:#9ca3af">No phone</span>`}
+          </div>
+        </div>
+      `).join('');
+    }
+  } catch(e) {
+    statusText.textContent = 'Search failed: ' + e.message;
+    toast('Search failed: '+e.message,'err');
+  } finally {
+    $('realtorSearchBtn').disabled = false;
+    $('realtorSearchBtn').textContent = '🔍 Search';
+    shuffleBtn.disabled = false;
+  }
+}
+
+document.addEventListener('click', e => {
+  const compsBtn = e.target.closest('[data-comps]');
+  if(compsBtn){ e.preventDefault(); toggleCompsPanel(compsBtn.getAttribute('data-comps')); return; }
+  const compsRun = e.target.closest('[data-comps-run]');
+  if(compsRun){ e.preventDefault(); runComps(compsRun.getAttribute('data-comps-run')); return; }
+  const compsSave = e.target.closest('[data-comps-save]');
+  if(compsSave){ e.preventDefault(); saveCompsDefaults(compsSave.getAttribute('data-comps-save')); return; }
+  // Mark called
+  const mark = e.target.closest('[data-mark]');
+  if(mark){
+    e.preventDefault();
+    const id = mark.dataset.id;
+    const p = properties.find(x => x.id === id);
+    if(!p) return;
+    const cur = p.lead || {};
+    if(cur.called || cur.lead_status){
+      Object.assign(p.lead, {called:false, lead_status:'', notes:''});
+      api('update-lead', {method:'POST', body:{propertyId:id, called:false, leadStatus:'', notes:''}}).catch(err=>toast(err.message,'err'));
+    } else {
+      Object.assign(p.lead, {called:true});
+      api('update-lead', {method:'POST', body:{propertyId:id, called:true}}).catch(err=>toast(err.message,'err'));
+    }
+    renderPage(); refreshCounter();
+  }
+
+  // Phone call
+  const callBtn = e.target.closest('[data-call]');
+  if(callBtn){
+    e.preventDefault();
+    if(callBtn.classList.contains('dialing')) return;
+    if(!useMyPhone){
+      if(activeCall){ toast('A call is already in progress','err'); return; }
+      if(!forwardPhone){ toast('Set your phone in Settings first','err'); openModal('settingsModal'); return; }
+      if(!activeCallerId){ toast('Buy a phone number first','err'); openModal('numbersModal'); return; }
+    }
+    const pid = callBtn.dataset.pid;
+    const phidx = parseInt(callBtn.dataset.phidx,10);
+    const p = properties.find(x => x.id === pid);
+    const ph = p?.phones?.[phidx];
+    if(!p || !ph) return;
+    if(useMyPhone){ callFromMyPhone(ph.e164, p); return; }
+    placeCall(p, ph, callBtn, phidx);
+  }
+});
+document.addEventListener('change', e => {
+  const sel = e.target.closest('[data-status]');
+  if(!sel) return;
+  const id = sel.dataset.id;
+  const p = properties.find(x => x.id === id);
+  if(!p) return;
+  const newStatus = sel.value;
+  const prevStatus = p.lead.lead_status;
+  p.lead.lead_status = newStatus;
+  if(newStatus) p.lead.called = true;
+  api('update-lead', {method:'POST', body:{propertyId:id, leadStatus:newStatus, called:p.lead.called}}).catch(err=>toast(err.message,'err'));
+  renderPage(); refreshCounter();
+});
+document.addEventListener('input', e => {
+  const ta = e.target.closest('[data-notes]');
+  if(!ta) return;
+  const id = ta.dataset.id;
+  // Keep the Live Notepad and the bottom notes box in sync (same lead, two textareas)
+  document.querySelectorAll('[data-notes]').forEach(o => { if(o !== ta && o.dataset.id === id) o.value = ta.value; });
+  clearTimeout(noteSaveTimers[id]);
+  noteSaveTimers[id] = setTimeout(() => {
+    const p = properties.find(x => x.id === id);
+    if(!p) return;
+    p.lead.notes = ta.value;
+    api('update-lead', {method:'POST', body:{propertyId:id, notes:ta.value}}).catch(err=>toast(err.message,'err'));
+  }, 1500);
+});
+
+// VA Notes (separate save endpoint)
+const vaNoteSaveTimers = {};
+document.addEventListener('input', e => {
+  const ta = e.target.closest('[data-vanotes]');
+  if(!ta) return;
+  const id = ta.dataset.id;
+  clearTimeout(vaNoteSaveTimers[id]);
+  vaNoteSaveTimers[id] = setTimeout(() => {
+    const p = properties.find(x => x.id === id);
+    if(!p) return;
+    p.lead = p.lead || {};
+    p.lead.va_notes = ta.value;
+    api('save-va-notes', {method:'POST', body:{propertyId:id, notes:ta.value}}).catch(err=>toast(err.message,'err'));
+  }, 1500);
+});
+
+// Lazy-load recordings when VA notes section opens
+document.addEventListener('toggle', e => {
+  const det = e.target;
+  if(!det.classList || !det.classList.contains('va-notes-block')) return;
+  if(!det.open) return;
+  const container = det.querySelector('[data-recordings-container]');
+  if(!container || container.dataset.loaded) return;
+  container.dataset.loaded = '1';
+  loadRecordings(container.getAttribute('data-recordings-container'), container.id);
+}, true);
+
+// ── Calling ─────────────────────────────────────────────────────
+async function placeCall(p, ph, btn, phidx){
+  btn.classList.add('dialing');
+  btn.querySelector('.badge:last-child').textContent='DIALING';
+  showDrawer({name:p.owners, num:ph.e164, state:'Initializing', from:fmtPhone(activeCallerId), addr:p.property_address, prop:p}, true);
+  try {
+    const r = await api('make-call',{method:'POST', body:{
+      to: toE164(ph.e164),
+      from: activeCallerId,
+      forwardTo: toE164(forwardPhone),
+      propertyId: p.id,
+      profileId: activeProfileId,
+    }});
+    activeCall = { sid:r.sid, btn, propertyId:p.id, phidx: (phidx==null?0:phidx), startedAt:Date.now() };
+    recPillShow(r.sid, r.recording);
+    setDrawerState('Ringing your phone','ringing');
+    btn.querySelector('.badge:last-child').textContent='RINGING';
+    activeCall.tickTimer = setInterval(updateDrawerTimer, 1000);
+    pollCallStatus(r.sid);
+  } catch(err){
+    btn.classList.remove('dialing');
+    const lastBadge = btn.querySelector('.badge:last-child');
+    if(lastBadge) lastBadge.textContent='📞 Call';
+    hideDrawer();
+    toast('Call failed: '+err.message,'err');
+  }
+}
+// ── Manual "dial a number" (not tied to a lead card) ─────────────
+async function placeManualCall(toNumber, label){
+  if(useMyPhone){
+    const n = toE164(toNumber);
+    if(!n){ toast('Enter a valid phone number','err'); return; }
+    $('manualDialModal').classList.remove('open');
+    $('manualDialNumber').value = ''; $('manualDialLabel').value = '';
+    callFromMyPhone(n, null);
+    return;
+  }
+  if(activeCall){ toast('A call is already in progress','err'); return; }
+  if(!forwardPhone){ toast('Set your phone in Settings first','err'); openModal('settingsModal'); return; }
+  if(!activeCallerId){ toast('Buy a phone number first','err'); openModal('numbersModal'); return; }
+  const e164 = toE164(toNumber);
+  if(!e164){ toast('Enter a valid phone number','err'); return; }
+  const goBtn = $('manualDialGo');
+  goBtn.disabled = true; goBtn.textContent = 'Dialing…';
+  showDrawer({name:label||'Manual call', num:e164, state:'Initializing', from:fmtPhone(activeCallerId)});
+  try {
+    const r = await api('make-call',{method:'POST', body:{
+      to: e164,
+      from: activeCallerId,
+      forwardTo: toE164(forwardPhone),
+      profileId: activeProfileId,
+    }});
+    activeCall = { sid:r.sid, btn:null, propertyId:null, startedAt:Date.now() };
+    recPillShow(r.sid, r.recording);
+    setDrawerState('Ringing your phone','ringing');
+    activeCall.tickTimer = setInterval(updateDrawerTimer, 1000);
+    pollCallStatus(r.sid);
+    $('manualDialModal').classList.remove('open');
+    $('manualDialNumber').value = '';
+    $('manualDialLabel').value = '';
+  } catch(err){
+    hideDrawer();
+    toast('Call failed: '+err.message,'err');
+  } finally {
+    goBtn.disabled = false; goBtn.textContent = '📞 Call';
+  }
+}
+$('manualDialGo').addEventListener('click', () => {
+  placeManualCall($('manualDialNumber').value.trim(), $('manualDialLabel').value.trim());
+});
+$('manualDialNumber').addEventListener('keydown', e => {
+  if(e.key === 'Enter') $('manualDialGo').click();
+});
+
+async function pollCallStatus(sid){
+  if(!activeCall || activeCall.sid !== sid) return;
+  try {
+    const j = await api('call-status&sid='+encodeURIComponent(sid));
+    const s = j.status || '';
+    if(s==='in-progress'){ setDrawerState('Connected','live'); if(activeCall.btn) activeCall.btn.querySelector('.badge:last-child').textContent='LIVE'; }
+    else if(['ringing','queued','initiated'].includes(s)){ setDrawerState('Ringing','ringing'); }
+    else if(s==='completed'){ finishCall('Completed', false); return; }
+    else if(['no-answer','busy','failed','canceled'].includes(s)){
+      finishCall(s.charAt(0).toUpperCase()+s.slice(1), true);
+      return;
+    }
+  } catch(e){ /* keep polling */ }
+  activeCall.statusTimer = setTimeout(()=>pollCallStatus(sid), 1500);
+}
+function finishCall(label, isErr){
+  if(!activeCall) return;
+  setDrawerState(label, isErr?'failed':'');
+  if(activeCall.btn){
+    activeCall.btn.classList.remove('dialing');
+    const b = activeCall.btn.querySelector('.badge:last-child');
+    if(b) b.textContent='📞 Call';
+  }
+  if(activeCall.tickTimer) clearInterval(activeCall.tickTimer);
+  if(activeCall.statusTimer) clearTimeout(activeCall.statusTimer);
+  clearTimeout(hideDrawerTimer);
+  hideDrawerTimer = setTimeout(hideDrawer, 1700);
+  activeCall = null;
+}
+let hideDrawerTimer = null;
+// ── Call scripts ────────────────────────────────────────────────
+// Sections render as collapsible blocks in the live-call panel.
+// Line kinds: say = read aloud · ask = question · note = coaching (not spoken)
+//             warn = do-this reminder · sub = subheading · li = bullet · copy = copyable block
+// Placeholders {FirstName} {StreetName} {YourName} {Price} are filled from the
+// live lead; anything that can't be filled renders as a red blank you can see.
+const CALL_SCRIPTS = {
+  lux: {
+    name: '💎 Luxury Seller',
+    sections: [
+      { t:'Opening', lines:[
+        { k:'say', x:'Hello {FirstName}?' },
+        { k:'note', x:'Wait for a response.' },
+        { k:'say', x:"I'm calling about your property on {StreetName}. Did I catch you at a bad time?" },
+      ]},
+      { t:'Positioning — credibility + permission', lines:[
+        { k:'say', x:'I am working with a developer in your area and we are actively looking for our next project. We specialize in discreet purchases of higher-end homes and redevelopment properties — no public listings, no open houses. I am not here to waste your time and will not do so with a lowball offer. Is this an okay time?' },
+        { k:'note', x:'If they hesitate:' },
+        { k:'say', x:"Totally fine — this will take about 60 seconds, and you can tell me if it's not relevant to you." },
+      ]},
+      { t:"Why you're calling", lines:[
+        { k:'say', x:"The reason I'm reaching out is, like I said, we're currently working with a small group of buyers looking for properties on larger or well-located lots in this area, and your property came up as a potential fit." },
+        { k:'say', x:"I'm not calling to pressure you into selling — I just want to see if a private, off-market option is something you'd ever consider." },
+      ]},
+      { t:'Soft interest check — gate question', lines:[
+        { k:'ask', x:'How long have you owned the property?' },
+        { k:'ask', x:'Do you have a plan for where you would go next? The only reason I ask is because we can be very flexible with our timeline and even offer sellers time after closing so that there is no stress on your end.' },
+      ]},
+      { t:'Lot size & shape', lines:[
+        { k:'note', x:'Ask conversationally — not like an inspection.' },
+        { k:'ask', x:'Do you happen to know the approximate lot size?' },
+        { k:'note', x:"Check multiple sources to verify. If they don't know: \u201CNo worries, I can find out the exact number easily.\u201D" },
+        { k:'ask', x:'Is the lot fairly rectangular, or does it have any irregular boundaries?' },
+        { k:'ask', x:'Any slope, wash, or natural features that affect buildable area?' },
+      ]},
+      { t:'Setbacks, easements & restrictions', lines:[
+        { k:'ask', x:'Are you aware of any easements on the property — utilities, drainage, access, or shared driveways?' },
+        { k:'ask', x:'Have you ever run into setback limitations or restrictions when making improvements?' },
+        { k:'ask', x:'Is the property subject to any deed restrictions, architectural guidelines, or neighborhood agreements?' },
+      ]},
+      { t:'Zoning & expansion potential', lines:[
+        { k:'ask', x:'Do you know how the property is zoned?' },
+        { k:'ask', x:'Do you know if it allows for expansion, guest homes, or potential lot splits?' },
+      ]},
+      { t:'Utilities & infrastructure — critical for tear-downs', lines:[
+        { k:'ask', x:'Is the home on sewer or septic?' },
+        { k:'ask', x:'Any known issues with utilities — water, power, or gas?' },
+        { k:'ask', x:'Is gas currently on site or nearby?' },
+      ]},
+      { t:'Motivation & timing', lines:[
+        { k:'ask', x:'If you ever did decide to sell, what would that next chapter look like for you?' },
+        { k:'ask', x:'Is there a particular timing that would matter — soon, later, or just whenever it makes sense?' },
+        { k:'ask', x:'What would need to happen for selling to feel worthwhile?' },
+      ]},
+      { t:'Pricing — low pressure', lines:[
+        { k:'ask', x:"I'm not asking for a firm number — but if you had to ballpark, where do you think the property might trade privately?" },
+        { k:'note', x:'If they hesitate:' },
+        { k:'say', x:'No problem — we usually focus on structure and options first before dialing in numbers.' },
+      ]},
+      { t:'How you operate — value positioning', lines:[
+        { k:'note', x:'Luxury sellers care about this.' },
+        { k:'say', x:'Just so you know how we work — everything is handled discreetly, we typically cover seller costs, and we work around your timeline.' },
+        { k:'say', x:'Some sellers prefer certainty, privacy, and flexibility over listing publicly.' },
+        { k:'say', x:'If it ever made sense, we could outline options like selling as-is, delayed closing, or even a potential lease-back.' },
+      ]},
+      { t:'Soft close — no pressure', lines:[
+        { k:'say', x:'Would it make sense for me to take a deeper look and come back with a few private options — purely informational?' },
+      ]},
+      { t:'Teeing up your offer', lines:[
+        { k:'say', x:'Sounds good, thank you so much for being patient with me and providing the answers to my questions. I will take this information and use it to formulate our offer for your property. Once I have everything ready, would you prefer if I called you back or sent the offer via text or email?' },
+      ]},
+      { t:'Making the offer — on the phone', lines:[
+        { k:'say', x:'Hello {FirstName}, this is {YourName} calling you back with an offer for your property on {StreetName}. Is now a good time?' },
+        { k:'say', x:"Fantastic, I'll keep this short and sweet for you. Please keep in mind these numbers are net to you. No commissions or closing costs on your end [plus any additional terms, like a lease-back if applicable]. Our approved offer for your property is {Price}." },
+        { k:'warn', x:'🤐 SHUT UP UNTIL THEY SPEAK' },
+        { k:'sub', x:'Rebuttal 1' },
+        { k:'say', x:'I do want you to keep in mind that like I said these numbers are net to you. No commissions or closing costs on your end. This alone saves you 7–8%, so our offer is the same as if you had sold on-market for {Price}.' },
+        { k:'sub', x:'Rebuttal 2' },
+        { k:'say', x:'Completely understand where you are coming from. For us, this is a simple math equation. We know based on your lot how big and nice of a property we can build, and what comparable properties of that size will sell for in your neighborhood. We plug those numbers in and our offer is what came out.' },
+        { k:'sub', x:'Re-education' },
+        { k:'note', x:'Explain comps in their area. Run the numbers for them.' },
+      ]},
+      { t:'Offer via text / email', lines:[
+        { k:'copy', x:'{FirstName},\n\nOur offer is as outlined below:\n\nPurchase Price:\nEMD:\nClose of Escrow:\nAdditional Terms:\n\nPlease keep in mind these numbers are net to you. No commissions or closing costs on your end. This alone saves you 7–8%, so our offer is the same as if you had sold on-market for {Price}.\n\n{YourName}' },
+      ]},
+      { t:'Internal notes to capture', lines:[
+        { k:'note', x:'Log these in the Live Notepad on the lead card.' },
+        { k:'li', x:'Lot size (actual vs usable)' },
+        { k:'li', x:'Zoning / overlay' },
+        { k:'li', x:'Easements or setbacks' },
+        { k:'li', x:'Sewer vs septic' },
+        { k:'li', x:'Motivation (estate, downsizing, privacy, cash-out)' },
+        { k:'li', x:'Timing' },
+        { k:'li', x:'Seller sophistication' },
+        { k:'li', x:'Emotional attachment' },
+      ]},
+      { t:'Training note', lines:[
+        { k:'note', x:'Luxury sellers respond best when:' },
+        { k:'li', x:"You don't rush to price, but affirm you are not here to give them a lowball offer" },
+        { k:'li', x:'You lead with intelligent land questions to show you are the real deal' },
+        { k:'li', x:'You listen more than you speak' },
+        { k:'li', x:'You sell flexibility, privacy, and certainty, as well as large savings on commissions' },
+      ]},
+    ],
+  },
+
+  closer1: {
+    name: "\u260E\uFE0F Closer \u2014 First Call",
+    sections: [
+      { t:'Introduction', lines:[
+        { k:'say', x:"Hi {FirstName}, how are you doing today?" },
+        { k:'say', x:"My name is {YourName} with {Company}. I'm actually calling in regards to your property at {StreetAddress}." },
+        { k:'say', x:"It looks like your property got paired with us because they thought we'd be a good fit for you. Did I catch you at a bad time?" },
+        { k:'ask', x:"Great \u2014 and it looks like in my notes here you're interested in selling that property at {StreetAddress}, correct?" },
+      ]},
+
+      { t:'Setting expectations', lines:[
+        { k:'say', x:"Great {FirstName}, so the point of this phone call is to get more information and see if the property qualifies for an as-is cash offer for our portfolio. By the end of this call I'll give you a yes or no, and if it's a yes I'll take it to my acquisitions team to see what the property comes back at. Sound good?" },
+        { k:'say', x:"And lastly, if you want to grab a pen and paper, jot down my contact information: my name is {YourName}, the company is {Company}, and our website is {Website}." },
+      ]},
+
+      { t:'Why they\u2019re selling', lines:[
+        { k:'ask', x:"So catch me up to speed {FirstName} \u2014 why are you considering selling?" },
+        { k:'ask', x:"How long have you been thinking about selling?" },
+        { k:'ask', x:"Do you have any plans for what to do after you sell?" },
+        { k:'ask', x:"What will selling do for you, or help you accomplish?" },
+        { k:'ask', x:"What are you going to do with the money, if you don't mind me asking?" },
+        { k:'ask', x:"How long have you lived there or owned the property?" },
+      ]},
+
+      { t:'Decision makers', lines:[
+        { k:'ask', x:"Is it just you that owns the property and makes the decision?" },
+        { k:'ask', x:"Are they available to hop on the call with us?" },
+        { k:'ask', x:"When was the last time you two spoke about selling the property?" },
+        { k:'ask', x:"Would there be anyone else who might be even a tiny bit upset that you're selling the property?" },
+      ]},
+
+      { t:'Neighborhood & exterior', lines:[
+        { k:'ask', x:"Before we get into the house, can you tell me a little about how you've liked living in that neighborhood?" },
+        { k:'ask', x:"How are the neighbors?" },
+        { k:'ask', x:"Do you know if there are a lot of renters on that block, or mostly owners?" },
+        { k:'ask', x:"Is there anything wrong with the structure of the home? The foundation? The siding?" },
+        { k:'ask', x:"What does the condition of the roof look like \u2014 how old is it?" },
+      ]},
+
+      { t:'Inside the house', lines:[
+        { k:'say', x:"Okay great {FirstName}, now what I'd like you to do, best you can, is walk me through the front door of the house." },
+        { k:'ask', x:"Is the inside still original from {YearBuilt}, or have there been updates done?" },
+        { k:'ask', x:"Are you currently living there, or is it vacant or tenant occupied?" },
+        { k:'ask', x:"How many bedrooms and bathrooms are there?" },
+        { k:'ask', x:"What does the kitchen look like \u2014 any upgrades to the cabinets or appliances, or would you say it's dated?" },
+        { k:'ask', x:"How about the bathrooms \u2014 any updates, or original?" },
+        { k:'ask', x:"What are the floors like?" },
+        { k:'ask', x:"How about the windows \u2014 newer or original?" },
+        { k:'ask', x:"What can you tell me about the HVAC and plumbing? Is everything working properly? Have you had that checked recently?" },
+        { k:'ask', x:"If you personally had 20\u201330k to change certain things in the house, what would you spend it on? Just to help me get a better idea." },
+        { k:'ask', x:"Is there anything I haven't asked you about that you might need help with regarding the property?" },
+        { k:'say', x:"Okay {FirstName}, I'm writing all of this up for my acquisitions team to review \u2014 I appreciate the information so far." },
+      ]},
+
+      { t:'Liens, timeline & price', lines:[
+        { k:'ask', x:"Oh, before I forget \u2014 are there any liens or mortgages on the property? How much is still left on the mortgage?" },
+        { k:'say', x:"The only reason I ask isn't to be nosey \u2014 depending on how much is left, we can put a few different options in front of you." },
+        { k:'say', x:"One of the things sellers like about us is we're flexible on how quick we close \u2014 usually 21 to 30 days." },
+        { k:'ask', x:"So if my team came back with an offer that made sense for you, what closing timeline would be best?" },
+        { k:'ask', x:"And with that said \u2014 if we look into your property and come to an agreement on a fair price, you're definitely ready to sell it, right?" },
+        { k:'ask', x:"Based on everything you've told me, how much were you hoping to get for the property?" },
+        { k:'ask', x:"Do you have a ballpark? I don't want to go back to my team empty handed." },
+      ]},
+
+      { t:'How the process works', lines:[
+        { k:'ask', x:"If we can get an offer approved, do you mind if I tell you briefly how the process works?" },
+        { k:'say', x:"Once the offer is approved and accepted, we e-sign a simple two-page agreement \u2014 it's plain English, easy for anyone to read. After that we'd need access to the property a couple of times to get our contractors or financial partners in for five minutes, while the title report is being run. Once the title company says we're good to go, we schedule closing, we close, and you get paid. Super simple." },
+        { k:'ask', x:"Any questions about that?" },
+      ]},
+
+      { t:'Booking the callback', lines:[
+        { k:'say', x:"Okay {FirstName}, what I'm going to do is run this back and see what my team comes up with. It usually takes about 10 to 15 minutes \u2014 can I call you back at that point?" },
+        { k:'say', x:"The call will only take about five minutes, and all we ask is a confident yes or no on whether you want to move forward. A no is perfectly okay, no hard feelings. Sound good?" },
+        { k:'say', x:"Great, hang tight and I'll call you back at this number. Thank you {FirstName}." },
+      ]},
+
+      { t:'Objections', lines:[
+        { k:'sub', x:'"I just want an offer" / rude' },
+        { k:'say', x:"Hey {FirstName}, I'm sure you get these calls all the time, am I right? Am I the first or the fifth person to call you today? What I can tell you is this call isn't going to be like the other ones \u2014 the difference is we can actually close on your property and help you in a few different ways." },
+
+        { k:'sub', x:'"My mortgage amount is none of your business"' },
+        { k:'say', x:"Totally understand \u2014 you remind me of my grandfather, straight to business. The only reason I asked is that it changes which options I can put in front of you." },
+
+        { k:'sub', x:'"My realtor said I can get X"' },
+        { k:'say', x:"Gotcha {FirstName}. I love real estate agents, that's how I got started in this business, but they'll sometimes promise the moon just to get a listing." },
+        { k:'ask', x:"Did they provide you recent comps, and were those comps newly renovated or in as-is condition like yours?" },
+
+        { k:'sub', x:'"How can you make an offer without seeing my house?"' },
+        { k:'say', x:"Because we have a very specific buy box and we do our homework extensively \u2014 and we will see the property before we close." },
+
+        { k:'sub', x:'"Shouldn\u2019t you already know all this about my property?"' },
+        { k:'say', x:"I can find out a fair bit, but I can't see the condition inside, the occupancy, things of that nature. If you can hang with me through a few questions, I promise I'll get an offer over to you." },
+
+        { k:'sub', x:'"I have to think about it / I\u2019m not sure"' },
+        { k:'ask', x:"Totally understand {FirstName} \u2014 is there anything specific that's causing you to hesitate?" },
+        { k:'say', x:"Got it {FirstName}, so it sounds to me \u2014 and correct me if I'm wrong \u2014 like you aren't super serious about selling right now and you're just gathering offers, which is 100% okay." },
+        { k:'ask', x:"Is that the case?" },
+
+        { k:'sub', x:'"I have a higher offer"' },
+        { k:'ask', x:"I hear that pretty often \u2014 can you walk me through the offer? What are the terms, the price, and is it in writing?" },
+
+        { k:'sub', x:'"I have to talk to my wife/husband"' },
+        { k:'ask', x:"Got it \u2014 at the beginning you mentioned you were the main decision maker, correct? When did you two last talk about selling?" },
+        { k:'ask', x:"Knowing them, what do you think they'd say about the offer? Is there a time we can all hop on the phone together to go through it?" },
+
+        { k:'sub', x:'"The property next door sold for X"' },
+        { k:'ask', x:"That's helpful to know \u2014 how does that house compare to yours on square footage, lot size, bedrooms and bathrooms, and the condition inside?" },
+        { k:'say', x:"Yours is {Sqft} square feet on a {LotSize} lot, built in {YearBuilt}, so the two may not be lining up the way it looks on paper." },
+
+        { k:'sub', x:'"I don\u2019t have a place to move to"' },
+        { k:'say', x:"Actually, I can connect you with a great realtor in the area who can help you find a new spot to move into." },
+
+        { k:'sub', x:'"I need time to move out"' },
+        { k:'say', x:"That's totally fine, we can close when you move out." },
+        { k:'ask', x:"How long do you think it would take you? What can I do to help with that process?" },
+      ]},
+    ],
+  },
+};
+
+let activeScriptKey = localStorage.getItem('cb_script_key') || 'lux';
+// A caller may have a deleted script saved from a previous build — fall back
+// to the first one that still exists instead of rendering an empty panel.
+if(!CALL_SCRIPTS[activeScriptKey]){
+  activeScriptKey = Object.keys(CALL_SCRIPTS)[0];
+  localStorage.setItem('cb_script_key', activeScriptKey);
+}
+let scriptAutoOpen  = localStorage.getItem('cb_script_auto') !== '0';
+let scriptCtx = {};
+
+// "312 NATHAN HALE RD, WEST PALM BEACH, FL 33405" -> "Nathan Hale Rd"
+const STREET_UPPER = new Set(['N','S','E','W','NE','NW','SE','SW','NB','SB','US','SR','FM']);
+function streetNameOnly(addr){
+  if(!addr) return '';
+  let s = String(addr).split(',')[0].trim();
+  s = s.replace(/^[\d\-\/]+\s+/, '');            // drop house number
+  s = s.replace(/\s+(apt|unit|ste|#)\s*\S+$/i, '');
+  return s.replace(/\S+/g, w =>
+    STREET_UPPER.has(w.toUpperCase()) ? w.toUpperCase()
+      : w.charAt(0).toUpperCase() + w.slice(1).toLowerCase());
+}
+function firstNameOnly(owners){
+  if(!owners) return '';
+  let s = String(owners).trim();
+  // "ZAFIRIS, CHRISTINA" style lists put the given name after the comma
+  if(s.includes(',')) s = s.split(',').slice(1).join(' ').trim() || s.split(',')[0];
+  const w = s.split(/\s+/)[0] || '';
+  return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
+}
+// Fill placeholders; unknowns render as a visible red blank rather than silently vanishing
+// Twilio hands back a numeric code on a busy/failed leg. On its own
+// "busy" is useless — these are the causes that actually come up.
+const TWILIO_CALL_HELP = {
+  13224: 'Twilio will not dial that number — check it is a real, dialable US number in +1XXXXXXXXXX form.',
+  13225: 'That number is blocked for this account (Voice geographic permissions).',
+  21215: 'Geographic permissions: this Twilio account is not allowed to call that country. Turn the country on under Voice → Geo Permissions.',
+  21210: 'The From number is not a Twilio number you own, and is not a Verified Caller ID.',
+  21211: 'The To number is not a valid phone number.',
+  21214: 'The To number is not verified. On a TRIAL account, Twilio only calls verified numbers — upgrade the account or verify this number.',
+  21219: 'The To number is not verified — trial accounts can only reach verified numbers.',
+  21220: 'The call was rejected before it connected.',
+  32213: 'The carrier rejected the call.',
+};
+function explainCallEnd(r){
+  const st = String((r && r.status) || '').toLowerCase();
+  const code = r && r.errorCode ? parseInt(r.errorCode, 10) : 0;
+  const bits = [];
+  if(code && TWILIO_CALL_HELP[code]) bits.push(TWILIO_CALL_HELP[code]);
+  else if(code) bits.push(String(r.errorMessage || ('Twilio error ' + code)));
+  else if(st === 'busy') bits.push(
+    'The carrier returned busy without ringing the handset. That is almost always ' +
+    'spam filtering on the caller ID, or the phone is already on a call — not a bug in the app. ' +
+    'Try a different Twilio caller ID, and check the number is not still tied up in an earlier session.'
+  );
+  else if(st === 'no-answer') bits.push('It rang out. Nobody picked up before the timeout.');
+  else if(st === 'canceled') bits.push('The call was hung up before it was answered.');
+  else if(st === 'failed') bits.push('Twilio could not complete the call.');
+  if(code) bits.push('Twilio code ' + code + '.');
+  return bits.join(' ');
+}
+
+// One-shot ring test on the number in Settings.
+async function runPhoneTest(){
+  const btn = $('testPhoneBtn');
+  const box = $('testPhoneResult');
+  const show = (msg, good) => {
+    box.textContent = msg;
+    box.style.background = good ? '#f0fdf4' : '#fef2f2';
+    box.style.border = '1px solid ' + (good ? '#86efac' : '#fca5a5');
+    box.style.color = good ? '#166534' : '#991b1b';
+    box.classList.remove('hide');
+  };
+  const phone = toE164($('settingsForwardPhone').value.trim());
+  if(!phone || phone.length < 12){ show('Enter a valid US number first.', false); return; }
+  if(!activeCallerId){ show('Pick a Twilio caller ID at the top of the app first.', false); return; }
+
+  btn.disabled = true; btn.textContent = 'Calling…';
+  show('Placing the call from ' + fmtPhone(activeCallerId) + ' to ' + fmtPhone(phone) + '…', true);
+  try {
+    const j = await api('test-phone', {method:'POST', body:{ phone, from: activeCallerId }});
+    // Watch it to the end so we can report the real outcome, not just "queued".
+    let tries = 0;
+    const poll = async () => {
+      tries++;
+      let r = null;
+      try { r = await api('call-status&sid=' + encodeURIComponent(j.sid)); } catch(e){}
+      const st = r ? String(r.status || '') : '';
+      if(['completed','answered','in-progress'].includes(st) && (r.duration > 0 || st === 'in-progress')){
+        show('✅ Answered. This number works — ' + fmtPhone(phone) + ' is reachable from ' + fmtPhone(activeCallerId) + '.', true);
+        btn.disabled = false; btn.textContent = '📞 Ring this phone now (test)';
+        return;
+      }
+      if(['busy','failed','no-answer','canceled','completed'].includes(st)){
+        show('❌ Call ended as "' + st + '". ' + explainCallEnd(r), false);
+        btn.disabled = false; btn.textContent = '📞 Ring this phone now (test)';
+        return;
+      }
+      if(tries > 30){
+        show('Gave up watching the call. Last status: ' + (st || 'unknown') + '.', false);
+        btn.disabled = false; btn.textContent = '📞 Ring this phone now (test)';
+        return;
+      }
+      setTimeout(poll, 2000);
+    };
+    setTimeout(poll, 2500);
+  } catch(e){
+    show('❌ ' + e.message, false);
+    btn.disabled = false; btn.textContent = '📞 Ring this phone now (test)';
+  }
+}
+$('testPhoneBtn')?.addEventListener('click', runPhoneTest);
+
+// ── Inbound call handling (screening + voicemail greetings) ────
+async function loadVoiceSettings(){
+  try {
+    const j = await api('get-voice-settings');
+    if($('voiceScreen'))       $('voiceScreen').value = j.screen === false ? '0' : '1';
+    if($('voiceGreeting'))     $('voiceGreeting').value = j.greeting || '';
+    if($('voiceVmGreeting'))   $('voiceVmGreeting').value = j.vmGreeting || '';
+    if($('voiceRingSeconds'))  $('voiceRingSeconds').value = j.ringSeconds || 25;
+  } catch(e){ /* older backend — leave the fields blank */ }
+}
+$('voiceSettingsSave')?.addEventListener('click', async () => {
+  const btn = $('voiceSettingsSave');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  try {
+    await api('save-voice-settings', {method:'POST', body:{
+      screen:      $('voiceScreen').value === '1',
+      greeting:    $('voiceGreeting').value.trim(),
+      vmGreeting:  $('voiceVmGreeting').value.trim(),
+      ringSeconds: parseInt($('voiceRingSeconds').value, 10) || 25,
+    }});
+    toast('Call handling saved — it applies to the next inbound call','ok');
+  } catch(e){ toast('Could not save: '+e.message,'err'); }
+  btn.disabled = false; btn.textContent = 'Save call handling';
+});
+
+// Is the deployed api.js actually the one this page expects? Frontend and
+// backend ship as separate files, so it is easy to update one and not the
+// other — which surfaces later as "Unknown action" on a button that looks
+// like it should work.
+const EXPECTED_API_VERSION = '2026-08-22-b';
+async function checkApiVersion(){
+  const line = $('apiVersionLine');
+  if(!line) return;
+  try {
+    const j = await api('api-version');
+    if(j && j.version === EXPECTED_API_VERSION){
+      line.textContent = 'Backend: ' + j.version + ' ✅ up to date';
+      line.style.color = '#166534';
+    } else {
+      line.textContent = 'Backend: ' + ((j && j.version) || 'unknown') +
+        ' ⚠️ this page expects ' + EXPECTED_API_VERSION + ' — deploy the newer api.js';
+      line.style.color = '#b45309';
+    }
+  } catch(e){
+    line.textContent = 'Backend: OLD BUILD ❌ — api.js on the server is out of date. ' +
+      'Upload the new api.js and redeploy, then reopen Settings.';
+    line.style.color = '#b91c1c';
+  }
+}
+
+function fillScript(text, ctx, forCopy){
+  const vals = {
+    FirstName:      ctx.firstName || '',
+    LastName:       ctx.lastName || '',
+    OwnerName:      ctx.ownerName || '',
+    Address:        ctx.address || '',
+    StreetAddress:  ctx.streetAddress || '',
+    StreetName:     ctx.streetName || '',
+    City:           ctx.city || '',
+    State:          ctx.stateAbbr || '',
+    Zip:            ctx.zip || '',
+    YearBuilt:      ctx.yearBuilt || '',
+    Sqft:           ctx.sqft || '',
+    LotSize:        ctx.lotSize || '',
+    Zoning:         ctx.zoning || '',
+    Beds:           ctx.beds || '',
+    Baths:          ctx.baths || '',
+    PropertyType:   ctx.propertyType || '',
+    APN:            ctx.apn || '',
+    County:         ctx.county || '',
+    MailingAddress: ctx.mailingAddress || '',
+    Email:          ctx.email || '',
+    ListName:       ctx.listName || '',
+    LeadPhone:      ctx.leadPhone || '',
+    YourName:       ctx.yourName || '',
+    Company:        ctx.company || DEFAULT_COMPANY,
+    Website:        ctx.website || DEFAULT_WEBSITE,
+    CallbackNumber: ctx.callbackNumber || '',
+    Price: '',
+  };
+  return String(text).replace(/\{(\w+)\}/g, (m, key) => {
+    const v = vals[key];
+    if(forCopy) return v || `[${key.replace(/([A-Z])/g,' $1').trim().toUpperCase()}]`;
+    if(v) return `<span class="sp-fill">${escapeHtml(v)}</span>`;
+    return `<span class="sp-blank">[${escapeHtml(key.replace(/([A-Z])/g,' $1').trim().toUpperCase())}]</span>`;
+  });
+}
+// Everything known about this lead, owner and property side by side.
+function scriptFactsHtml(){
+  const c = scriptCtx || {};
+  const row = (k, v) => v ? `<div class="sf-row"><span class="sf-k">${escapeHtml(k)}</span><span class="sf-v">${escapeHtml(v)}</span></div>` : '';
+
+  const owner = [
+    row('Owner',   c.ownerName),
+    row('Goes by', c.firstName),
+    row('Phone',   c.leadPhone),
+    row('Email',   c.email),
+    row('Mailing', c.mailingAddress),
+  ].join('');
+
+  // Named fields first, then anything else the import carried, so a spec
+  // we don't have a slot for still shows up instead of vanishing.
+  const named = ['year built','built','yearbuilt','sqft','square footage','building sqft',
+                 'lot','lot size','zoning','zone','bed/bath','beds/baths','beds','bedrooms',
+                 'baths','bathrooms','property type','type','apn','county'];
+  const extra = (c.allSpecs || [])
+    .filter(sp => !named.includes(String(sp.k).toLowerCase()))
+    .map(sp => row(sp.k, sp.v)).join('');
+
+  const property = [
+    row('Address',  c.address),
+    row('City',     [c.city, c.stateAbbr, c.zip].filter(Boolean).join(' ')),
+    row('Beds/Baths', [c.beds, c.baths].filter(Boolean).join(' / ')),
+    row('Sqft',     c.sqft),
+    row('Lot',      c.lotSize),
+    row('Zoning',   c.zoning),
+    row('Built',    c.yearBuilt),
+    row('Type',     c.propertyType),
+    row('APN',      c.apn),
+    row('County',   c.county),
+    row('List',     c.listName),
+    extra,
+  ].join('');
+
+  if(!owner && !property) return '';
+  return `<div class="sp-facts">
+    <div class="sf-col"><div class="sf-h">👤 Owner</div>${owner || '<div class="sf-none">Nothing on file</div>'}</div>
+    <div class="sf-col"><div class="sf-h">🏠 Property</div>${property || '<div class="sf-none">Nothing on file</div>'}</div>
+  </div>`;
+}
+
+function renderScriptPanel(){
+  const sc = CALL_SCRIPTS[activeScriptKey] || CALL_SCRIPTS.lux;
+  $('spSelect').innerHTML = Object.entries(CALL_SCRIPTS)
+    .map(([k,v]) => `<option value="${escapeHtml(k)}"${k===activeScriptKey?' selected':''}>${escapeHtml(v.name)}</option>`).join('');
+  $('spSub').textContent = [scriptCtx.firstName, scriptCtx.streetName].filter(Boolean).join(' · ') || 'No lead attached';
+  $('spBody').innerHTML = scriptFactsHtml() + sc.sections.map((sec, i) => {
+    const body = sec.lines.map(l => {
+      const html = fillScript(l.x, scriptCtx, false);
+      if(l.k === 'say')  return `<div class="sp-say">${html}</div>`;
+      if(l.k === 'ask')  return `<div class="sp-ask">${html}</div>`;
+      if(l.k === 'note') return `<div class="sp-note">${html}</div>`;
+      if(l.k === 'warn') return `<div class="sp-warn">${escapeHtml(l.x)}</div>`;
+      if(l.k === 'sub')  return `<div class="sp-sub">${escapeHtml(l.x)}</div>`;
+      if(l.k === 'li')   return `<div class="sp-li">${html}</div>`;
+      if(l.k === 'copy') return `<div class="sp-say" style="white-space:pre-wrap">${html}</div>`
+        + `<button class="sp-copy" data-script-copy="${escapeHtml(encodeURIComponent(fillScript(l.x, scriptCtx, true)))}">⧉ Copy to send</button>`;
+      return '';
+    }).join('');
+    return `<details class="sp-sec"${i===0?' open':''}><summary><span class="sp-n">${i+1}</span>${escapeHtml(sec.t)}</summary><div class="sp-in">${body}</div></details>`;
+  }).join('');
+}
+function lastNameOnly(owners){
+  if(!owners) return '';
+  let s = String(owners).trim();
+  if(s.includes(',')) s = s.split(',')[0].trim();      // "SMITH, JOHN"
+  else { const w = s.split(/\s+/); s = w.length > 1 ? w[w.length-1] : ''; }
+  if(!s) return '';
+  return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
+}
+// Pull a value out of the spec pairs the importer folded into notes
+function specVal(specs, ...names){
+  for(const n of names){
+    const hit = specs.find(sp => String(sp.k).toLowerCase() === n.toLowerCase());
+    if(hit && String(hit.v).trim()) return String(hit.v).trim();
+  }
+  return '';
+}
+// "312 Nathan Hale Rd, West Palm Beach, FL 33405" -> parts
+function addrParts(addr){
+  const parts = String(addr||'').split(',').map(x => x.trim()).filter(Boolean);
+  const street = parts[0] || '';
+  const city   = parts.length > 2 ? parts[1] : (parts.length === 2 ? parts[1].replace(/\s+[A-Z]{2}\s*\d{5}.*$/,'').trim() : '');
+  const tail   = parts.slice(city && parts.length > 2 ? 2 : 1).join(' ');
+  const m      = String(tail).match(/\b([A-Za-z]{2})\b[\s,]*(\d{5})?/);
+  return { street, city, st: m ? m[1].toUpperCase() : '', zip: m && m[2] ? m[2] : '' };
+}
+function setScriptContext(o){
+  const prop  = (o && o.prop) || null;
+  // Property specs are stored on the LEAD row as "Key: value · Key: value"
+  // (that's what the cards read). Reading prop.notes here meant every
+  // property placeholder came back blank while owner fields filled fine.
+  const lead  = (prop && prop.lead) || {};
+  const specSrc = [lead.va_notes, lead.notes, prop && prop.notes]
+    .filter(x => x && String(x).trim()).join('\n');
+  const specs = specSrc ? parseLeadSpecs(specSrc).specs : [];
+  const addr  = (o && o.addr) || (prop && prop.property_address) || '';
+  const a     = addrParts(addr);
+  const bb    = specVal(specs, 'bed/bath', 'beds/baths');
+  const bbSplit = bb ? bb.split(/[\/|]/).map(x => x.trim()) : [];
+  scriptCtx = {
+    firstName:      firstNameOnly(o && o.name),
+    lastName:       lastNameOnly(o && o.name),
+    ownerName:      (o && o.name) ? String(o.name).trim() : '',
+    address:        addr,
+    streetAddress:  a.street,
+    streetName:     streetNameOnly(addr),
+    city:           a.city,
+    stateAbbr:      a.st,
+    zip:            a.zip,
+    yearBuilt:      specVal(specs, 'year built', 'built', 'yearbuilt'),
+    sqft:           specVal(specs, 'sqft', 'square footage', 'building sqft'),
+    lotSize:        specVal(specs, 'lot', 'lot size'),
+    zoning:         specVal(specs, 'zoning', 'zone'),
+    beds:           bbSplit[0] || specVal(specs, 'beds', 'bedrooms'),
+    baths:          bbSplit[1] || specVal(specs, 'baths', 'bathrooms'),
+    propertyType:   specVal(specs, 'property type', 'type'),
+    apn:            specVal(specs, 'apn'),
+    county:         specVal(specs, 'county'),
+    mailingAddress: (prop && prop.mailing_address) || '',
+    email:          (prop && prop.email) || '',
+    listName:       (prop && prop.list_name) || lead.list_name || '',
+    leadPhone:      fmtPhone((o && o.num) || (prop && prop.phones && prop.phones[0] && prop.phones[0].e164)) || '',
+    yourName:       localStorage.getItem(LS.profileName) || '',
+    company:        companyName(),
+    website:        companySite(),
+    callbackNumber: fmtPhone(forwardPhone || activeCallerId) || '',
+    // Everything the importer gave us, for the facts panel
+    allSpecs:       specs,
+  };
+}
+function openScriptPanel(){
+  renderScriptPanel();
+  const panel = $('scriptPanel');
+  panel.style.bottom = ($('callDrawer').offsetHeight || 0) + 'px';
+  panel.classList.add('open');
+  $('cdScript').classList.add('on');
+}
+function closeScriptPanel(){
+  $('scriptPanel').classList.remove('open');
+  $('cdScript').classList.remove('on');
+}
+function toggleScriptPanel(){
+  $('scriptPanel').classList.contains('open') ? closeScriptPanel() : openScriptPanel();
+}
+$('cdScript').addEventListener('click', toggleScriptPanel);
+$('spClose').addEventListener('click', closeScriptPanel);
+$('spSelect').addEventListener('change', e => {
+  activeScriptKey = e.target.value;
+  localStorage.setItem('cb_script_key', activeScriptKey);
+  renderScriptPanel();
+});
+$('spAuto').checked = scriptAutoOpen;
+$('spAuto').addEventListener('change', e => {
+  scriptAutoOpen = e.target.checked;
+  localStorage.setItem('cb_script_auto', scriptAutoOpen ? '1' : '0');
+});
+document.addEventListener('click', async e => {
+  const btn = e.target.closest('[data-script-copy]');
+  if(!btn) return;
+  const text = decodeURIComponent(btn.dataset.scriptCopy);
+  try { await navigator.clipboard.writeText(text); toast('Offer template copied','ok'); }
+  catch { toast('Copy failed — long-press the text to select it','err'); }
+});
+window.addEventListener('resize', () => {
+  const panel = $('scriptPanel');
+  if(panel.classList.contains('open')) panel.style.bottom = ($('callDrawer').offsetHeight || 0) + 'px';
+});
+
+function showDrawer(o, hasLead){
+  clearTimeout(hideDrawerTimer);
+  $('cdName').textContent = o.name||'—';
+  $('cdNum').textContent  = fmtPhone(o.num)||'—';
+  $('cdFrom').textContent = o.from?'from '+o.from:'';
+  $('cdTimer').textContent = '00:00';
+  setDrawerState(o.state||'…','');
+  $('cdNextNum').disabled = !hasLead;
+  $('cdNextLead').disabled = !hasLead;
+  $('callDrawer').classList.add('open');
+  setScriptContext(o);
+  if(scriptAutoOpen) openScriptPanel();
+  else if($('scriptPanel').classList.contains('open')) renderScriptPanel();
+}
+function hideDrawer(){
+  closeScriptPanel();
+  $('callDrawer').classList.remove('open');
+  recPillReset();
+}
+function setDrawerState(text, cls){ const st=$('cdState'); st.textContent=text; st.className='state '+(cls||''); }
+function updateDrawerTimer(){
+  if(!activeCall) return;
+  const s = Math.floor((Date.now()-activeCall.startedAt)/1000);
+  const mm = String(Math.floor(s/60)).padStart(2,'0');
+  const ss = String(s%60).padStart(2,'0');
+  $('cdTimer').textContent = mm+':'+ss;
+}
+$('cdHangup').addEventListener('click', async ()=>{
+  if(!activeCall){ hideDrawer(); return; }
+  try { await api('end-call', {method:'POST', body:{sid:activeCall.sid}}); } catch{}
+  finishCall('Ended', false);
+});
+function findLeadButton(pid, phidx){
+  return document.querySelector(`[data-call][data-pid="${CSS.escape(pid)}"][data-phidx="${phidx}"]`);
+}
+const dummyCallBtn = { classList:{add(){},remove(){},contains(){return false;}}, querySelector(){return {textContent:''};} };
+$('cdNextNum').addEventListener('click', async ()=>{
+  if(!activeCall || !activeCall.propertyId) return;
+  const {propertyId, phidx, sid} = activeCall;
+  const p = properties.find(x => x.id === propertyId);
+  const nextIdx = (phidx==null?0:phidx) + 1;
+  const ph = p?.phones?.[nextIdx];
+  if(!ph){ toast("No more numbers for this lead",'err'); return; }
+  try { await api('end-call', {method:'POST', body:{sid}}); } catch{}
+  finishCall('Skipped', false);
+  setTimeout(() => placeCall(p, ph, findLeadButton(p.id, nextIdx) || dummyCallBtn, nextIdx), 400);
+});
+$('cdNextLead').addEventListener('click', async ()=>{
+  if(!activeCall || !activeCall.propertyId) return;
+  const {propertyId, sid} = activeCall;
+  const list = getFilteredProperties();
+  const curIdx = list.findIndex(x => x.id === propertyId);
+  let next = null;
+  for(let i = curIdx+1; i < list.length; i++){
+    if(list[i].phones && list[i].phones.length){ next = list[i]; break; }
+  }
+  if(!next){ toast('No more leads in this list','err'); return; }
+  try { await api('end-call', {method:'POST', body:{sid}}); } catch{}
+  finishCall('Skipped', false);
+  setTimeout(() => placeCall(next, next.phones[0], findLeadButton(next.id, 0) || dummyCallBtn, 0), 400);
+});
+// Build the spoken voicemail for one lead. Shared by the VM Drop button
+// and by the automatic drop when answering-machine detection fires.
+function buildVmMessage(p){
+  const first = (p && p.owners ? String(p.owners).trim().split(/[\s,&]+/)[0] : '') || 'there';
+  const streetAddr = (p && p.property_address ? String(p.property_address).split(',')[0].trim() : 'your property');
+  return (localStorage.getItem(LS.vmMessage) || DEFAULT_VM_MESSAGE)
+    .replace(/\{FirstName\}/gi, first)
+    .replace(/\{OwnerName\}/gi, (p && p.owners) ? String(p.owners).trim() : first)
+    .replace(/\{Address\}/gi, streetAddr)
+    .replace(/\{Website\}/gi, 'win win properties dot net')
+    .replace(/\{CallbackNumber\}/gi, fmtPhone(forwardPhone || activeCallerId) || 'this number');
+}
+
+// Automatic drop during a power dial session. The seller's leg is dialed
+// straight into the conference, so it has no parent call — `direct` tells
+// the backend to speak into this sid rather than hunting for a child leg.
+async function pdAutoDropVoicemail(sid, propertyId){
+  if(pdVmDropped || pdVmDropping) return;
+  pdVmDropping = true;
+  const p = properties.find(x => x.id === propertyId);
+  pdSetState('Voicemail — dropping…', 'vm');
+  try {
+    await api('drop-voicemail', {method:'POST', body:{
+      sid,
+      profileId: (pdSession && pdSession.profileId) || activeProfileId,
+      message: buildVmMessage(p),
+      voice: localStorage.getItem(LS.vmVoice) || 'Polly.Ruth-Generative',
+      forceTts: (localStorage.getItem(LS.vmMode) || 'ai') === 'ai',
+      direct: true,
+    }});
+    pdVmDropped = true;
+    pdSetState('Voicemail dropped', 'vm');
+    toast('Voicemail dropped for ' + ((p && p.owners) || 'this lead'), 'ok');
+    if(p){
+      p.lead = p.lead || {};
+      p.lead.lead_status = 'voicemail';
+      p.lead.called = true;
+      api('update-lead', {method:'POST', body:{propertyId:p.id, leadStatus:'voicemail'}}).catch(()=>{});
+    }
+  } catch(e){
+    pdSetState('Voicemail drop failed', 'vm');
+    toast('Auto voicemail failed: ' + e.message, 'err');
+  } finally {
+    pdVmDropping = false;
+  }
+}
+
+$('cdVoicemail').addEventListener('click', async ()=>{
+  if(!activeCall) return;
+  const btn = $('cdVoicemail');
+  btn.disabled = true; btn.textContent = 'Dropping…';
+  try {
+    const vmMode  = localStorage.getItem(LS.vmMode)  || 'ai';
+    const vmVoice = localStorage.getItem(LS.vmVoice) || 'Polly.Ruth-Generative';
+    // Personalize the message for THIS lead
+    const p = properties.find(x => x.id === activeCall.propertyId);
+    const streetAddr = (p && p.property_address ? String(p.property_address).split(',')[0].trim() : 'your property');
+    const message = buildVmMessage(p);
+    pdVmDropped = true;
+    const r = await api('drop-voicemail', {method:'POST', body:{
+      sid: activeCall.sid, profileId: activeProfileId, message,
+      voice: vmVoice, forceTts: vmMode === 'ai',
+      // In conference power dial the seller's call has no child leg —
+      // the sid we hold IS their leg.
+      direct: !!(pdActive && pdConf && activeCall.sid === pdActiveSid),
+    }});
+    toast(r.usedRecording ? 'Your recorded voicemail was dropped' : 'AI voicemail dropped — personalized for ' + streetAddr, 'ok');
+    finishCall('VM dropped', false);
+  } catch(e){
+    toast('Voicemail drop failed: '+e.message,'err');
+  } finally {
+    btn.disabled = false; btn.textContent = '📨 VM Drop';
+  }
+});
+
+// ── Voicemail drop: record your own message by phone ────────────
+async function refreshVmRecordStatus(){
+  const el = $('vmRecordStatus');
+  if(!activeProfileId){ el.textContent = 'Pick a profile first.'; return; }
+  el.textContent = 'Checking…';
+  try {
+    const r = await api('vm-recording-status&profileId='+encodeURIComponent(activeProfileId));
+    if(r.hasRecording){
+      const mins = Math.floor((r.durationSec||0)/60), secs = (r.durationSec||0)%60;
+      const when = r.recordedAt ? new Date(r.recordedAt).toLocaleDateString() : '';
+      el.textContent = `✅ Saved (${mins}:${String(secs).padStart(2,'0')}) — recorded ${when}`;
+      el.style.color = '#047857';
+    } else {
+      el.textContent = 'No recording yet — the text message below will be used instead.';
+      el.style.color = '#6b7280';
+    }
+  } catch(e){
+    el.textContent = 'Could not check status: '+e.message;
+    el.style.color = '#b91c1c';
+  }
+}
+$('vmRecordBtn').addEventListener('click', async ()=>{
+  if(!activeProfileId){ toast('Pick a profile first','err'); return; }
+  if(!forwardPhone){ toast('Set your phone number in Settings first','err'); return; }
+  if(!activeCallerId){ toast('Buy a phone number first','err'); openModal('numbersModal'); return; }
+  const btn = $('vmRecordBtn');
+  btn.disabled = true; btn.textContent = 'Calling your phone…';
+  try {
+    await api('start-vm-recording', {method:'POST', body:{
+      profileId: activeProfileId, phone: toE164(forwardPhone), from: activeCallerId,
+    }});
+    toast('Your phone is ringing — answer it and record after the beep','ok');
+    setTimeout(refreshVmRecordStatus, 20000);
+  } catch(e){
+    toast('Could not start recording: '+e.message,'err');
+  } finally {
+    btn.disabled = false; btn.textContent = '🎙️ Record my voicemail message';
+  }
+});
+
+// ── Number management ───────────────────────────────────────────
+async function loadOwnedNumbers(){
+  const list = $('ownedList');
+  list.innerHTML = '<div class="list-loading">Loading…</div>';
+  try {
+    const j = await api('list-numbers');
+    ownedNumbers = j.numbers || [];
+    renderOwnedList();
+    refreshCallerStrip();
+  } catch(e){
+    list.innerHTML = '<div class="empty" style="color:#b91c1c">'+escapeHtml(e.message)+'</div>';
+  }
+}
+function renderOwnedList(){
+  const list = $('ownedList');
+  if(!ownedNumbers.length){
+    list.innerHTML = '<div class="empty">No numbers yet. Use the <b>Search &amp; Buy</b> tab.</div>';
+    return;
+  }
+  list.innerHTML = '';
+  ownedNumbers.forEach(n => {
+    const isActive = n.phoneNumber === activeCallerId;
+    const row = el(`
+      <div class="num-result owned ${isActive?'active':''}">
+        <div>
+          <div class="num">${isActive?'<span style="font-size:10px;font-weight:700;color:#1e40af;background:#bfdbfe;padding:2px 6px;border-radius:3px;margin-right:6px">⭐ ACTIVE</span>':''}${escapeHtml(fmtPhone(n.phoneNumber))}</div>
+          ${n.friendlyName && n.friendlyName !== n.phoneNumber ? `<div class="meta">${escapeHtml(n.friendlyName)}</div>` : ''}
+        </div>
+        <div class="actions">
+          ${isActive?'':'<button class="btn-secondary" data-set>Set Active</button>'}
+          <button class="btn-danger" data-release>Release</button>
+        </div>
+      </div>`);
+    row.querySelector('[data-set]')?.addEventListener('click', () => {
+      activeCallerId = n.phoneNumber;
+      localStorage.setItem(LS.active, activeCallerId);
+      renderOwnedList(); refreshCallerStrip();
+      toast('Active caller ID: '+fmtPhone(n.phoneNumber),'ok');
+    });
+    row.querySelector('[data-release]')?.addEventListener('click', async () => {
+      if(!confirm('Release '+fmtPhone(n.phoneNumber)+'? Twilio stops billing for it. This cannot be undone.')) return;
+      try { await api('release-number',{method:'POST', body:{sid:n.sid}}); toast('Released','ok'); loadOwnedNumbers(); }
+      catch(e){ toast('Failed: '+e.message,'err'); }
+    });
+    list.appendChild(row);
+  });
+}
+$('searchBtn').addEventListener('click', searchNumbers);
+async function searchNumbers(){
+  const ac = $('searchAreaCode').value.trim();
+  const contains = $('searchContains').value.trim();
+  if(!/^\d{3}$/.test(ac)){ toast('Enter a 3-digit area code','err'); return; }
+  const out = $('searchResults');
+  out.innerHTML = '<div class="list-loading">Searching…</div>';
+  try {
+    const params = new URLSearchParams({areaCode:ac});
+    if(contains) params.set('contains', contains);
+    const j = await api('search-numbers&'+params.toString());
+    const list = j.numbers || [];
+    if(!list.length){ out.innerHTML = '<div class="empty">No numbers available in that area code. Try another.</div>'; return; }
+    out.innerHTML = '';
+    list.forEach(n => {
+      const row = el(`
+        <div class="num-result">
+          <div>
+            <div class="num">${escapeHtml(fmtPhone(n.phoneNumber))}</div>
+            <div class="meta">${escapeHtml([n.locality,n.region,n.postalCode].filter(Boolean).join(', ')||'—')} · ${n.capabilities?.voice?'Voice':''} ${n.capabilities?.SMS?'· SMS':''}</div>
+          </div>
+          <button class="btn-primary" data-buy>Buy</button>
+        </div>`);
+      row.querySelector('[data-buy]').addEventListener('click', async ev => {
+        const b = ev.currentTarget;
+        if(!confirm('Purchase '+fmtPhone(n.phoneNumber)+' for ~$1.15/mo?')) return;
+        b.disabled = true; b.textContent = 'Buying…';
+        try {
+          const r = await api('buy-number',{method:'POST', body:{phoneNumber:n.phoneNumber}});
+          toast('Purchased '+fmtPhone(r.phoneNumber||n.phoneNumber),'ok');
+          row.remove();
+          await loadOwnedNumbers();
+          document.querySelector('.modal-tab[data-tab="owned"]').click();
+        } catch(e){
+          b.disabled = false; b.textContent = 'Buy';
+          toast('Purchase failed: '+e.message,'err');
+        }
+      });
+      out.appendChild(row);
+    });
+  } catch(e){
+    out.innerHTML = '<div class="empty" style="color:#b91c1c">'+escapeHtml(e.message)+'</div>';
+  }
+}
+
+// ── Call log + KPIs ─────────────────────────────────────────────
+async function loadLog(){
+  const tbody = $('logTable').querySelector('tbody');
+  tbody.innerHTML = '<tr><td colspan="6" class="list-loading">Loading…</td></tr>';
+  $('kpiGrid').innerHTML = '';
+  try {
+    const days = parseInt($('filterRange').value, 10);
+    const j = await api('list-calls&days='+days);
+    logRows = j.calls || [];
+    populateLogFilters();
+    renderLog(); renderKpis();
+  } catch(e){
+    tbody.innerHTML = '<tr><td colspan="6" class="empty" style="color:#b91c1c">'+escapeHtml(e.message)+'</td></tr>';
+  }
+}
+function populateLogFilters(){
+  const sel = $('filterFrom');
+  const cur = sel.value;
+  const fromNums = Array.from(new Set(logRows.map(c=>c.from_number).filter(Boolean))).sort();
+  sel.innerHTML = '<option value="">All caller IDs</option>' + fromNums.map(n => `<option value="${n}">${fmtPhone(n)}</option>`).join('');
+  if(fromNums.includes(cur)) sel.value = cur;
+}
+function filteredLog(){
+  const fStat = $('filterStatus').value;
+  const fFrom = $('filterFrom').value;
+  return logRows.filter(c => {
+    if(fStat && c.status !== fStat) return false;
+    if(fFrom && c.from_number !== fFrom) return false;
+    return true;
+  });
+}
+['filterRange','filterFrom','filterStatus'].forEach(id => $(id).addEventListener('change', () => {
+  if(id==='filterRange') loadLog();
+  else { renderLog(); renderKpis(); }
+}));
+$('refreshLog').addEventListener('click', loadLog);
+
+function renderLog(){
+  const rows = filteredLog();
+  const tbody = $('logTable').querySelector('tbody');
+  if(!rows.length){ tbody.innerHTML = '<tr><td colspan="6" class="empty">No calls in range</td></tr>'; return; }
+  tbody.innerHTML = '';
+  rows.forEach(c => {
+    const lead = c.property_id ? properties.find(p => p.id === c.property_id) : null;
+    const dt = c.started_at ? new Date(c.started_at) : null;
+    const dtStr = dt ? dt.toLocaleString([], {month:'numeric',day:'numeric',hour:'numeric',minute:'2-digit'}) : '—';
+    const cls = 's-'+(c.status||'').replace(/[^a-z\-]/g,'');
+    const tr = el(`<tr>
+      <td class="mono">${escapeHtml(dtStr)}</td>
+      <td class="mono">${escapeHtml(fmtPhone(c.to_number||''))}</td>
+      <td class="col-hide-sm mono">${escapeHtml(fmtPhone(c.from_number||''))}</td>
+      <td><span class="log-status ${cls}">${escapeHtml(c.status||'?')}</span></td>
+      <td class="mono">${escapeHtml(fmtDuration(c.duration||0))}</td>
+      <td class="col-hide-sm">${lead?escapeHtml((lead.owners||'').slice(0,32)):'—'}</td>
+    </tr>`);
+    tbody.appendChild(tr);
+  });
+}
+function renderKpis(){
+  const rows = filteredLog();
+  const total = rows.length;
+  const completed = rows.filter(c => c.status==='completed').length;
+  const noAns = rows.filter(c => c.status==='no-answer').length;
+  const totalSec = rows.reduce((s,c) => s+(c.duration||0), 0);
+  const contacts = rows.filter(c => c.status==='completed' && (c.duration||0) >= 30).length;
+  const contactRate = total ? Math.round(contacts/total*100) : 0;
+  const avgSec = completed ? Math.round(totalSec/completed) : 0;
+  // Hot/warm: count distinct properties with calls in this window that are now hot/warm
+  let hot=0, warm=0;
+  const seen = new Set();
+  rows.forEach(c => {
+    if(!c.property_id || seen.has(c.property_id)) return;
+    seen.add(c.property_id);
+    const p = properties.find(p => p.id === c.property_id);
+    if(!p) return;
+    if(p.lead.lead_status==='hot') hot++;
+    else if(p.lead.lead_status==='warm') warm++;
+  });
+  const byFrom = {};
+  rows.forEach(c => { if(c.from_number) byFrom[c.from_number] = (byFrom[c.from_number]||0)+1; });
+  const topFrom = Object.entries(byFrom).sort((a,b) => b[1]-a[1])[0];
+  const byHour = new Array(24).fill(0);
+  rows.forEach(c => { if(c.started_at) byHour[new Date(c.started_at).getHours()]++; });
+  const peakCount = Math.max(...byHour, 0);
+  const peakHr = byHour.indexOf(peakCount);
+
+  const kpis = [
+    {label:'Total calls', val:total},
+    {label:'Connected', val:completed, sub:total?Math.round(completed/total*100)+'% answer rate':''},
+    {label:'Live conversations', val:contacts, sub:total?contactRate+'% contact rate':'', cls:contactRate>=15?'good':(total&&contactRate<8?'warn':'')},
+    {label:'Talk time', val:fmtTalkTime(totalSec), sub:'avg '+(avgSec?fmtTalkTime(avgSec):'—')},
+    {label:'No answers', val:noAns},
+    {label:'Hot leads', val:hot, sub:warm?warm+' warm':'', cls:hot?'good':''},
+    {label:'Top caller ID', val:topFrom?fmtPhone(topFrom[0]):'—', sub:topFrom?topFrom[1]+' calls':''},
+    {label:'Peak hour', val:total?peakHr+':00':'—', sub:total?peakCount+' calls':''},
+  ];
+  $('kpiGrid').innerHTML = kpis.map(k => `
+    <div class="kpi ${k.cls||''}">
+      <div class="kpi-label">${k.label}</div>
+      <div class="kpi-value">${k.val}</div>
+      ${k.sub?`<div class="kpi-sub">${k.sub}</div>`:''}
+    </div>`).join('');
+}
+$('exportCsv').addEventListener('click', () => {
+  const rows = filteredLog();
+  if(!rows.length){ toast('Nothing to export','err'); return; }
+  const head = ['Time','From','To','Status','Duration_sec','PropertyID','Owners','SID'];
+  const lines = [head.join(',')];
+  rows.forEach(c => {
+    const lead = c.property_id ? properties.find(p => p.id === c.property_id) : null;
+    const cells = [
+      c.started_at||'', c.from_number||'', c.to_number||'', c.status||'',
+      c.duration||'', c.property_id||'', (lead?.owners||'').replace(/[",\n]/g,' '), c.twilio_sid||''
+    ];
+    lines.push(cells.map(v => `"${String(v).replace(/"/g,'""')}"`).join(','));
+  });
+  const blob = new Blob([lines.join('\n')], {type:'text/csv'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'call-log-'+new Date().toISOString().slice(0,10)+'.csv';
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+});
+
+// ── Settings ────────────────────────────────────────────────────
+$('settingsSave').addEventListener('click', async () => {
+  forwardPhone = toE164($('settingsForwardPhone').value.trim());
+  backend = $('settingsBackendUrl').value.trim() || '/api';
+  localStorage.setItem(LS.forward, forwardPhone);
+  localStorage.setItem(LS.backend, backend);
+  localStorage.setItem(LS.vmMessage, $('settingsVmMessage').value.trim() || DEFAULT_VM_MESSAGE);
+  localStorage.setItem(LS.vmMode, $('settingsVmMode').value);
+  localStorage.setItem(LS.vmVoice, $('settingsVmVoice').value);
+  localStorage.setItem(LS.company, $('settingsCompany').value.trim() || DEFAULT_COMPANY);
+  localStorage.setItem(LS.website, $('settingsWebsite').value.trim() || DEFAULT_WEBSITE);
+  refreshCallerStrip();
+  $('settingsModal').classList.remove('open');
+  toast('Saved','ok');
+  // Only touch the active profile's callback number if this device's
+  // cached number actually differs from what's on file — and always
+  // ask first. Prevents someone on a borrowed/shared phone from
+  // silently overwriting a teammate's real callback number.
+  if(activeProfileId && forwardPhone){
+    try {
+      const { json } = await api('list-profiles');
+      const prof = (json.profiles || []).find(p => p.id === activeProfileId);
+      if(prof && !prof.phone){
+        // Nothing on file for them yet — just save it, no confirmation needed.
+        try {
+          await api('update-profile-phone', {method:'POST', body:{ profileId: activeProfileId, phone: forwardPhone }});
+          prof.phone = forwardPhone;
+        } catch(e){ /* non-fatal */ }
+      } else if(prof && prof.phone !== forwardPhone){
+        const ok = confirm(
+          `This device's number (${forwardPhone}) doesn't match what's on file for ${activeProfileName || 'this profile'} (${prof.phone || 'none set'}).\n\nUpdate ${activeProfileName || 'this profile'}'s callback number to ${forwardPhone}?`
+        );
+        if(ok){
+          await api('update-profile-phone', {method:'POST', body:{ profileId: activeProfileId, phone: forwardPhone }});
+          toast('Callback number updated for '+(activeProfileName||'profile'),'ok');
+        }
+      }
+    } catch(e){ /* non-fatal — outbound calling still works either way */ }
+  }
+});
+$('signOut').addEventListener('click', () => {
+  if(!confirm('Sign out? You will need the team password to get back in.')) return;
+  localStorage.removeItem(LS.pwd);
+  password = '';
+  $('settingsModal').classList.remove('open');
+  showLogin();
+});
+
+// ── CSV Upload ──────────────────────────────────────────────────
+let csvParsed = null; // {headers, rows, mapping}
+
+const dropZone = $('dropZone');
+['dragenter','dragover'].forEach(ev => dropZone.addEventListener(ev, e=>{e.preventDefault(); dropZone.classList.add('dragging');}));
+['dragleave','drop'].forEach(ev => dropZone.addEventListener(ev, e=>{e.preventDefault(); dropZone.classList.remove('dragging');}));
+dropZone.addEventListener('drop', e => {
+  const f = e.dataTransfer.files?.[0];
+  if(f) handleCsvFile(f);
+});
+$('csvFile').addEventListener('change', e => {
+  const f = e.target.files?.[0];
+  if(f) handleCsvFile(f);
+});
+async function handleCsvFile(file){
+  if(!file.name.toLowerCase().endsWith('.csv') && file.type !== 'text/csv'){
+    toast('Please choose a .csv file','err'); return;
+  }
+  const text = await file.text();
+  const parsed = parseCsv(text);
+  if(!parsed.headers.length){ toast('CSV looks empty','err'); return; }
+  csvParsed = { fileName:file.name, ...parsed, mapping:autoMap(parsed.headers) };
+  showCsvPreview();
+}
+
+// Minimal RFC-4180-ish CSV parser. Handles quoted fields, embedded commas, escaped quotes, \r\n.
+function parseCsv(text){
+  const rows = [];
+  let row = [], field = '', inQ = false, i = 0;
+  // strip BOM
+  if(text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+  while(i < text.length){
+    const c = text[i];
+    if(inQ){
+      if(c === '"'){
+        if(text[i+1] === '"'){ field += '"'; i += 2; continue; }
+        inQ = false; i++; continue;
+      }
+      field += c; i++;
+    } else {
+      if(c === '"'){ inQ = true; i++; continue; }
+      if(c === ','){ row.push(field); field=''; i++; continue; }
+      if(c === '\n'){ row.push(field); rows.push(row); row=[]; field=''; i++; continue; }
+      if(c === '\r'){ i++; continue; }
+      field += c; i++;
+    }
+  }
+  if(field.length || row.length){ row.push(field); rows.push(row); }
+  // remove trailing empty rows
+  while(rows.length && rows[rows.length-1].every(x => !x)) rows.pop();
+  if(!rows.length) return { headers:[], rows:[] };
+  const headers = rows[0].map(h => h.trim());
+  const data = rows.slice(1).map(r => {
+    const o = {};
+    headers.forEach((h,j) => o[h] = (r[j]||'').trim());
+    return o;
+  });
+  return { headers, rows: data };
+}
+
+function autoMap(headers){
+  const lower = headers.map(h => h.toLowerCase().trim());
+  const find = (...patterns) => {
+    for(const pat of patterns){
+      const i = lower.findIndex(h => pat instanceof RegExp ? pat.test(h) : h === pat);
+      if(i >= 0) return headers[i];
+    }
+    return '';
+  };
+  // Phone columns: standard format OR PropertyReach "Owner N Phone N" format
+  // OR generic skip-trace exports using Wireless/Landline/Voip/Mobile/Cell/Tel column families.
+  const phoneCols = [];
+  // Bundled multi-phone column: one cell holding several numbers
+  // ("Phone Numbers" + "Phone Numbers DNC" + "Phone Type"), values comma-separated
+  const bundledI = lower.findIndex(x => /^phone\s*numbers$/.test(x) || /^phones$/.test(x) || /^all\s*phones?$/.test(x));
+  if(bundledI >= 0){
+    const dncI  = lower.findIndex(x => /^phone\s*numbers?\s*dnc$/.test(x) || /^phones?\s*dnc$/.test(x) || /^dnc$/.test(x));
+    const typeI = lower.findIndex(x => /^phone\s*types?$/.test(x) || /^phone\s*numbers?\s*types?$/.test(x));
+    phoneCols.push({
+      num:  headers[bundledI],
+      type: typeI >= 0 ? headers[typeI] : '',
+      dnc:  dncI  >= 0 ? headers[dncI]  : '',
+    });
+  }
+  headers.forEach((h,i) => {
+    const lc = lower[i];
+    const isStandardPhone = /^phone\s*\d*$/.test(lc) || /^phone\s*\d*\s*number$/.test(lc) || /^mobile\s*\d*$/.test(lc) || /^cell\s*\d*$/.test(lc)
+      || /^wireless\s*\d*$/.test(lc) || /^landline\s*\d*$/.test(lc) || /^voip\s*\d*$/.test(lc) || /^tel\s*\d*$/.test(lc) || /^telephone\s*\d*$/.test(lc);
+    // PropertyReach: "Owner 1 Phone 1", "Owner 2 Phone 3" etc — exclude DNC/Type/Last Seen columns
+    const isOwnerPhone = /^owner\s*\d+\s*phone\s*\d+$/.test(lc);
+    if(isStandardPhone || isOwnerPhone){
+      const typeI = lower.findIndex((x, idx) => idx !== i && (x === lc+' type' || x === lc.replace('number','type') || x === lc.replace('phone','phone type')));
+      const typeIByPattern = lower.findIndex((x, idx) => idx !== i && x.startsWith(lc) && x.includes('type'));
+      // Companion Do-Not-Call column: "Phone 1 DNC", "Phone 1 Do Not Call", "DNC 1"
+      const dncI = lower.findIndex((x, idx) => idx !== i && (
+        x === lc+' dnc' || x === lc+' do not call' || x === lc.replace('number','dnc')
+        || (x.startsWith(lc) && (x.includes('dnc') || x.includes('do not call')))
+      ));
+      phoneCols.push({
+        num:  h,
+        type: typeI >= 0 ? headers[typeI] : (typeIByPattern >= 0 ? headers[typeIByPattern] : ''),
+        dnc:  dncI >= 0 ? headers[dncI] : '',
       });
     }
-  } catch (e) { console.warn('record-vm-status failed', e.message); }
-  return { statusCode: 200, headers: { 'Content-Type': 'text/xml' }, body: '<Response></Response>' };
-}
-
-// ── Supabase REST helpers (no SDK — keeps function tiny) ──────
-function supaUrl() {
-  const u = process.env.SUPABASE_URL;
-  if (!u) throw new Error('SUPABASE_URL is required');
-  return u.replace(/\/+$/, '');
-}
-function supaKey() {
-  const k = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!k) throw new Error('SUPABASE_SERVICE_ROLE_KEY is required');
-  return k;
-}
-async function supa(path, method = 'GET', body, extraHeaders) {
-  const url = supaUrl() + '/rest/v1' + path;
-  const headers = {
-    apikey: supaKey(),
-    Authorization: 'Bearer ' + supaKey(),
-    'Content-Type': 'application/json',
-    Prefer: 'return=representation',
-    ...(extraHeaders || {}),
+  });
+  return {
+    id:                find(/^id$/, /property\s*id/, /record\s*id/, /^uid$/, /^apn$/),
+    owners:            find(/^seller\s*name$/, /^sellers?\s*name$/, /^owners?$/, /full\s*name/, /owner\s*name/, /^name$/, /^owner\s*1\s*full\s*name$/, /^owner\s*1\s*first\s*name$/, /^owner\s*first\s*name$/, /^first\s*name$/),
+    propertyAddress:   find(/^property\s*address$/, /property\s*address/, /site\s*address/, /^address$/, /^street$/),
+    propertyCity:      find(/^property\s*city$/, /^site\s*city$/, /^city$/),
+    propertyState:     find(/^property\s*state$/, /^site\s*state$/, /^state$/),
+    propertyZip:       find(/^property\s*zip$/, /^property\s*zip\s*code$/, /^site\s*zip$/, /^zip$/, /^zip\s*code$/, /^postal\s*code$/),
+    mailingAddress:    find(/mailing\s*address/, /mail\s*address/, /owner\s*address/),
+    recording:         find(/^call\s*recording$/, /^recording$/, /recording\s*url/, /recording\s*link/, /audio\s*url/),
+    email:             find(/^sellers?\s*email$/, /^emails?$/, /^email\s*\d*$/, /e-?mail\s*\d*/, /^owner\s*1\s*email\s*1$/),
+    vaNotes:           find(/^additional\s*notes?$/, /^va\s*notes?$/, /^notes?$/, /pre.?call\s*notes?/),
+    listName:          find(/^list\s*name$/, /^list$/, /batch/, /campaign/, /source/, /marketing\s*lists?/),
+    phones: phoneCols,
   };
-  const init = { method, headers };
-  if (body !== undefined) init.body = JSON.stringify(body);
-  const r = await fetch(url, init);
-  const text = await r.text();
-  let json; try { json = text ? JSON.parse(text) : null; } catch { json = text; }
-  if (!r.ok) {
-    const e = new Error((json && (json.message || json.error)) || `Supabase HTTP ${r.status}`);
-    e.code = r.status;
-    e.detail = json;
-    throw e;
-  }
-  return { json, count: r.headers.get('content-range') };
 }
 
-// ════════════════════════════════════════════════════════════════
-// SMS HELPERS
-// ════════════════════════════════════════════════════════════════
+// Find a companion "Last Name" column for a chosen "First Name" column
+// (e.g. "Owner 1 First Name" -> "Owner 1 Last Name", "Owner 2 First Name" -> "Owner 2 Last Name")
+function findCompanionLastNameCol(headers, firstNameCol){
+  if(!firstNameCol) return '';
+  const lc = firstNameCol.toLowerCase().trim();
+  if(!lc.includes('first') || lc.includes('full')) return '';
+  const target = lc.replace('first', 'last');
+  const idx = headers.findIndex(h => h.toLowerCase().trim() === target);
+  return idx >= 0 ? headers[idx] : '';
+}
 
-const STOP_KEYWORDS = ['STOP', 'STOPALL', 'UNSUBSCRIBE', 'CANCEL', 'END', 'QUIT', 'OPTOUT', 'OPT-OUT'];
+// ── Generic auto-detection used by the Custom template ──────────
+// Broader than autoMap(): also catches Bedrooms/Bathrooms/Sqft/Year Built
+// style columns and owner-2 name columns, for arbitrary skip-trace exports.
+function autoMapGeneric(headers){
+  const base = autoMap(headers);
+  const lower = headers.map(h => h.toLowerCase().trim());
+  const find = (...patterns) => {
+    for(const pat of patterns){
+      const i = lower.findIndex(h => pat instanceof RegExp ? pat.test(h) : h === pat);
+      if(i >= 0) return headers[i];
+    }
+    return '';
+  };
+  return {
+    ...base,
+    owner2:      find(/^owner\s*2\s*full\s*name$/, /^owner\s*2\s*first\s*name$/, /^owner\s*2$/),
+    bedrooms:    find(/^bedrooms?$/, /^beds?$/),
+    bathrooms:   find(/^total\s*bathrooms?$/, /^bathrooms?$/, /^baths?$/),
+    sqft:        find(/^property\s*sqft$/, /^building\s*sqft$/, /^square\s*footage$/, /^sqft$/, /^living\s*area$/, /^total\s*building\s*area\s*square\s*feet$/, /building\s*area/, /^building\s*square\s*feet$/),
+    lotSize:     find(/^lot\s*size\s*square\s*feet$/, /^lot\s*size\s*sqft$/, /^lot\s*sqft$/, /^lot\s*size$/, /^lot\s*size\s*acres$/, /^acres?$/),
+    yearBuilt:   find(/^effective\s*year\s*built$/, /^year\s*buil[dt]$/, /^year\s*built$/),
+    apn:         find(/^apn$/, /^parcel\s*(number|id)$/, /^parcel\s*#$/),
+    propertyType:find(/^property\s*type$/, /^prop\s*type$/, /^land\s*use$/),
+    zoning:      find(/^zoning$/, /^zone$/, /^zoning\s*code$/),
+    county:      find(/^county$/, /^property\s*county$/),
+  };
+}
 
-function parseFormEncoded(s) {
-  const out = {};
-  if (!s) return out;
-  for (const pair of s.split('&')) {
-    const [k, v] = pair.split('=').map(p => decodeURIComponent((p || '').replace(/\+/g, ' ')));
-    if (k) out[k] = v || '';
+// ── Upload templates ─────────────────────────────────────────────
+
+const UPLOAD_TEMPLATES = {
+  va: {
+    label: 'VA Leads',
+    cardView: 'va',
+    fields: [
+      { id:'owners',   label:'Owner name',          hint:'Seller name' },
+      { id:'property', label:'Property address',     hint:'Property address' },
+      { id:'email',    label:'Email',                hint:'Sellers Email' },
+      { id:'vanotes',  label:'VA / Pre-call notes',  hint:'Additional Notes' },
+      { id:'recording',label:'Call recording URL',   hint:'Call recording' },
+      { id:'listname', label:'List name',            hint:'List name' },
+    ],
+    phones: ['Sellers phone number'],
+  },
+  propertyreach: {
+    label: 'PropertyReach',
+    fields: [
+      { id:'id',       label:'Property ID (APN)',    hint:'APN' },
+      { id:'owners',   label:'Owner 1 Full Name',    hint:'Owner 1 Full Name' },
+      { id:'owner2',   label:'Owner 2 Full Name',    hint:'Owner 2 Full Name' },
+      { id:'property', label:'Property Address',     hint:'Property Address' },
+      { id:'mailing',  label:'Mailing Address',      hint:'Mailing Address' },
+      { id:'email',    label:'Email',                hint:'Owner 1 Email 1' },
+      { id:'bedbath',  label:'Bed/Bath',             hint:'Bed/Bath' },
+      { id:'sqft',     label:'Square Footage',       hint:'Square Footage' },
+      { id:'yearbuilt',label:'Year Built',           hint:'Year Built' },
+    ],
+    phones: [
+      'Owner 1 Phone 1','Owner 1 Phone 2','Owner 1 Phone 3',
+      'Owner 2 Phone 1','Owner 2 Phone 2','Owner 2 Phone 3',
+    ],
+  },
+  // LUX Leads — luxury / teardown / redevelopment lists. Handles either phone
+  // shape: a Phone 1..5 family with TYPE + DNC columns, or a single bundled
+  // "Phone Numbers" cell paired with "Phone Type" and "Phone Numbers DNC".
+  // Address arrives split across City / State / Zip. Phones are re-ordered
+  // best-callable-first and DNC numbers scrubbed unless you say otherwise.
+  lux: {
+    label: 'LUX Leads',
+    cardView: 'lux',
+    fields: [
+      { id:'owners',    label:'Owner first name',   hint:'Owner First Name' },
+      { id:'property',  label:'Property Address',   hint:'Property Address' },
+      { id:'city',      label:'City',               hint:'City' },
+      { id:'state',     label:'State',              hint:'State' },
+      { id:'zip',       label:'Zip',                hint:'Zip' },
+      { id:'sqft',      label:'Building Sq Ft',     hint:'Property Sqft' },
+      { id:'lotsize',   label:'Lot Size',           hint:'Lot Size' },
+      { id:'proptype',  label:'Property Type',      hint:'Property Type' },
+      { id:'zoning',    label:'Zoning',             hint:'Zoning' },
+      { id:'yearbuilt', label:'Year Built',         hint:'Year Build' },
+      { id:'id',        label:'APN / Parcel',       hint:'APN' },
+      { id:'email',     label:'Email',              hint:'Emails' },
+      { id:'listname',  label:'List name',          hint:'List name' },
+      { id:'vanotes',   label:'Notes',              hint:'Notes' },
+    ],
+    phones: [], // populated dynamically from autoMapGeneric()'s phone detection
+  },
+  custom: {
+    // Fields are auto-detected per-file via autoMapGeneric() rather than
+    // fixed hint strings, since "Custom" exists for exports that don't
+    // match the VA or PropertyReach shape (e.g. Wireless/Landline/Voip
+    // phone columns, separate Bedrooms/Bathrooms columns, etc).
+    fields: [
+      { id:'id',        label:'Property ID (APN)' },
+      { id:'owners',    label:'Owner name' },
+      { id:'owner2',    label:'Owner 2 name' },
+      { id:'property',  label:'Property Address' },
+      { id:'city',      label:'City' },
+      { id:'state',     label:'State' },
+      { id:'zip',       label:'Zip' },
+      { id:'mailing',   label:'Mailing Address' },
+      { id:'email',     label:'Email' },
+      { id:'vanotes',   label:'Notes' },
+      { id:'recording', label:'Call recording URL' },
+      { id:'listname',  label:'List name' },
+      { id:'bedrooms',  label:'Bedrooms' },
+      { id:'bathrooms', label:'Bathrooms' },
+      { id:'sqft',      label:'Square Footage' },
+      { id:'lotsize',   label:'Lot Size' },
+      { id:'yearbuilt', label:'Year Built' },
+    ],
+    phones: [], // populated dynamically from autoMapGeneric()'s phone detection
+  },
+};
+
+function bestMatch(headers, hint){
+  if(!hint) return '';
+  const exact = headers.find(h => h.toLowerCase().trim() === hint.toLowerCase().trim());
+  if(exact) return exact;
+  const partial = headers.find(h => h.toLowerCase().includes(hint.toLowerCase()));
+  return partial || '';
+}
+
+function applyTemplate(templateKey){
+  if(!csvParsed) return;
+  currentUploadTemplate = templateKey;
+  document.querySelectorAll('.upload-template-btn').forEach(btn => {
+    const active = btn.dataset.template === templateKey;
+    btn.style.borderColor = active ? '#96751A' : '#d1d5db';
+    btn.style.background  = active ? '#faf3e0' : '#fff';
+    btn.style.color       = active ? '#96751A' : '#374151';
+  });
+
+  const tmpl   = UPLOAD_TEMPLATES[templateKey];
+  const headers = csvParsed.headers;
+  const opts   = ['<option value="">— skip —</option>'].concat(headers.map(h => `<option value="${escapeHtml(h)}">${escapeHtml(h)}</option>`)).join('');
+  const sel    = (id, hint) => {
+    const val = bestMatch(headers, hint);
+    return `<select id="map-${id}">${opts.replace(`value="${escapeHtml(val)}"`, `value="${escapeHtml(val)}" selected`)}</select>`;
+  };
+
+  let tmplPhones, fieldValueLookup;
+  // "__extended__" is a clone made by "+ Add phone column" — keep the parent's behaviour
+  const autoKey = templateKey === '__extended__' ? (tmpl.__base || 'custom') : templateKey;
+  if(autoKey === 'custom' || autoKey === 'lux'){
+    // Use the smarter generic auto-detector instead of fixed hint strings.
+    const detected = autoMapGeneric(headers);
+    fieldValueLookup = {
+      id: detected.id, owners: detected.owners, owner2: detected.owner2,
+      property: detected.propertyAddress, mailing: detected.mailingAddress,
+      city: detected.propertyCity, state: detected.propertyState, zip: detected.propertyZip,
+      email: detected.email, vanotes: detected.vaNotes, recording: detected.recording,
+      listname: detected.listName, bedrooms: detected.bedrooms, bathrooms: detected.bathrooms,
+      sqft: detected.sqft, lotsize: detected.lotSize, yearbuilt: detected.yearBuilt,
+      proptype: detected.propertyType, zoning: detected.zoning, county: detected.county,
+    };
+    tmplPhones = (detected.phones || []).map(p => ({ num: p.num, type: p.type || '', dnc: p.dnc || '' }));
+    if(templateKey === '__extended__' && Array.isArray(tmpl.phones)){
+      // Honour the rows the user added, re-pairing each with its detected type/DNC column
+      tmplPhones = tmpl.phones.map(num => {
+        const hit = (detected.phones || []).find(p => p.num === num);
+        return { num: num || '', type: hit ? (hit.type||'') : '', dnc: hit ? (hit.dnc||'') : '' };
+      });
+    }
+  } else {
+    fieldValueLookup = null; // fall back to hint-based bestMatch below
+    tmplPhones = (tmpl.phones||[]).map(hint => ({ num: bestMatch(headers, hint), type:'', dnc:'' })).filter(p => p.num);
   }
+  const phonesForMap = tmplPhones.length ? tmplPhones : [{num:'',type:'',dnc:''}];
+
+  const selForCustom = (id) => {
+    const val = fieldValueLookup[id] || '';
+    return `<select id="map-${id}">${opts.replace(`value="${escapeHtml(val)}"`, `value="${escapeHtml(val)}" selected`)}</select>`;
+  };
+
+  const phoneRows = phonesForMap.map((p,i) => `
+    <div style="font-weight:600">Phone ${i+1}<div style="font-weight:400;font-size:10px;color:#9ca3af">number · type · DNC</div></div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap">
+      <select class="map-phone-num" data-i="${i}">${opts.replace(`value="${escapeHtml(p.num)}"`, `value="${escapeHtml(p.num)}" selected`)}</select>
+      <select class="map-phone-type" data-i="${i}">${opts.replace(`value="${escapeHtml(p.type)}"`, `value="${escapeHtml(p.type)}" selected`)}</select>
+      <select class="map-phone-dnc" data-i="${i}">${opts.replace(`value="${escapeHtml(p.dnc||'')}"`, `value="${escapeHtml(p.dnc||'')}" selected`)}</select>
+    </div>`).join('');
+
+  $('colMap').innerHTML = tmpl.fields.map(f =>
+    `<div style="font-weight:600">${escapeHtml(f.label)}</div>${(templateKey==='custom'||templateKey==='lux') ? selForCustom(f.id) : sel(f.id, f.hint)}`
+  ).join('') + phoneRows + `
+    <div></div><div><button class="btn-ghost" id="addPhoneCol" style="font-size:12px;padding:5px 10px">+ Add phone column</button></div>`;
+
+  const addBtn = $('addPhoneCol');
+  if(addBtn){
+    addBtn.addEventListener('click', () => {
+      phonesForMap.push({num:'', type:''});
+      // Re-render with the current phones list preserved
+      const extendedTmpl = Object.assign({}, tmpl, {
+        phones: phonesForMap.map(p => p.num || ''),
+        __base: (templateKey === '__extended__' ? (tmpl.__base || 'custom') : templateKey),
+      });
+      UPLOAD_TEMPLATES['__extended__'] = extendedTmpl;
+      applyTemplate('__extended__');
+    });
+  }
+  updateUploadStats();
+  $('uploadPreview').classList.remove('hide');
+}
+
+function showCsvPreview(){
+  $('uploadFileName').textContent = csvParsed.fileName + ' · ' + csvParsed.rows.length + ' rows';
+  const ln = $('uploadListNameManual');
+  if(ln) ln.placeholder = csvParsed.fileName.replace(/\.(csv|txt|tsv)$/i, '').replace(/[_]+/g, ' ').trim();
+  applyTemplate(currentUploadTemplate);
+}
+function updateUploadStats(){
+  // Count rows that would have at least one phone
+  if(!csvParsed) return;
+  const numSels = Array.from(document.querySelectorAll('.map-phone-num')).map(s => s.value);
+  const typeSels = Array.from(document.querySelectorAll('.map-phone-type')).map(s => s.value);
+  const dncSels = Array.from(document.querySelectorAll('.map-phone-dnc')).map(s => s.value);
+  if(!numSels.filter(Boolean).length){ $('uploadStats').textContent = '\u26a0 No phone column selected \u2014 at least one is required.'; return; }
+  const scrub = $('scrubDnc') ? $('scrubDnc').checked : false;
+  let withPhone = 0, callable = 0, dncPhones = 0, totalPhones = 0;
+  for(const r of csvParsed.rows){
+    const phones = extractRowPhones(r, numSels, typeSels, dncSels);
+    if(!phones.length) continue;
+    withPhone++; totalPhones += phones.length;
+    const bad = phones.filter(p => p.dnc).length;
+    dncPhones += bad;
+    if(bad < phones.length) callable++;
+  }
+  const lost = withPhone - callable;
+  let msg = `${withPhone} of ${csvParsed.rows.length} rows have a valid phone (${totalPhones} numbers total).`;
+  if(dncPhones){
+    msg += ` ${dncPhones} flagged DNC`;
+    msg += lost ? ` \u2014 ${lost} lead${lost===1?'':'s'} would have no callable number` : '';
+    msg += scrub ? ' (being scrubbed).' : ' (importing, tagged DNC).';
+  }
+  $('uploadStats').textContent = msg;
+}
+// Split a bundled cell ("(305) 672-2025, (718) 545-1053") into parts.
+// Single-value cells simply come back as a one-item list.
+function splitCell(v){
+  if(v === null || v === undefined) return [];
+  return String(v).split(/[,;|\n\r]+/).map(x => x.trim()).filter(Boolean);
+}
+// Pull every phone out of a row, whichever shape the export uses.
+// Returns [{e164, display, type, dnc, rank}] sorted best-callable-first.
+function extractRowPhones(row, numCols, typeCols, dncCols){
+  const out = [];
+  const seen = new Set();
+  numCols.forEach((col, j) => {
+    if(!col) return;
+    const nums  = splitCell(row[col]);
+    if(!nums.length) return;
+    const types = splitCell(typeCols[j] ? row[typeCols[j]] : '');
+    const dncs  = splitCell(dncCols[j]  ? row[dncCols[j]]  : '');
+    // Aligned lists pair up by position; a single value applies to all numbers
+    const pick = (list, k) => list.length === nums.length ? list[k] : (list.length === 1 ? list[0] : '');
+    nums.forEach((raw, k) => {
+      const e164 = toE164(raw);
+      if(e164.length < 12 || seen.has(e164)) return;
+      seen.add(e164);
+      const rawType = String(pick(types, k) || '').trim();
+      const dnc     = isDncFlag(pick(dncs, k));
+      const mobile  = /mob|cell|wireless/i.test(rawType);
+      out.push({
+        e164, display: fmtPhone(raw) || raw,
+        type: dnc ? (rawType ? rawType + ' \u00b7 DNC' : 'DNC') : rawType,
+        dnc, rank: (dnc?2:0) + (mobile?0:1), order: out.length,
+      });
+    });
+  });
+  // Best number first: callable mobiles, callable landlines, then DNC
+  out.sort((a,b) => a.rank - b.rank || a.order - b.order);
   return out;
 }
+// A DNC cell is truthy for Yes/Y/True/1/X — blank, No, or missing means callable.
+function isDncFlag(v){
+  const s = String(v ?? '').trim().toLowerCase();
+  return s === 'yes' || s === 'y' || s === 'true' || s === '1' || s === 'x' || s === 'dnc';
+}
+$('colMap')?.addEventListener('change', updateUploadStats);
+$('scrubDnc')?.addEventListener('change', updateUploadStats);
+document.addEventListener('change', e => { if(e.target.closest('.map-phone-num') || e.target.closest('.map-phone-dnc')) updateUploadStats(); });
 
-// Twilio signs every webhook request with HMAC-SHA1. Verify it.
-function verifyTwilioSignature(event, formParams) {
-  const sig = event.headers['x-twilio-signature'] || event.headers['X-Twilio-Signature'];
-  const authToken = process.env.TWILIO_AUTH_TOKEN;
-  if (!sig || !authToken) return false; // require auth token specifically for webhook validation
-  // Construct the full URL Twilio called
-  const proto = event.headers['x-forwarded-proto'] || 'https';
-  const host = event.headers['host'] || event.headers['Host'];
-  const path = event.rawUrl ? new URL(event.rawUrl).pathname + (new URL(event.rawUrl).search || '') : event.path;
-  const url = event.rawUrl || (`${proto}://${host}${path}`);
-  // Twilio signature recipe: URL + sorted-by-key form params concatenated
-  const sortedKeys = Object.keys(formParams).sort();
-  let data = url;
-  for (const k of sortedKeys) data += k + formParams[k];
-  const crypto = require('crypto');
-  const computed = crypto.createHmac('sha1', authToken).update(data).digest('base64');
-  return computed === sig;
+$('uploadCancel').addEventListener('click', () => { $('uploadPreview').classList.add('hide'); });
+
+// ── Upload template switcher ─────────────────────────────────────
+document.addEventListener('click', e => {
+  const btn = e.target.closest('.upload-template-btn');
+  if(!btn || !csvParsed) return;
+  applyTemplate(btn.dataset.template);
+});
+
+// ── List color picker ────────────────────────────────────────────
+document.addEventListener('click', e => {
+  const btn = e.target.closest('.list-color-btn');
+  if(!btn) return;
+  selectedListColor = btn.dataset.listcolor || 'none';
+  document.querySelectorAll('.list-color-btn').forEach(b => {
+    b.style.borderColor = b === btn ? '#0f0d0a' : 'transparent';
+  });
+});
+$('uploadGo').addEventListener('click', async () => {
+  if(!csvParsed) return;
+  const idCol       = $('map-id')?.value || '';
+  const ownersCol   = $('map-owners')?.value || '';
+  const propCol     = $('map-property')?.value || '';
+  const emailCol    = $('map-email')?.value || '';
+  const vaNotesCol  = $('map-vanotes')?.value || '';
+  const listNameCol = $('map-listname')?.value || '';
+  const recordingCol= $('map-recording')?.value || '';
+  // PropertyReach extra fields (new combined headers)
+  const owner2Col   = $('map-owner2')?.value || '';
+  const bedbathCol  = $('map-bedbath')?.value || '';
+  const sqftCol     = $('map-sqft')?.value || '';
+  const yearCol     = $('map-yearbuilt')?.value || '';
+  // Custom-template extra fields (separate bedrooms/bathrooms columns)
+  const bedroomsCol  = $('map-bedrooms')?.value || '';
+  const bathroomsCol = $('map-bathrooms')?.value || '';
+  // Skip-trace / Custom: address split across City / State / Zip, plus lot size
+  const cityCol      = $('map-city')?.value || '';
+  const stateCol     = $('map-state')?.value || '';
+  const zipCol       = $('map-zip')?.value || '';
+  const lotSizeCol   = $('map-lotsize')?.value || '';
+  const propTypeCol  = $('map-proptype')?.value || '';
+  const zoningCol    = $('map-zoning')?.value || '';
+  const phoneCols   = Array.from(document.querySelectorAll('.map-phone-num')).map(s => s.value);
+  const typeCols    = Array.from(document.querySelectorAll('.map-phone-type')).map(s => s.value);
+  const dncCols     = Array.from(document.querySelectorAll('.map-phone-dnc')).map(s => s.value);
+  const scrubDnc    = $('scrubDnc') ? $('scrubDnc').checked : false;
+  // Each upload becomes a list automatically, named after the file it came
+  // from. The manual box just overrides that name if you want something else.
+  const autoList = (csvParsed?.fileName || '')
+    .replace(/\.(csv|txt|tsv)$/i, '')
+    .replace(/[_]+/g, ' ')
+    .trim()
+    .slice(0, 80);
+  const manualList  = ($('uploadListNameManual')?.value || '').trim() || autoList;
+  // Stamp the format onto every lead so the dialer card knows which view to render
+  const baseKey = currentUploadTemplate === '__extended__'
+    ? (UPLOAD_TEMPLATES['__extended__']?.__base || 'custom') : currentUploadTemplate;
+  const templateListLabel = UPLOAD_TEMPLATES[baseKey]?.label || '';
+  if(!phoneCols.some(Boolean)){ toast('Select at least one phone column','err'); return; }
+  if(!ownersCol && !propCol){ toast('Map at least Owners or Property address','err'); return; }
+  const replace   = $('replaceExisting').checked;
+  const skipDupes = $('skipDuplicates').checked;
+  const listColor = selectedListColor !== 'none' ? selectedListColor : '';
+  const assignTo  = $('uploadAssignTo') && $('uploadAssignTo').value ? parseInt($('uploadAssignTo').value, 10) : null;
+
+  // For PropertyReach / Custom: detect if owners col is a "First Name" col and find matching Last Name col
+  const headers = csvParsed.headers;
+  const lastNameCol = findCompanionLastNameCol(headers, ownersCol);
+  const owner2LastNameCol = findCompanionLastNameCol(headers, owner2Col);
+
+  const out = [];
+  let dncScrubbed = 0, dncOnlyRows = 0;
+  csvParsed.rows.forEach((r, i) => {
+    const all = extractRowPhones(r, phoneCols, typeCols, dncCols);
+    const rowHadPhone = all.length > 0;
+    const phones = (scrubDnc ? all.filter(ph => !ph.dnc) : all)
+      .map(ph => ({ e164: ph.e164, display: ph.display, type: ph.type }));
+    if(scrubDnc) dncScrubbed += all.filter(ph => ph.dnc).length;
+    if(!phones.length){ if(rowHadPhone) dncOnlyRows++; return; }
+
+    // Build full name — combine first+last if needed
+    let ownerName = ownersCol ? (r[ownersCol] || '') : '';
+    if(lastNameCol && r[lastNameCol]) ownerName = (ownerName + ' ' + r[lastNameCol]).trim();
+
+    // Build owner 2 display name — combine first+last if needed
+    let owner2Name = owner2Col ? (r[owner2Col] || '') : '';
+    if(owner2LastNameCol && r[owner2LastNameCol]) owner2Name = (owner2Name + ' ' + r[owner2LastNameCol]).trim();
+
+    // Build property notes from PropertyReach / Custom fields if available
+    const prParts = [];
+    if(owner2Name)                  prParts.push(`Owner 2: ${owner2Name}`);
+    if(bedbathCol && r[bedbathCol]) prParts.push(`Bed/Bath: ${r[bedbathCol]}`);
+    // Custom template: separate bedrooms/bathrooms columns combined into one string
+    if(!bedbathCol && (bedroomsCol || bathroomsCol)){
+      const bd = bedroomsCol ? r[bedroomsCol] : '';
+      const ba = bathroomsCol ? r[bathroomsCol] : '';
+      if(bd || ba) prParts.push(`Bed/Bath: ${bd||'?'}/${ba||'?'}`);
+    }
+    if(sqftCol && r[sqftCol])       prParts.push(`Sqft: ${r[sqftCol]}`);
+    if(lotSizeCol && r[lotSizeCol]){
+      const lot = parseFloat(String(r[lotSizeCol]).replace(/[^0-9.]/g,''));
+      if(lot > 0) prParts.push(lot > 500 ? `Lot: ${Math.round(lot).toLocaleString()} sqft (${(lot/43560).toFixed(2)} ac)` : `Lot: ${lot} ac`);
+    }
+    if(yearCol && r[yearCol])       prParts.push(`Year Built: ${r[yearCol]}`);
+    if(zoningCol && r[zoningCol])   prParts.push(`Zoning: ${r[zoningCol]}`);
+    if(propTypeCol && r[propTypeCol]) prParts.push(`Property Type: ${r[propTypeCol]}`);
+    if(idCol && r[idCol])           prParts.push(`APN: ${r[idCol]}`);
+    const prNotes = prParts.length ? prParts.join(' · ') : '';
+    const vaNotes = vaNotesCol ? r[vaNotesCol] : '';
+    const combinedNotes = [vaNotes, prNotes].filter(Boolean).join('\n');
+
+    // Stitch the address back together when the file splits it into City/State/Zip
+    let fullAddress = propCol ? String(r[propCol] || '').trim() : '';
+    const cityVal  = cityCol  ? String(r[cityCol]  || '').trim() : '';
+    const stateVal = stateCol ? String(r[stateCol] || '').trim().toUpperCase() : '';
+    const zipVal   = zipCol   ? String(r[zipCol]   || '').replace(/\D/g,'').slice(0,5) : '';
+    if(fullAddress && (cityVal || stateVal || zipVal)){
+      const already = fullAddress.toLowerCase();
+      const tail = [
+        cityVal && !already.includes(cityVal.toLowerCase()) ? cityVal : '',
+        [stateVal, zipVal].filter(Boolean).join(' '),
+      ].filter(Boolean).join(', ');
+      if(tail) fullAddress = fullAddress + ', ' + tail;
+    }
+
+    out.push({
+      id: idCol && r[idCol] ? String(r[idCol]) : '',
+      owners: ownerName,
+      property_address: fullAddress,
+      email: emailCol ? r[emailCol] : '',
+      va_notes: combinedNotes,
+      recording_url: recordingCol ? r[recordingCol] : '',
+      list_name: (listNameCol && r[listNameCol]) ? r[listNameCol] : (manualList || templateListLabel),
+      va_lead: currentUploadTemplate === 'va',
+      highlight: listColor,
+      phones,
+    });
+  });
+  if(!out.length){
+    toast(dncOnlyRows ? `No callable rows — all ${dncOnlyRows} had DNC-only numbers. Uncheck "Scrub DNC numbers" to import anyway.` : 'No rows with valid phone numbers found','err');
+    return;
+  }
+  const btn = $('uploadGo');
+  btn.disabled = true; btn.textContent = 'Importing…';
+
+  // Batched upload — one giant POST blows past Netlify's 6MB body cap and the
+  // 10s function timeout. 500 rows per request, 5 requests in flight at a time.
+  const CHUNK = 500;
+  const CONCURRENCY = 5;
+  const batches = [];
+  for(let i = 0; i < out.length; i += CHUNK) batches.push(out.slice(i, i + CHUNK));
+
+  const totals = { imported:0, phones:0, dupesCollapsed:0, dupeAddressesSkipped:0 };
+  let doneRows = 0;
+
+  const sendBatch = async (batch, useReplace) => {
+    const r = await api('import-properties', {method:'POST', body:{properties: batch, replace: useReplace, skipDuplicates: skipDupes, assignedTo: assignTo}});
+    totals.imported             += (r.imported||0);
+    totals.phones               += (r.phones||0);
+    totals.dupesCollapsed       += (r.dupesCollapsed||0);
+    totals.dupeAddressesSkipped += (r.dupeAddressesSkipped||0);
+    doneRows += batch.length;
+    btn.textContent = `Importing… ${doneRows.toLocaleString()}/${out.length.toLocaleString()}`;
+    return r;
+  };
+
+  try {
+    let startIdx = 0;
+    // "Replace existing" wipes the table, so it must run alone and first —
+    // otherwise a parallel batch lands before the wipe and gets deleted.
+    if(replace){ await sendBatch(batches[0], true); startIdx = 1; }
+    for(let i = startIdx; i < batches.length; i += CONCURRENCY){
+      await Promise.all(batches.slice(i, i + CONCURRENCY).map(b => sendBatch(b, false)));
+    }
+    const totalDupes = totals.dupesCollapsed + totals.dupeAddressesSkipped;
+    const dupMsg = totalDupes ? ` · ${totalDupes} duplicate${totalDupes===1?'':'s'} merged` : '';
+    const dncMsg = dncScrubbed ? ` · ${dncScrubbed} DNC scrubbed` : '';
+    const skipMsg = dncOnlyRows ? ` · ${dncOnlyRows} DNC-only lead${dncOnlyRows===1?'':'s'} skipped` : '';
+    toast(`Imported ${totals.imported} properties · ${totals.phones} phones${dupMsg}${dncMsg}${skipMsg}`,'ok');
+    $('uploadModal').classList.remove('open');
+    csvParsed = null;
+    page = 1;
+    await loadProperties();
+  } catch(e){
+    const partial = doneRows ? ` — ${doneRows.toLocaleString()} of ${out.length.toLocaleString()} rows already imported` : '';
+    toast('Import failed: '+e.message+partial,'err');
+    if(doneRows) await loadProperties();
+  } finally { btn.disabled = false; btn.textContent = 'Import'; }
+});
+
+// ── Properties load ─────────────────────────────────────────────
+async function loadProperties(){
+  badge('sync','Loading…');
+  const PAGE = 500;
+  try {
+    let offset = 0, all = [], total = null, guard = 0;
+    while(true){
+      const j = await api(`list-properties&limit=${PAGE}&offset=${offset}`);
+      const batch = j.properties || [];
+      all = all.concat(batch);
+      if(total === null) total = (typeof j.total === 'number') ? j.total : batch.length;
+
+      // Paint the first page straight away so the list isn't blank while the rest loads
+      properties = all;
+      if(offset === 0) renderPage();
+      badge('sync', total ? `Loading… ${all.length.toLocaleString()}/${total.toLocaleString()}` : 'Loading…');
+
+      offset += batch.length;
+      if(!batch.length || !j.hasMore) break;
+      if(++guard > 400) break; // safety valve — never loop forever
+    }
+    properties = all;
+    renderPage();
+    refreshCounter();
+    badge('ok','Synced');
+  } catch(e){
+    badge('err','Error');
+    toast('Load failed: '+e.message,'err');
+  }
 }
 
-async function isOptedOut(e164) {
+// ═══════════════════════════════════════════════════════════════
+// PROFILES
+// ═══════════════════════════════════════════════════════════════
+async function loadProfiles(){
   try {
-    const { json } = await supa(`/sms_opt_outs?e164=eq.${encodeURIComponent(e164)}&select=e164`);
-    return Array.isArray(json) && json.length > 0;
-  } catch { return false; }
+    const j = await api('list-profiles');
+    allProfiles = j.profiles || [];
+  } catch(e){ allProfiles = []; }
+  // Keep the upload modal's "assign list to caller" dropdown in sync with the team
+  const ua = document.getElementById('uploadAssignTo');
+  if(ua){
+    const cur = ua.value;
+    ua.innerHTML = '<option value="">— Unassigned —</option>' +
+      allProfiles.map(pr => `<option value="${escapeHtml(pr.id)}">${escapeHtml(pr.name)}</option>`).join('');
+    ua.value = cur; // preserve any existing selection if still valid
+  }
+}
+function updateProfileBadge(){
+  const b = $('profileBadge');
+  if(activeProfileName){
+    b.classList.remove('hide');
+    b.textContent = '👤 '+activeProfileName;
+  } else {
+    b.classList.add('hide');
+  }
+}
+$('profileBadge').addEventListener('click', () => {
+  if(currentUser && currentUser.role === 'caller'){
+    toast('Signed in as '+currentUser.name,'ok');
+    return;
+  }
+  showProfilePicker();
+});
+
+async function showProfilePicker(){
+  // Callers are identified by their password — nothing to pick, nothing
+  // to switch to. This is the bit that stops one caller working as another.
+  if(currentUser && currentUser.role === 'caller') return;
+  await loadProfiles();
+  const admin = isAdmin();
+  const list = $('ppList');
+  list.innerHTML = '';
+  if(!allProfiles.length){
+    list.innerHTML = '<div class="muted" style="font-size:12px;text-align:center;padding:6px">No callers yet — add one below.</div>';
+  } else {
+    allProfiles.forEach(p => {
+      const row = el('<div style="display:flex;gap:6px;align-items:stretch"></div>');
+      const lock = p.has_password
+        ? '<span style="font-size:10px;color:#059669;font-weight:600"> · own login</span>'
+        : '<span style="font-size:10px;color:#9ca3af;font-weight:600"> · no password</span>';
+      const inactive = (p.is_active === false)
+        ? '<span style="font-size:10px;color:#b91c1c;font-weight:600"> · off</span>' : '';
+      // The number their calls ring on. Missing here means the dialer has
+      // nothing to call for them.
+      const ph = p.phone
+        ? `<div style="font-size:10px;color:#6b7280;font-weight:600;margin-top:2px">📱 ${escapeHtml(fmtPhone(p.phone))}</div>`
+        : `<div style="font-size:10px;color:#b91c1c;font-weight:700;margin-top:2px">📱 No phone set — tap to add</div>`;
+      const b = el(`<button type="button" class="profile-pick" style="flex:1">${escapeHtml(p.name)}${lock}${inactive}${ph}</button>`);
+      b.addEventListener('click', () => pickProfile(p));
+      row.appendChild(b);
+      if(admin){
+        const k = el('<button type="button" class="profile-pick" style="flex:0 0 auto;padding:12px 11px" title="Set password">🔑</button>');
+        k.addEventListener('click', (ev) => { ev.stopPropagation(); setCallerPassword(p); });
+        row.appendChild(k);
+      }
+      list.appendChild(row);
+    });
+  }
+  $('ppNewName').value = '';
+  if($('ppNewPass')) $('ppNewPass').value = '';
+  // Only the owner hands out passwords.
+  ['ppNewPass','ppAddHint'].forEach(id => {
+    const n = $(id); if(n) n.style.display = admin ? '' : 'none';
+  });
+  $('profilePicker').classList.add('open');
+  setTimeout(() => $('ppNewName').focus(), 50);
 }
 
-async function getAppConfig(key) {
+// Owner sets, rotates, or clears one caller's password.
+async function setCallerPassword(p){
+  const pw = prompt(
+    p.has_password
+      ? `New password for ${p.name}\n\n(Leave blank to clear it and lock them out.)`
+      : `Password for ${p.name}\n\nThey'll sign in with this instead of the shared one.`,
+    ''
+  );
+  if(pw === null) return; // cancelled
+  if(pw && pw.trim().length < 6){ toast('Password must be at least 6 characters','err'); return; }
   try {
-    const { json } = await supa(`/app_config?key=eq.${encodeURIComponent(key)}&select=value`);
-    return Array.isArray(json) && json[0] ? json[0].value : '';
+    const j = await api('set-profile-password',{method:'POST', body:{profileId:p.id, password:pw.trim()}});
+    p.has_password = !!j.has_password;
+    toast(j.has_password ? `${p.name} can now sign in with their own password` : `${p.name}'s password cleared`,'ok');
+    showProfilePicker();
+  } catch(err){
+    toast('Could not set password: '+err.message,'err');
+  }
+}
+// Ask a caller for their own number and store it on their profile.
+async function promptProfilePhone(p){
+  const raw = prompt(
+    `Which phone should ring when ${p.name} makes a call?\n\n` +
+    `The dialer calls this number first, then bridges the seller in. ` +
+    `It must be ${p.name}'s own phone, not the office line.`,
+    ''
+  );
+  if(raw === null) return;
+  const e164 = toE164(String(raw).trim());
+  if(!e164 || e164.length < 12){ toast('That does not look like a valid US number','err'); return; }
+  try {
+    await api('update-profile-phone', {method:'POST', body:{ profileId:p.id, phone:e164 }});
+    p.phone = e164;
+    applyProfilePhone(e164);
+    toast(`${p.name} will ring at ${fmtPhone(e164)}`,'ok');
+  } catch(e){
+    toast('Could not save that number: '+e.message,'err');
+  }
+}
+
+// Point every dial-out on this device at one number.
+function applyProfilePhone(phone){
+  forwardPhone = phone || '';
+  if(phone) localStorage.setItem(LS.forward, phone);
+  else localStorage.removeItem(LS.forward);
+  const sf = $('settingsForwardPhone'); if(sf) sf.value = phone || '';
+  const pa = $('pdAgentPhone');         if(pa) pa.value = phone || '';
+  const dot = $('cidDot');
+  if(dot) dot.className = (activeCallerId && forwardPhone) ? 'dot live' : 'dot warn';
+}
+
+function pickProfile(p){
+  activeProfileId = p.id;
+  activeProfileName = p.name;
+  localStorage.setItem(LS.profileId, p.id);
+  localStorage.setItem(LS.profileName, p.name);
+
+  // Each caller rings their OWN phone. That number lives on the profile in
+  // the database, but signing in never loaded it — so whoever signed in
+  // second kept dialing the number the first person had typed into this
+  // device, and their own phone never rang.
+  if(p.phone){
+    applyProfilePhone(p.phone);
+  } else {
+    applyProfilePhone('');
+    setTimeout(() => promptProfilePhone(p), 350);
+  }
+
+  updateProfileBadge();
+  $('profilePicker').classList.remove('open');
+  toast('Hi, '+p.name+' 👋','ok');
+}
+$('ppNewForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const name = $('ppNewName').value.trim();
+  if(!name) return;
+  const pwNode = $('ppNewPass');
+  const pw = (pwNode && isAdmin()) ? pwNode.value.trim() : '';
+  if(pw && pw.length < 6){ toast('Password must be at least 6 characters','err'); return; }
+  try {
+    const j = await api('create-profile',{method:'POST', body: pw ? {name, password:pw} : {name}});
+    allProfiles.push(j.profile);
+    if(pwNode) pwNode.value = '';
+    if(pw){
+      // Adding someone else — don't switch the owner's own attribution over to them.
+      toast(`${name} added. They sign in with the password you just set.`,'ok');
+      showProfilePicker();
+    } else {
+      pickProfile(j.profile);
+    }
+  } catch(err){
+    toast('Could not add: '+err.message,'err');
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════
+// VIEW SWITCHING (Dialer ↔ Pipeline)
+// ═══════════════════════════════════════════════════════════════
+// ── View menu (the 7 section tabs, collapsed into one row) ────
+// It expands IN FLOW rather than floating, because header has
+// overflow:hidden — an absolutely positioned menu gets clipped.
+function setViewMenuLabel(v){
+  const btn = document.querySelector(`.view-tab[data-view="${v}"]`);
+  const lbl = $('viewMenuLabel');
+  if(btn && lbl) lbl.textContent = btn.textContent.trim();
+}
+function closeViewMenu(){
+  $('viewTabs')?.classList.remove('open');
+  $('viewMenuBtn')?.classList.remove('open');
+}
+$('viewMenuBtn')?.addEventListener('click', () => {
+  $('viewTabs')?.classList.toggle('open');
+  $('viewMenuBtn')?.classList.toggle('open');
+});
+
+document.querySelectorAll('.view-tab').forEach(t => {
+  t.addEventListener('click', () => switchView(t.dataset.view));
+});
+function switchView(v){
+  currentView = v;
+  document.body.classList.toggle('view-dialer', v === 'dialer');
+  document.body.classList.toggle('view-pipeline', v === 'pipeline');
+  document.body.classList.toggle('view-inbox', v === 'inbox');
+  document.body.classList.toggle('view-mail', v === 'mail');
+  document.body.classList.toggle('view-buyers', v === 'buyers');
+  document.body.classList.toggle('view-realtors', v === 'realtors');
+  document.body.classList.toggle('view-d4d', v === 'd4d');
+  document.querySelectorAll('.view-tab').forEach(t => t.classList.toggle('active', t.dataset.view === v));
+  setViewMenuLabel(v);
+  closeViewMenu();
+  if(v === 'pipeline') loadPipeline();
+  if(v === 'inbox') loadInbox();
+  if(v === 'mail') loadMail();
+  if(v === 'buyers') loadBuyers();
+  if(v === 'd4d') openD4D();
+  if(v !== 'd4d') stopD4DFollow();
+}
+
+// ═══════════════════════════════════════════════════════════════
+// PIPELINE
+// ═══════════════════════════════════════════════════════════════
+const STAGES = [
+  {id:'hot',          label:'Hot Lead',       hint:'Seller said yes-ish'},
+  {id:'underwriting', label:'Underwriting',   hint:'Comps & repairs'},
+  {id:'offer',        label:'Offer Out',      hint:'Negotiating'},
+  {id:'contract',     label:'Under Contract', hint:'Signed; closing prep'},
+  {id:'closed',       label:'Closed',         hint:'Done'},
+];
+
+// ── Dead deals ────────────────────────────────────────────────
+// Edit this list freely — the reason string is what gets stored and
+// what the metrics group by, so keep the wording stable once you
+// start collecting data.
+const DEAD_REASONS = [
+  'Price — seller wouldn\'t come down',
+  'Went with another investor',
+  'Listed with an agent',
+  'Seller went dark',
+  'Title, liens, or back taxes',
+  'Condition worse than expected',
+  'No buyer at that price',
+  'Occupancy — tenant, probate, or heirs',
+  'Seller changed their mind',
+  'Bad lead — wrong owner or not for sale',
+  'Other',
+];
+let deadPickReason = null;
+
+function openDeadModal(){
+  if(!openDealId) return;
+  deadPickReason = null;
+  $('deadNotes').value = '';
+  $('deadErr')?.classList.add('hide');
+  $('deadSave').disabled = true;
+  const box = $('deadReasons');
+  box.innerHTML = '';
+  DEAD_REASONS.forEach(r => {
+    const b = el(`<button type="button" class="dead-reason">${escapeHtml(r)}</button>`);
+    b.addEventListener('click', () => {
+      deadPickReason = r;
+      box.querySelectorAll('.dead-reason').forEach(x => x.classList.remove('sel'));
+      b.classList.add('sel');
+      $('deadSave').disabled = false;
+    });
+    box.appendChild(b);
+  });
+  $('deadModal').classList.add('open');
+}
+
+$('ddDead')?.addEventListener('click', openDeadModal);
+$('deadClose')?.addEventListener('click', () => $('deadModal').classList.remove('open'));
+
+$('deadSave')?.addEventListener('click', async () => {
+  if(!openDealId || !deadPickReason) return;
+  const btn = $('deadSave');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  const deadId = openDealId;
+  const deadNotes = $('deadNotes').value.trim();
+  $('deadErr')?.classList.add('hide');
+  try {
+    // Two independent routes to the same result. mark-deal-dead writes the
+    // reason and timestamp; if that endpoint or those columns aren't there,
+    // update-deal sets the stage on its own. One of them has to land before
+    // this counts as saved.
+    let res = null, firstErr = '';
+    try {
+      res = await api('mark-deal-dead', {method:'POST', body:{
+        id: deadId,
+        reason: deadPickReason,
+        notes: deadNotes,
+        actingProfileId: activeProfileId || null,
+      }});
+    } catch(e1){ firstErr = e1.message || String(e1); }
+
+    if(!res || !res.deal || res.deal.stage !== 'dead'){
+      try {
+        await api('update-deal', {method:'POST', body:{
+          id: deadId, stage:'dead', _previousStage: (openDealData && openDealData.deal && openDealData.deal.stage) || '',
+          deadReason: deadPickReason, deadNotes, actingProfileId: activeProfileId || null,
+        }});
+      } catch(e2){
+        throw new Error((firstErr ? firstErr + ' — ' : '') + (e2.message || String(e2)));
+      }
+      // Read it back from the server. No optimistic assumptions this time.
+      const check = await api('get-deal&id=' + encodeURIComponent(deadId));
+      if(!check || !check.deal || check.deal.stage !== 'dead'){
+        throw new Error(
+          (firstErr ? firstErr + ' — ' : '') +
+          'The database accepted the request but the deal is still on stage "' +
+          ((check && check.deal && check.deal.stage) || 'unknown') +
+          '". A CHECK constraint or enum on deals.stage is most likely blocking the value "dead".'
+        );
+      }
+    }
+    // Move it off the board immediately, before the refetch comes back
+    const local = pipelineDeals.find(d => String(d.id) === String(deadId));
+    if(local){
+      local.stage = 'dead';
+      local.dead_reason = deadPickReason;
+      local.dead_at = new Date().toISOString();
+    }
+    if(openDealData && openDealData.deal) openDealData.deal.stage = 'dead';
+    renderPipeline();
+    $('deadModal').classList.remove('open');
+    toast('Marked dead — it still counts in your metrics','ok');
+    $('dealDetail').classList.remove('open');
+    openDealId = null; openDealData = null;
+    loadPipeline();
+  } catch(e){
+    const box = $('deadErr');
+    if(box){
+      box.textContent = 'Could not mark this deal dead: ' + e.message;
+      box.classList.remove('hide');
+    }
+    toast('Could not save — see the message in the box','err');
+  }
+  btn.disabled = false; btn.textContent = 'Mark deal dead';
+});
+
+// ── Dead deals list ───────────────────────────────────────────
+$('pipeDeadBtn')?.addEventListener('click', async () => {
+  $('deadListModal').classList.add('open');
+  const body = $('deadListBody');
+  body.innerHTML = 'Loading…';
+  try {
+    const j = await api('list-deals');
+    const dead = (j.deals || []).filter(d => d.stage === 'dead');
+    if(!dead.length){ body.innerHTML = '<div class="empty">Nothing dead yet.</div>'; return; }
+    body.innerHTML = '';
+    dead.sort((a,b) => new Date(b.dead_at||0) - new Date(a.dead_at||0));
+    dead.forEach(d => {
+      const row = el(`<div class="dead-row">
+        <div class="nm">${escapeHtml(d.owners || d.property_address || 'Deal #'+d.id)}</div>
+        <div class="rs">${escapeHtml(d.dead_reason || 'No reason recorded')}</div>
+        ${d.dead_notes ? `<div class="nt">${escapeHtml(d.dead_notes)}</div>` : ''}
+        <button type="button">↩ Revive to Hot Lead</button>
+      </div>`);
+      row.querySelector('button').addEventListener('click', async () => {
+        try {
+          await api('revive-deal', {method:'POST', body:{id:d.id, stage:'hot'}});
+          row.remove();
+          toast('Back in the pipeline','ok');
+          loadPipeline();
+        } catch(e){ toast('Could not revive: '+e.message,'err'); }
+      });
+      body.appendChild(row);
+    });
+  } catch(e){
+    body.innerHTML = '<div class="empty" style="color:#b91c1c">'+escapeHtml(e.message)+'</div>';
+  }
+});
+$('deadListClose')?.addEventListener('click', () => $('deadListModal').classList.remove('open'));
+
+// ── Metrics ───────────────────────────────────────────────────
+$('metricsClose')?.addEventListener('click', () => $('metricsModal').classList.remove('open'));
+$('pipeMetricsBtn')?.addEventListener('click', async () => {
+  $('metricsModal').classList.add('open');
+  const box = $('metricsBody');
+  box.innerHTML = 'Loading…';
+  try {
+    const m = await api('deal-metrics');
+    const money = n => '$' + Math.round(n || 0).toLocaleString();
+    const days  = n => n == null ? '—' : (Math.round(n * 10) / 10) + 'd';
+    const rate  = n => n == null ? '—' : n + '%';
+
+    let h = `<div class="mx-grid">
+      <div class="mx-card good"><div class="k">Close rate</div><div class="v">${rate(m.totals.closeRate)}</div>
+        <div class="s">${m.totals.closed} closed of ${m.totals.closed + m.totals.dead} decided</div></div>
+      <div class="mx-card"><div class="k">In pipeline</div><div class="v">${m.totals.live}</div>
+        <div class="s">still working</div></div>
+      <div class="mx-card bad"><div class="k">Dead</div><div class="v">${m.totals.dead}</div>
+        <div class="s">avg ${days(m.speed.avgDaysToDead)} to die</div></div>
+      <div class="mx-card good"><div class="k">Assignment fees</div><div class="v">${money(m.money.totalAssignmentFees)}</div>
+        <div class="s">avg ${money(m.money.avgAssignmentFee)} · ${days(m.speed.avgDaysToClose)} to close</div></div>
+    </div>`;
+
+    if(m.deadReasons.length){
+      h += '<h4 class="mx-h">Why deals die</h4>';
+      m.deadReasons.forEach(r => {
+        h += `<div class="mx-bar-row">
+          <div class="mx-bar-lbl"><span>${escapeHtml(r.reason)}</span><b>${r.count} · ${r.pct}%</b></div>
+          <div class="mx-bar"><span style="width:${r.pct}%"></span></div>
+        </div>`;
+      });
+    }
+
+    if(m.bySource.length){
+      h += '<h4 class="mx-h" style="margin-top:18px">By source list</h4>';
+      h += '<table class="mx-tbl"><thead><tr><th>List</th><th class="num">Deals</th><th class="num">Closed</th><th class="num">Dead</th><th class="num">Rate</th></tr></thead><tbody>';
+      m.bySource.forEach(s => {
+        h += `<tr><td>${escapeHtml(s.source)}</td>
+          <td class="num">${s.total}</td>
+          <td class="num">${s.closed}</td>
+          <td class="num">${s.dead}</td>
+          <td class="num">${rate(s.closeRate)}</td></tr>`;
+      });
+      h += '</tbody></table>';
+    }
+
+    h += '<div style="font-size:11px;color:#6b7280;margin-top:16px">Close rate counts only deals that reached an outcome. Deals still in the pipeline are excluded so the number doesn\'t drift as you add leads.</div>';
+    box.innerHTML = h;
+  } catch(e){
+    box.innerHTML = '<div class="empty" style="color:#b91c1c">'+escapeHtml(e.message)+'</div>';
+  }
+});
+
+async function loadPipeline(){
+  $('pipeBoard').innerHTML = '<div class="empty">Loading…</div>';
+  try {
+    await loadProfiles();
+    const j = await api('list-deals');
+    pipelineDeals = j.deals || [];
+    renderPipeline();
+  } catch(e){
+    $('pipeBoard').innerHTML = '<div class="empty" style="color:#b91c1c">'+escapeHtml(e.message)+'</div>';
+  }
+}
+function renderPipeline(){
+  const board = $('pipeBoard');
+  board.innerHTML = '';
+  let total = 0;
+  // Dead deals stay in the data for metrics but off the board.
+  const deadCount = pipelineDeals.filter(d => d.stage === 'dead').length;
+  const dc = $('pipeDeadCount');
+  if(dc) dc.textContent = deadCount ? `(${deadCount})` : '';
+  STAGES.forEach(s => {
+    const inStage = pipelineDeals.filter(d => d.stage === s.id);
+    total += inStage.length;
+    const col = el(`<div class="pipe-col" data-stage="${s.id}">
+      <div class="pipe-col-head">
+        <span class="dot"></span>
+        <span class="lbl">${escapeHtml(s.label)}</span>
+        <span class="ct">${inStage.length}</span>
+      </div>
+    </div>`);
+    if(!inStage.length){
+      col.appendChild(el('<div class="pipe-empty">No deals</div>'));
+    } else {
+      inStage.forEach(d => {
+        const days = Math.floor((Date.now()-new Date(d.updated_at))/86400000);
+        const assignee = d.assigned_to_profile ? allProfiles.find(p => p.id === d.assigned_to_profile) : null;
+        let meta = '';
+        if(s.id==='hot' && d.seller_asking)        meta = 'asking '+fmtMoney(d.seller_asking);
+        else if(s.id==='underwriting' && d.arv)    meta = 'ARV '+fmtMoney(d.arv);
+        else if(s.id==='offer' && d.your_offer)    meta = 'offered '+fmtMoney(d.your_offer);
+        else if(s.id==='contract')                 meta = d.deal_type==='flip' ? 'flip' : 'assignment';
+        else if(s.id==='closed' && d.assignment_fee) meta = 'fee '+fmtMoney(d.assignment_fee);
+        else                                       meta = (d.deal_type==='flip' ? 'flip' : 'assignment');
+        const daysStr = days===0 ? 'today' : (days===1 ? '1 day' : days+' days');
+        const stale = days >= 7 ? ' stale' : '';
+        const card = el(`<div class="pipe-card s-${s.id}" data-deal="${d.id}">
+          <div class="addr">${escapeHtml(d.property_address || '(no address)')}</div>
+          <div class="who">${escapeHtml(d.owner_last_name || d.owners || '')}${assignee?` <span class="assignee">${escapeHtml(assignee.name)}</span>`:''}</div>
+          <div class="meta"><span class="${stale}">${daysStr}</span>${meta?' · '+escapeHtml(meta):''}</div>
+        </div>`);
+        card.addEventListener('click', () => openDeal(d.id));
+        col.appendChild(card);
+      });
+    }
+    board.appendChild(col);
+  });
+  $('pipeSummary').textContent = total + ' active deal' + (total===1?'':'s');
+  $('pipeBadge').textContent = total ? '· '+total : '';
+}
+
+function fmtMoney(n){
+  if(n===null || n===undefined || n==='') return '';
+  const v = Number(n);
+  if(!isFinite(v)) return '';
+  if(Math.abs(v) >= 1000) return '$'+Math.round(v/1000)+'k';
+  return '$'+Math.round(v);
+}
+function fmtMoneyFull(n){
+  if(n===null || n===undefined || n==='') return '';
+  const v = Number(n);
+  if(!isFinite(v)) return '';
+  return '$'+v.toLocaleString('en-US',{maximumFractionDigits:0});
+}
+
+// ═══════════════════════════════════════════════════════════════
+// DEAL DETAIL
+// ═══════════════════════════════════════════════════════════════
+async function openDeal(id){
+  openDealId = id;
+  $('dealDetail').classList.add('open');
+  $('ddBody').innerHTML = '<div class="empty">Loading…</div>';
+  $('ddStageBar').innerHTML = '';
+  try {
+    await loadProfiles();
+    const j = await api('get-deal&id='+id);
+    openDealData = j;
+    renderDealDetail();
+  } catch(e){
+    $('ddBody').innerHTML = '<div class="empty" style="color:#b91c1c">'+escapeHtml(e.message)+'</div>';
+  }
+}
+$('ddBack').addEventListener('click', () => {
+  $('dealDetail').classList.remove('open');
+  openDealId = null; openDealData = null;
+  loadPipeline();
+});
+$('ddArchive').addEventListener('click', async () => {
+  if(!openDealId) return;
+  if(!confirm('Archive this deal? You can dig it out by editing the database — but otherwise it disappears from the pipeline.')) return;
+  try {
+    await api('archive-deal',{method:'POST', body:{id:openDealId}});
+    toast('Archived','ok');
+    $('dealDetail').classList.remove('open');
+    openDealId = null; openDealData = null;
+    loadPipeline();
+  } catch(e){ toast('Failed: '+e.message,'err'); }
+});
+
+function renderDealDetail(){
+  const d = openDealData.deal;
+  const assignee = d.assigned_to_profile ? allProfiles.find(p => p.id === d.assigned_to_profile) : null;
+  $('ddTitle').innerHTML = escapeHtml(d.property_address || '(no address)') +
+    '<span class="sub">' + escapeHtml(d.owners || '') +
+    (assignee ? ' · assigned to '+escapeHtml(assignee.name) : '') + '</span>';
+
+  // Stage bar
+  const sb = $('ddStageBar');
+  sb.innerHTML = '';
+  STAGES.forEach(s => {
+    const btn = el(`<button class="dd-stage-btn${s.id===d.stage?' active':''}" data-stage="${s.id}">${escapeHtml(s.label)}</button>`);
+    btn.addEventListener('click', () => changeStage(s.id));
+    sb.appendChild(btn);
+  });
+  const deadBtn = el(`<button class="dd-stage-btn${d.stage==='dead'?' active':''}" data-stage="dead" style="border-color:#b91c1c;color:#b91c1c">💀 Dead</button>`);
+  deadBtn.addEventListener('click', openDeadModal);
+  sb.appendChild(deadBtn);
+
+  // Body
+  const body = $('ddBody');
+  body.innerHTML = '';
+
+  // Property info
+  const propCard = el(`<div class="dd-card">
+    <div class="dd-section-title">Property</div>
+    <div class="dd-prop-grid">
+      <div class="dd-field"><label>Owners</label><input type="text" data-deal-field="owners" value="${escapeHtml(d.owners||'')}"></div>
+      <div class="dd-field"><label>Owner last name</label><input type="text" data-deal-field="ownerLastName" value="${escapeHtml(d.owner_last_name||'')}" placeholder="Auto-derived"></div>
+      <div class="dd-field"><label>Source list</label><input type="text" data-deal-field="sourceList" value="${escapeHtml(d.source_list||'')}"></div>
+      <div class="dd-field full"><label>Property address</label><input type="text" data-deal-field="propertyAddress" value="${escapeHtml(d.property_address||'')}"></div>
+      <div class="dd-field full"><label>Mailing address</label><input type="text" data-deal-field="mailingAddress" value="${escapeHtml(d.mailing_address||'')}"></div>
+      <div class="dd-field"><label>Beds</label><input type="number" data-deal-field="bed" value="${d.bed??''}"></div>
+      <div class="dd-field"><label>Baths</label><input type="number" step="0.5" data-deal-field="bath" value="${d.bath??''}"></div>
+      <div class="dd-field"><label>Sqft</label><input type="number" data-deal-field="sqft" value="${d.sqft??''}"></div>
+      <div class="dd-field"><label>Year built</label><input type="number" data-deal-field="yearBuilt" value="${d.year_built??''}"></div>
+    </div>
+  </div>`);
+  body.appendChild(propCard);
+
+  // Deal type toggle
+  const typeCard = el(`<div class="dd-card" style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+    <div style="font-size:13px;font-weight:600">Deal type</div>
+    <div class="dd-toggle">
+      <button data-type="assignment" ${d.deal_type==='assignment'?'class="active"':''}>Assignment</button>
+      <button data-type="flip" ${d.deal_type==='flip'?'class="active"':''}>Fix &amp; Flip</button>
+    </div>
+  </div>`);
+  typeCard.querySelectorAll('[data-type]').forEach(b => b.addEventListener('click', () => changeDealType(b.dataset.type)));
+  body.appendChild(typeCard);
+
+  // Financials
+  body.appendChild(renderFinancials(d));
+
+  // Comps
+  body.appendChild(renderComps(openDealData.comps, d));
+
+  // Documents
+  body.appendChild(renderDocs(openDealData.docs));
+
+  // Activity (notes + calls)
+  body.appendChild(renderActivity(openDealData.notes, openDealData.calls));
+
+  // Wire up field auto-save — saves as you type (debounced) AND on blur,
+  // so a value is never lost if you click "next stage" before tabbing away.
+  // Also updates the in-memory deal object immediately so the field never
+  // appears to "reset" even before the network save completes.
+  const dealFieldKeyMap = {
+    owners:'owners', ownerLastName:'owner_last_name', sourceList:'source_list',
+    propertyAddress:'property_address', mailingAddress:'mailing_address',
+    bed:'bed', bath:'bath', sqft:'sqft', yearBuilt:'year_built',
+    arv:'arv', repairs:'repairs', sellerAsking:'seller_asking', yourOffer:'your_offer',
+    maoPercent:'mao_percent', purchaseClosingCosts:'purchase_closing_costs',
+    holdingMonthly:'holding_monthly', holdingMonths:'holding_months',
+    sellingCostsPct:'selling_costs_pct', resalePrice:'resale_price',
+    assignmentFee:'assignment_fee', buyerClosingCosts:'buyer_closing_costs',
+  };
+  body.querySelectorAll('[data-deal-field]').forEach(inp => {
+    inp.addEventListener('input', () => {
+      const key = dealFieldKeyMap[inp.dataset.dealField];
+      if(key && openDealData) openDealData.deal[key] = inp.value;
+      saveFieldDebounced(inp.dataset.dealField, inp.value);
+    });
+    inp.addEventListener('blur', () => saveField(inp.dataset.dealField, inp.value));
+  });
+  body.querySelectorAll('[data-fin-field]').forEach(inp => {
+    const handler = () => {
+      const key = dealFieldKeyMap[inp.dataset.finField];
+      if(key && openDealData) openDealData.deal[key] = inp.value;
+      saveFieldDebounced(inp.dataset.finField, inp.value);
+      recalcFinancials();
+    };
+    inp.addEventListener('input', handler);
+    inp.addEventListener('change', handler);
+    inp.addEventListener('blur', () => saveField(inp.dataset.finField, inp.value));
+  });
+}
+
+function renderFinancials(d){
+  const isFlip = d.deal_type === 'flip';
+  const card = el(`<div class="dd-card">
+    <div class="dd-section-title">Financials</div>
+    <div class="dd-prop-grid">
+      <div class="dd-field dd-money"><label>ARV</label><input type="number" data-fin-field="arv" value="${d.arv??''}" placeholder="0"></div>
+      <div class="dd-field dd-money"><label>Repairs</label><input type="number" data-fin-field="repairs" value="${d.repairs??''}" placeholder="0"></div>
+      <div class="dd-field dd-money"><label>Seller asking</label><input type="number" data-fin-field="sellerAsking" value="${d.seller_asking??''}" placeholder="0"></div>
+      <div class="dd-field dd-money"><label>Your offer</label><input type="number" data-fin-field="yourOffer" value="${d.your_offer??''}" placeholder="0"></div>
+      <div class="dd-field"><label>MAO %</label><input type="number" step="1" data-fin-field="maoPercent" value="${d.mao_percent??70}"></div>
+      ${isFlip ? `
+        <div class="dd-field dd-money"><label>Purchase closing costs</label><input type="number" data-fin-field="purchaseClosingCosts" value="${d.purchase_closing_costs??''}" placeholder="0"></div>
+        <div class="dd-field dd-money"><label>Holding $/month</label><input type="number" data-fin-field="holdingMonthly" value="${d.holding_monthly??''}" placeholder="0"></div>
+        <div class="dd-field"><label>Holding months</label><input type="number" step="0.5" data-fin-field="holdingMonths" value="${d.holding_months??''}" placeholder="0"></div>
+        <div class="dd-field"><label>Selling costs %</label><input type="number" step="0.1" data-fin-field="sellingCostsPct" value="${d.selling_costs_pct??''}" placeholder="7"></div>
+        <div class="dd-field dd-money full"><label>Resale price (defaults to ARV)</label><input type="number" data-fin-field="resalePrice" value="${d.resale_price??''}" placeholder="${d.arv??''}"></div>
+      ` : `
+        <div class="dd-field dd-money"><label>Assignment fee</label><input type="number" data-fin-field="assignmentFee" value="${d.assignment_fee??''}" placeholder="0"></div>
+        <div class="dd-field dd-money"><label>Buyer closing costs</label><input type="number" data-fin-field="buyerClosingCosts" value="${d.buyer_closing_costs??''}" placeholder="0"></div>
+      `}
+    </div>
+    <div class="dd-calc" id="maoCalc"><span class="lbl">MAO</span><span class="val" id="maoVal">—</span></div>
+    <div class="dd-calc good" id="profitCalc"><span class="lbl">${isFlip ? 'Projected profit' : 'Assignment profit'}</span><span class="val" id="profitVal">—</span></div>
+  </div>`);
+  // Initial calc
+  setTimeout(() => recalcFinancials(), 0);
+  return card;
+}
+
+function recalcFinancials(){
+  if(!openDealData) return;
+  const get = (k, fallback=null) => {
+    const inp = document.querySelector(`[data-fin-field="${k}"]`);
+    if(!inp) return fallback;
+    const v = parseFloat(inp.value);
+    return isFinite(v) ? v : fallback;
+  };
+  const arv = get('arv', 0), repairs = get('repairs', 0);
+  const maoPct = get('maoPercent', 70);
+  const maoEl = $('maoVal');
+  if(maoEl){
+    if(arv){
+      const mao = (arv * (maoPct/100)) - repairs;
+      maoEl.textContent = '$'+Math.round(mao).toLocaleString();
+    } else maoEl.textContent = '—';
+  }
+  const profitEl = $('profitVal');
+  if(profitEl){
+    const isFlip = openDealData.deal.deal_type === 'flip';
+    if(isFlip){
+      // Fix & flip profit: resale price minus purchase price, repairs, holding, closing, and selling costs
+      const offer = get('yourOffer', 0);
+      const purchaseCC = get('purchaseClosingCosts', 0);
+      const holdMo = get('holdingMonthly', 0), holdN = get('holdingMonths', 0);
+      const sellPct = get('sellingCostsPct', 0);
+      const resale = get('resalePrice', 0) || arv || 0;
+      const sellingCosts = resale * (sellPct/100);
+      const profit = resale - offer - repairs - purchaseCC - (holdMo*holdN) - sellingCosts;
+      profitEl.textContent = isFinite(profit) && resale ? '$'+Math.round(profit).toLocaleString() : '—';
+    } else {
+      // Assignment profit: the assignment fee you collect, minus your own buyer-side closing costs
+      const assignmentFee = get('assignmentFee', 0);
+      const buyerCC = get('buyerClosingCosts', 0);
+      const profit = assignmentFee - buyerCC;
+      profitEl.textContent = (assignmentFee || buyerCC) ? '$'+Math.round(profit).toLocaleString() : '—';
+    }
+  }
+}
+
+function renderComps(comps, deal){
+  const card = el(`<div class="dd-card">
+    <div class="dd-section-title">Comps <button class="add" data-add="comp">+ Add</button></div>
+    <div id="compList"></div>
+    <div class="add-form" id="compForm">
+      <div class="row">
+        <input type="text" id="compLabel" placeholder="Label (e.g. 12 Hale Rd — sold)">
+        <input type="number" id="compPrice" placeholder="Sale $" style="max-width:110px">
+      </div>
+      <input type="url" id="compUrl" placeholder="https://zillow.com/...">
+      <div class="actions">
+        <button class="btn-cancel" data-cancel="comp">Cancel</button>
+        <button class="btn-add" id="compSave">Save</button>
+      </div>
+    </div>
+  </div>`);
+  const list = card.querySelector('#compList');
+  const propAddr = deal.property_address;
+  if(propAddr){
+    const z = el(`<div class="dd-link-row">
+      <i class="ti ti-link icon" aria-hidden="true"></i>
+      <a href="https://www.zillow.com/homes/${encodeURIComponent(propAddr)}_rb/" target="_blank" rel="noopener">Zillow page for this property →</a>
+    </div>`);
+    list.appendChild(z);
+  }
+  if(!comps.length && !propAddr){
+    list.innerHTML = '<div class="muted" style="font-size:12px;padding:4px 0">No comps yet</div>';
+  }
+  comps.forEach(c => {
+    const row = el(`<div class="dd-link-row">
+      <i class="ti ti-external-link icon" aria-hidden="true"></i>
+      ${c.url
+        ? `<a href="${escapeHtml(c.url)}" target="_blank" rel="noopener">${escapeHtml(c.label || c.url)}</a>`
+        : `<span style="flex:1">${escapeHtml(c.label || '(no label)')}</span>`}
+      ${c.sale_price ? `<span class="price">${escapeHtml(fmtMoneyFull(c.sale_price))}</span>` : ''}
+      <button class="del" data-del-comp="${c.id}" aria-label="Delete">✕</button>
+    </div>`);
+    row.querySelector('[data-del-comp]').addEventListener('click', async e => {
+      if(!confirm('Remove this comp?')) return;
+      await api('delete-comp',{method:'POST', body:{id:c.id}});
+      openDeal(openDealId);
+    });
+    list.appendChild(row);
+  });
+  card.querySelector('[data-add="comp"]').addEventListener('click', () => card.querySelector('#compForm').classList.add('open'));
+  card.querySelector('[data-cancel="comp"]').addEventListener('click', () => card.querySelector('#compForm').classList.remove('open'));
+  card.querySelector('#compSave').addEventListener('click', async () => {
+    const label = card.querySelector('#compLabel').value.trim();
+    const url   = card.querySelector('#compUrl').value.trim();
+    const price = parseFloat(card.querySelector('#compPrice').value) || null;
+    if(!label && !url){ toast('Add a label or URL','err'); return; }
+    try {
+      await api('add-comp', {method:'POST', body:{dealId:openDealId, label, url, salePrice:price}});
+      openDeal(openDealId);
+    } catch(e){ toast('Failed: '+e.message,'err'); }
+  });
+  return card;
+}
+
+function renderDocs(docs){
+  const card = el(`<div class="dd-card">
+    <div class="dd-section-title">Documents <button class="add" data-add="doc">+ Add link</button></div>
+    <div id="docList"></div>
+    <div class="add-form" id="docForm">
+      <div class="row">
+        <input type="text" id="docLabel" placeholder="Label (e.g. Purchase agreement)">
+        <select id="docType">
+          <option value="contract">Contract</option>
+          <option value="photos">Photos</option>
+          <option value="comps">Comps</option>
+          <option value="other" selected>Other</option>
+        </select>
+      </div>
+      <input type="url" id="docUrl" placeholder="https://docusign.com/... or https://drive.google.com/...">
+      <div class="actions">
+        <button class="btn-cancel" data-cancel="doc">Cancel</button>
+        <button class="btn-add" id="docSave">Save</button>
+      </div>
+    </div>
+  </div>`);
+  const list = card.querySelector('#docList');
+  if(!docs.length){
+    list.innerHTML = '<div class="muted" style="font-size:12px;padding:4px 0">No documents yet</div>';
+  }
+  const iconFor = t => t==='contract'?'ti-file-text':(t==='photos'?'ti-photo':(t==='comps'?'ti-table':'ti-link'));
+  docs.forEach(doc => {
+    const row = el(`<div class="dd-link-row">
+      <i class="ti ${iconFor(doc.doc_type)} icon" aria-hidden="true"></i>
+      <a href="${escapeHtml(doc.url)}" target="_blank" rel="noopener">${escapeHtml(doc.label || doc.url)}</a>
+      <button class="del" data-del-doc="${doc.id}" aria-label="Delete">✕</button>
+    </div>`);
+    row.querySelector('[data-del-doc]').addEventListener('click', async e => {
+      if(!confirm('Remove this document?')) return;
+      await api('delete-doc',{method:'POST', body:{id:doc.id}});
+      openDeal(openDealId);
+    });
+    list.appendChild(row);
+  });
+  card.querySelector('[data-add="doc"]').addEventListener('click', () => card.querySelector('#docForm').classList.add('open'));
+  card.querySelector('[data-cancel="doc"]').addEventListener('click', () => card.querySelector('#docForm').classList.remove('open'));
+  card.querySelector('#docSave').addEventListener('click', async () => {
+    const label = card.querySelector('#docLabel').value.trim();
+    const url   = card.querySelector('#docUrl').value.trim();
+    const type  = card.querySelector('#docType').value;
+    if(!url){ toast('URL required','err'); return; }
+    try {
+      await api('add-doc', {method:'POST', body:{dealId:openDealId, label, url, docType:type}});
+      openDeal(openDealId);
+    } catch(e){ toast('Failed: '+e.message,'err'); }
+  });
+  return card;
+}
+
+function renderActivity(notes, calls){
+  const card = el(`<div class="dd-card">
+    <div class="dd-section-title">Activity</div>
+    <div class="dd-act-list" id="actList"></div>
+    <textarea class="dd-note-input" id="noteInput" placeholder="Add a note…"></textarea>
+    <div class="dd-note-actions"><button class="btn-primary" id="noteSave" style="font-size:12px;padding:7px 14px">Add note</button></div>
+  </div>`);
+  // Merge notes + calls, sort by time desc
+  const items = [];
+  for(const n of notes){
+    items.push({when:new Date(n.created_at), kind:n.kind||'note', body:n.body, profileId:n.profile_id});
+  }
+  for(const c of calls){
+    const profile = c.profile_id ? allProfiles.find(p => p.id === c.profile_id) : null;
+    const dur = c.duration ? fmtDuration(c.duration) : '';
+    const who = profile ? profile.name+' called' : 'Call';
+    const status = c.status ? ' · '+c.status : '';
+    items.push({when:new Date(c.started_at), kind:'call', body:`${who} · ${dur||'—'}${status}`});
+  }
+  items.sort((a,b) => b.when - a.when);
+  const list = card.querySelector('#actList');
+  if(!items.length){
+    list.innerHTML = '<div class="muted" style="font-size:12px">No activity yet — make a call or add a note.</div>';
+  }
+  items.forEach(it => {
+    const profile = it.profileId ? allProfiles.find(p => p.id === it.profileId) : null;
+    const icnMap = {call:'ti-phone-outgoing', note:'ti-message-2', system:'ti-sparkles', stage_change:'ti-arrow-right'};
+    const icn = icnMap[it.kind] || 'ti-circle';
+    const body = (it.kind==='note' && profile ? profile.name+': ' : '') + (it.body || '');
+    const row = el(`<div class="dd-act ${it.kind}">
+      <i class="ti ${icn} icn" aria-hidden="true"></i>
+      <div class="body">${escapeHtml(body)}<div class="meta">${formatRelTime(it.when)}</div></div>
+    </div>`);
+    list.appendChild(row);
+  });
+  card.querySelector('#noteSave').addEventListener('click', async () => {
+    const t = card.querySelector('#noteInput');
+    const txt = t.value.trim();
+    if(!txt) return;
+    try {
+      await api('add-note', {method:'POST', body:{dealId:openDealId, body:txt, profileId:activeProfileId}});
+      t.value = '';
+      openDeal(openDealId);
+    } catch(e){ toast('Failed: '+e.message,'err'); }
+  });
+  return card;
+}
+function formatRelTime(d){
+  const sec = Math.floor((Date.now()-d)/1000);
+  if(sec < 60) return 'just now';
+  if(sec < 3600) return Math.floor(sec/60)+'m ago';
+  if(sec < 86400) return Math.floor(sec/3600)+'h ago';
+  const days = Math.floor(sec/86400);
+  if(days < 7) return days+'d ago';
+  return d.toLocaleDateString();
+}
+
+async function changeStage(newStage){
+  if(!openDealData) return;
+  const prev = openDealData.deal.stage;
+  if(prev === newStage) return;
+  await flushPendingFieldSaves();
+  try {
+    await api('update-deal',{method:'POST', body:{
+      id: openDealId, stage: newStage, _previousStage: prev, actingProfileId: activeProfileId,
+    }});
+    openDealData.deal.stage = newStage;
+    renderDealDetail();
+    toast('Moved to '+(STAGES.find(s=>s.id===newStage)?.label||newStage),'ok');
+  } catch(e){ toast('Failed: '+e.message,'err'); }
+}
+async function changeDealType(t){
+  if(!openDealData || openDealData.deal.deal_type === t) return;
+  try {
+    await api('update-deal',{method:'POST', body:{id:openDealId, dealType:t}});
+    openDealData.deal.deal_type = t;
+    renderDealDetail();
+  } catch(e){ toast('Failed: '+e.message,'err'); }
+}
+const fieldSaveTimers = {};
+const pendingFieldValues = {}; // field -> latest value not yet confirmed saved
+async function saveField(field, value){
+  if(!openDealData) return;
+  delete pendingFieldValues[field];
+  try {
+    await api('update-deal',{method:'POST', body:{id:openDealId, [field]:value}});
+  } catch(e){ toast('Save failed: '+e.message,'err'); }
+}
+function saveFieldDebounced(field, value){
+  pendingFieldValues[field] = value;
+  clearTimeout(fieldSaveTimers[field]);
+  fieldSaveTimers[field] = setTimeout(() => saveField(field, value), 600);
+}
+// Flush any pending (not-yet-saved) field edits immediately — call this
+// before navigating away from a deal (e.g. changing stage) so nothing is lost.
+async function flushPendingFieldSaves(){
+  const entries = Object.entries(pendingFieldValues);
+  if(!entries.length) return;
+  await Promise.all(entries.map(([field, value]) => {
+    clearTimeout(fieldSaveTimers[field]);
+    return saveField(field, value);
+  }));
+}
+
+// ═══════════════════════════════════════════════════════════════
+// "SEND TO PIPELINE" button on hot/warm leads in the booklet
+// ═══════════════════════════════════════════════════════════════
+// Hook: re-render cards adds a button if status is hot/warm and not yet sent.
+// We track which properties have deals via an in-memory set we refresh on demand.
+let propertiesWithDeals = new Set();
+
+async function refreshDealsIndex(){
+  try {
+    const j = await api('list-deals');
+    propertiesWithDeals = new Set((j.deals||[]).filter(d => d.property_id).map(d => d.property_id));
+  } catch(e){ /* silent */ }
+}
+
+// Listen for clicks on Send-to-pipeline buttons
+document.addEventListener('click', async e => {
+  const btn = e.target.closest('[data-send-pipeline]');
+  if(!btn) return;
+  if(btn.classList.contains('sent')) return;
+  if(!activeProfileId){ toast('Pick your profile first','err'); showProfilePicker(); return; }
+  const id = btn.dataset.sendPipeline;
+  const p = properties.find(x => x.id === id);
+  if(!p) return;
+  btn.disabled = true; btn.textContent = 'Sending…';
+  try {
+    await api('create-deal',{method:'POST', body:{
+      propertyId: p.id,
+      owners: p.owners,
+      ownerLastName: p.owner_last_name || '',
+      propertyAddress: p.property_address,
+      mailingAddress: p.mailing_address,
+      createdByProfileId: activeProfileId,
+      assignedToProfileId: activeProfileId,
+      stage: 'hot',
+    }});
+    propertiesWithDeals.add(p.id);
+    btn.classList.add('sent');
+    btn.disabled = false;
+    btn.textContent = '✓ In pipeline';
+    toast('Sent to pipeline','ok');
+  } catch(err){
+    btn.disabled = false;
+    btn.textContent = '→ Send to pipeline';
+    toast('Failed: '+err.message,'err');
+  }
+});
+
+// Monkey-patch into render: after the existing renderPage() finishes, inject button on hot/warm cards
+// Use a MutationObserver-free approach: hook into existing markCalled / status change handlers via the click delegation already in the JS.
+// Simpler: after renderPage() runs, walk the cards and add the button where appropriate.
+const _origRenderPage = renderPage;
+renderPage = function(){
+  _origRenderPage();
+  // Add Send-to-pipeline buttons on hot/warm leads
+  document.querySelectorAll('.card').forEach(card => {
+    const id = card.dataset.id;
+    if(!id) return;
+    const p = properties.find(x => x.id === id);
+    if(!p) return;
+    // Add Send-to-pipeline button on hot/warm
+    const status = p.lead?.lead_status;
+    if(status === 'hot' || status === 'warm'){
+      if(!card.querySelector('.send-to-pipeline')){
+        const already = propertiesWithDeals.has(id);
+        const btn = el(`<button class="send-to-pipeline${already?' sent':''}" data-send-pipeline="${escapeHtml(id)}">${already?'✓ In pipeline':'→ Send to pipeline'}</button>`);
+        card.appendChild(btn);
+      }
+    }
+    // VA notes already open (notes exist) — pull any recordings for playback
+    const det = card.querySelector('.va-notes-block');
+    if(det && det.open){
+      const container = det.querySelector('[data-recordings-container]');
+      if(container && !container.dataset.loaded){
+        container.dataset.loaded = '1';
+        loadRecordings(id, container.id);
+      }
+    }
+  });
+};
+
+// ═══════════════════════════════════════════════════════════════
+// SMS / DRIP — frontend
+// ═══════════════════════════════════════════════════════════════
+
+const DRIP_KINDS = [
+  { id:'reconsider',  label:'Reconsider',      hint:'4 msgs over 24 days — after offer declined' },
+  { id:'comp',        label:'Working with Comp', hint:'1 msg — 3 days before their close with someone else' },
+  { id:'three_month', label:'3-Month Check-in', hint:'1 msg at the 3-month mark' },
+  { id:'six_month',   label:'6-Month Check-in', hint:'1 msg at the 6-month mark' },
+];
+
+// Format E.164 phone for display
+function fmtPhone(e164){
+  if(!e164) return '';
+  const m = e164.match(/^\+1(\d{3})(\d{3})(\d{4})$/);
+  if(m) return `(${m[1]}) ${m[2]}-${m[3]}`;
+  return e164;
+}
+function fmtTime(d){
+  if(!d) return '';
+  const dt = new Date(d);
+  const today = new Date();
+  const sameDay = dt.toDateString() === today.toDateString();
+  if(sameDay) return dt.toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});
+  return dt.toLocaleDateString([],{month:'short',day:'numeric'}) + ' ' + dt.toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});
+}
+
+// ── Inbox view ──────────────────────────────────────────────────
+// ── Voicemail box ─────────────────────────────────────────────
+let voicemails = [];
+let inboxTab = 'texts';
+
+function setInboxTab(tab){
+  inboxTab = tab;
+  document.querySelectorAll('.ib-tab').forEach(b => b.classList.toggle('active', b.dataset.ibtab === tab));
+  $('inboxList').classList.toggle('hide', tab !== 'texts');
+  $('vmList').classList.toggle('hide', tab !== 'vm');
+  if(tab === 'vm') loadVoicemails();
+  else loadInbox();
+}
+document.querySelectorAll('.ib-tab').forEach(b => {
+  b.addEventListener('click', () => setInboxTab(b.dataset.ibtab));
+});
+
+async function loadVoicemails(){
+  const list = $('vmList');
+  list.innerHTML = '<div class="empty">Loading…</div>';
+  try {
+    const j = await api('list-voicemails');
+    voicemails = j.voicemails || [];
+    renderVoicemails();
+  } catch(e){
+    list.innerHTML = '<div class="empty" style="color:#b91c1c">' + escapeHtml(e.message) +
+      '<br><span style="font-size:11px">If this says the table is missing, run the inbound_voicemails migration.</span></div>';
+  }
+}
+
+function renderVoicemails(){
+  const list = $('vmList');
+  const unheard = voicemails.filter(v => !v.heard).length;
+  $('vmCount').textContent = unheard ? '· ' + unheard : '';
+  const badge = $('inboxBadge');
+  if(badge && unheard) badge.textContent = (badge.textContent || '') + (badge.textContent ? ' ' : '') + '📬' + unheard;
+  if(inboxTab === 'vm'){
+    $('inboxSummary').textContent = voicemails.length
+      ? voicemails.length + ' message' + (voicemails.length===1?'':'s') + (unheard ? ' · ' + unheard + ' new' : '')
+      : 'No messages';
+  }
+  list.innerHTML = '';
+  if(!voicemails.length){
+    list.innerHTML = '<div class="inbox-empty">No voicemails yet.<br>' +
+      '<span style="font-size:11px">Callers who miss you will be recorded here.</span></div>';
+    return;
+  }
+  voicemails.forEach(v => {
+    // Match the number back to a lead if we have one, so it isn't just digits.
+    const prop = properties.find(p => (p.phones||[]).some(ph => ph.e164 === v.from_number));
+    const who = prop ? (prop.owners || fmtPhone(v.from_number)) : fmtPhone(v.from_number);
+    const sub = prop && prop.property_address ? prop.property_address : '';
+    const mins = Math.floor((v.duration||0)/60), secs = (v.duration||0)%60;
+    const card = el(`
+      <div class="vm-card${v.heard ? '' : ' unheard'}">
+        <div class="vm-top">
+          <div class="vm-from">${v.heard ? '' : '🔴 '}${escapeHtml(who)}</div>
+          <div class="vm-when">${escapeHtml(vmWhen(v.created_at))}</div>
+        </div>
+        <div class="vm-meta">${escapeHtml(fmtPhone(v.from_number))}${sub ? ' · ' + escapeHtml(sub) : ''} · ${mins}:${String(secs).padStart(2,'0')}</div>
+        <audio controls preload="none" src="${escapeHtml(recordingSrc(v.recording_sid))}"></audio>
+        <div class="vm-acts">
+          <button class="primary" data-vm-call="${escapeHtml(v.from_number)}">📞 Call back</button>
+          <button data-vm-heard="${escapeHtml(v.id)}">${v.heard ? 'Mark unheard' : 'Mark heard'}</button>
+          <button class="danger" data-vm-del="${escapeHtml(v.id)}">🗑 Delete</button>
+        </div>
+      </div>`);
+    list.appendChild(card);
+  });
+}
+
+// Reuse the authenticated recording proxy the call recordings already use.
+function recordingSrc(sid){
+  return backend + '?action=recording&sid=' + encodeURIComponent(sid || '');
+}
+
+function vmWhen(iso){
+  if(!iso) return '';
+  const d = new Date(iso), now = new Date();
+  const mins = Math.round((now - d)/60000);
+  if(mins < 1)  return 'just now';
+  if(mins < 60) return mins + 'm ago';
+  const hrs = Math.round(mins/60);
+  if(hrs < 24) return hrs + 'h ago';
+  const days = Math.round(hrs/24);
+  if(days < 7) return days + 'd ago';
+  return d.toLocaleDateString();
+}
+
+$('vmList').addEventListener('click', async e => {
+  const call = e.target.closest('[data-vm-call]');
+  if(call){ placeManualCall(call.dataset.vmCall, 'Voicemail callback'); return; }
+
+  const heard = e.target.closest('[data-vm-heard]');
+  if(heard){
+    const v = voicemails.find(x => String(x.id) === heard.dataset.vmHeard);
+    if(!v) return;
+    const next = !v.heard;
+    v.heard = next;
+    renderVoicemails();
+    try { await api('mark-voicemail-heard', {method:'POST', body:{id:v.id, heard:next}}); }
+    catch(err){ v.heard = !next; renderVoicemails(); toast('Could not save: '+err.message,'err'); }
+    return;
+  }
+
+  const del = e.target.closest('[data-vm-del]');
+  if(del){
+    if(!confirm('Delete this voicemail? The recording is removed from Twilio too.')) return;
+    const id = del.dataset.vmDel;
+    try {
+      await api('delete-voicemail', {method:'POST', body:{id}});
+      voicemails = voicemails.filter(x => String(x.id) !== String(id));
+      renderVoicemails();
+      toast('Deleted','ok');
+    } catch(err){ toast('Could not delete: '+err.message,'err'); }
+  }
+});
+
+async function loadInbox(){
+  $('inboxList').innerHTML = '<div class="empty">Loading…</div>';
+  try {
+    const j = await api('list-inbox');
+    renderInbox(j.threads || []);
+  } catch(e){
+    $('inboxList').innerHTML = '<div class="empty" style="color:#b91c1c">'+escapeHtml(e.message)+'</div>';
+  }
+}
+function renderInbox(threads){
+  $('inboxSummary').textContent = threads.length + ' active conversation' + (threads.length===1?'':'s');
+  $('inboxBadge').textContent = threads.length ? '· '+threads.length : '';
+  const list = $('inboxList');
+  list.innerHTML = '';
+  if(!threads.length){
+    list.innerHTML = '<div class="inbox-empty">No inbound texts yet.<br><span style="font-size:11px">When supporters reply, they\'ll appear here.</span></div>';
+    return;
+  }
+  threads.forEach(t => {
+    const preview = (t.latest && t.latest.body) ? t.latest.body : '';
+    const when = t.latest ? fmtTime(t.latest.created_at) : '';
+    const row = el(`<div class="inbox-row" data-deal="${t.dealId || ''}" data-from="${escapeHtml(t.from)}">
+      <div class="who">
+        <div class="name">${escapeHtml(t.owners || fmtPhone(t.from))}</div>
+        ${t.address ? `<div class="addr">${escapeHtml(t.address)}</div>` : `<div class="addr">${escapeHtml(fmtPhone(t.from))}</div>`}
+        <div class="preview">${escapeHtml(preview)}</div>
+      </div>
+      <div style="text-align:right;flex-shrink:0">
+        <div style="font-size:10px;color:#9ca3af">${escapeHtml(when)}</div>
+        ${t.count > 1 ? `<div class="ct" style="margin-top:4px">${t.count}</div>` : ''}
+      </div>
+    </div>`);
+    row.addEventListener('click', () => openConv(t));
+    list.appendChild(row);
+  });
+}
+$('inboxRefresh')?.addEventListener('click', () => loadInbox());
+
+// ── SMS conversation ──────────────────────────────────────────
+// Tapping an Inbox row used to try to jump to a pipeline deal and give up
+// when there wasn't one. Now it opens the actual conversation.
+let stNumber = null;
+let stThread = null;
+
+async function openConv(t){
+  stNumber = t.from;
+  stThread = t;
+  // Match the number to a lead we already have loaded, so the header shows
+  // a name and address instead of ten digits.
+  const prop = properties.find(p => (p.phones||[]).some(ph => ph.e164 === t.from));
+  $('stName').textContent = t.owners || (prop && prop.owners) || fmtPhone(t.from);
+  $('stSub').textContent = [fmtPhone(t.from), t.address || (prop && prop.property_address) || '']
+    .filter(Boolean).join(' · ');
+  $('convPanel').classList.add('open');
+  $('stBody').innerHTML = '<div class="empty">Loading…</div>';
+  await loadConv();
+}
+
+async function loadConv(){
+  try {
+    const j = await api('list-thread&number=' + encodeURIComponent(stNumber));
+    renderConvThread(j.messages || []);
+  } catch(e){
+    $('stBody').innerHTML = '<div class="empty" style="color:#b91c1c">' + escapeHtml(e.message) + '</div>';
+  }
+}
+
+function renderConvThread(msgs){
+  const body = $('stBody');
+  body.innerHTML = '';
+  if(!msgs.length){
+    body.innerHTML = '<div class="empty">No messages yet.</div>';
+    return;
+  }
+  let lastDay = '';
+  msgs.forEach(m => {
+    const d = new Date(m.created_at);
+    const day = d.toLocaleDateString(undefined, {weekday:'short', month:'short', day:'numeric'});
+    if(day !== lastDay){
+      lastDay = day;
+      body.appendChild(el(`<div class="st-day">${escapeHtml(day)}</div>`));
+    }
+    const out = m.direction === 'outbound';
+    // Tapping a bubble reveals its delete chip — deliberately two taps, so a
+    // stray thumb while scrolling can't wipe a message.
+    const bub = el(`<div class="st-msg ${out ? 'st-out' : 'st-in'}">${escapeHtml(m.body || '')}</div>`);
+    const time = d.toLocaleTimeString(undefined, {hour:'numeric', minute:'2-digit'});
+    const st = out && m.status && m.status !== 'sent' && m.status !== 'delivered'
+      ? ' · ' + m.status : '';
+    const stamp = el(`<div class="st-stamp${out ? ' out' : ''}">${escapeHtml(time + st)}</div>`);
+    const del = el(`<button class="st-del${out ? ' out' : ''}">🗑 Delete this message</button>`);
+    bub.addEventListener('click', () => del.classList.toggle('show'));
+    del.addEventListener('click', async () => {
+      del.disabled = true; del.textContent = 'Deleting…';
+      try {
+        await api('delete-message', {method:'POST', body:{id:m.id}});
+        bub.remove(); stamp.remove(); del.remove();
+      } catch(e){
+        del.disabled = false; del.textContent = '🗑 Delete this message';
+        toast('Could not delete: ' + e.message, 'err');
+      }
+    });
+    body.appendChild(bub);
+    body.appendChild(stamp);
+    body.appendChild(del);
+  });
+  body.scrollTop = body.scrollHeight;
+}
+
+$('stBack').addEventListener('click', () => {
+  $('convPanel').classList.remove('open');
+  stNumber = null;
+  loadInbox();
+});
+$('stWipe').addEventListener('click', async () => {
+  if(!stNumber) return;
+  const who = $('stName').textContent || fmtPhone(stNumber);
+  if(!confirm('Delete the whole conversation with ' + who + '?\n\nThis clears it from the dialer only — Twilio keeps its own log.')) return;
+  const btn = $('stWipe');
+  btn.disabled = true;
+  try {
+    await api('delete-thread', {method:'POST', body:{number: stNumber}});
+    $('convPanel').classList.remove('open');
+    stNumber = null;
+    toast('Conversation deleted','ok');
+    loadInbox();
+  } catch(e){ toast('Could not delete: ' + e.message, 'err'); }
+  btn.disabled = false;
+});
+$('stCall').addEventListener('click', () => {
+  if(stNumber) placeManualCall(stNumber, $('stName').textContent || 'Inbox reply');
+});
+$('stInput').addEventListener('input', e => {
+  e.target.style.height = 'auto';
+  e.target.style.height = Math.min(e.target.scrollHeight, 110) + 'px';
+});
+$('stSend').addEventListener('click', async () => {
+  const text = $('stInput').value.trim();
+  if(!text || !stNumber) return;
+  const btn = $('stSend');
+  btn.disabled = true; btn.textContent = '…';
+  try {
+    const prop = properties.find(p => (p.phones||[]).some(ph => ph.e164 === stNumber));
+    await api('send-manual-sms', {method:'POST', body:{
+      to: stNumber,
+      body: text,
+      dealId: (stThread && stThread.dealId) || null,
+      propertyId: (stThread && stThread.propertyId) || (prop ? prop.id : null),
+    }});
+    $('stInput').value = '';
+    $('stInput').style.height = 'auto';
+    await loadConv();
+  } catch(e){
+    toast('Could not send: ' + e.message, 'err');
+  }
+  btn.disabled = false; btn.textContent = 'Send';
+});
+
+// ── Mail (email via Spacemail / IMAP) ───────────────────────────
+let mailCache = [];
+let mailReplyCtx = null;
+
+async function loadMail(){
+  $('mailList').innerHTML = '<div class="inbox-empty">Loading mail…</div>';
+  $('mailSummary').textContent = '…';
+  try {
+    if(!mailFolders.length) loadMailFolders();
+    const j = await api('fetch-inbox', {method:'POST', body:{ limit: 30, folder: mailFolder }});
+    mailCache = j.messages || [];
+    renderMail(mailCache);
+  } catch(e){
+    $('mailList').innerHTML = '<div class="inbox-empty" style="color:#b91c1c">'+escapeHtml(e.message)+'</div>';
+    $('mailSummary').textContent = '—';
+  }
+}
+function renderMail(messages){
+  const unread = messages.filter(m => !m.seen).length;
+  $('mailSummary').textContent = messages.length + ' message' + (messages.length===1?'':'s') + (unread?` · ${unread} unread`:'');
+  $('mailBadge').textContent = unread ? '· '+unread : '';
+  const list = $('mailList');
+  if(!messages.length){
+    list.innerHTML = '<div class="inbox-empty">No mail found.<br><span style="font-size:11px">Replies to your outreach will show up here.</span></div>';
+    return;
+  }
+  list.innerHTML = '';
+  messages.forEach(m => {
+    const when = m.date ? fmtMailDate(m.date) : '';
+    const row = el(`<div class="mail-row${m.seen?'':' unread'}" data-mailuid="${escapeHtml(String(m.uid))}">
+      <div class="who">
+        <div class="name">${m.seen?'':'<span class="mail-unread-dot"></span>'}${escapeHtml(m.fromName||m.from||'(unknown)')}</div>
+        <div class="addr">${escapeHtml(m.from||'')}</div>
+        <div class="subj">${escapeHtml(m.subject||'(no subject)')}</div>
+      </div>
+      <div class="when">${escapeHtml(when)}</div>
+    </div>`);
+    list.appendChild(row);
+  });
+}
+function fmtMailDate(iso){
+  try {
+    const d = new Date(iso), now = new Date();
+    if(d.toDateString() === now.toDateString()) return d.toLocaleTimeString([], {hour:'numeric', minute:'2-digit'});
+    return d.toLocaleDateString([], {month:'short', day:'numeric'});
+  } catch { return ''; }
+}
+function extractEmail(s){
+  const m = (s||'').match(/[^\s<>]+@[^\s<>]+/);
+  return m ? m[0] : (s||'');
+}
+$('mailRefresh')?.addEventListener('click', () => loadMail());
+
+// ── Mail: folders, move, delete, attachments ────────────────────
+let mailFolder = 'INBOX';
+let mailFolders = [];
+let mailOpenUid = null;
+let composeFiles = [];   // [{filename, contentType, contentBase64, size}]
+const MAIL_ATTACH_MAX = 3.5 * 1024 * 1024;
+
+function folderLabel(f){
+  const icons = {'\\Sent':'📤','\\Drafts':'📝','\\Junk':'🚫','\\Trash':'🗑','\\Archive':'🗄'};
+  if(f.path.toUpperCase() === 'INBOX') return '📥 Inbox';
+  return (icons[f.specialUse] || '📁') + ' ' + f.name;
+}
+async function loadMailFolders(){
+  try {
+    const j = await api('list-mail-folders', {method:'POST', body:{}});
+    mailFolders = (j.folders && j.folders.length) ? j.folders : [{path:'INBOX', name:'Inbox', specialUse:''}];
+  } catch(e){
+    mailFolders = [{path:'INBOX', name:'Inbox', specialUse:''}];
+    toast('Could not load folders: ' + e.message, 'err');
+  }
+  renderMailFolderSelects();
+}
+function renderMailFolderSelects(){
+  $('mailFolderSel').innerHTML = mailFolders.map(f =>
+    `<option value="${escapeHtml(f.path)}"${f.path===mailFolder?' selected':''}>${escapeHtml(folderLabel(f))}</option>`).join('');
+  $('mailMoveSel').innerHTML = '<option value="">📁 Move to…</option>' +
+    mailFolders.filter(f => f.path !== mailFolder).map(f =>
+      `<option value="${escapeHtml(f.path)}">${escapeHtml(folderLabel(f))}</option>`).join('') +
+    '<option value="__new__">➕ New folder…</option>';
+  const cur = mailFolders.find(f => f.path === mailFolder);
+  $('mailDeleteBtn').textContent = (cur && cur.specialUse === '\\Trash') ? '🗑 Delete forever' : '🗑 Delete';
+}
+function removeMailRow(uid){
+  mailCache = mailCache.filter(m => String(m.uid) !== String(uid));
+  renderMail(mailCache);
+  mailOpenUid = null;
+}
+
+$('mailFolderSel').addEventListener('change', e => {
+  mailFolder = e.target.value || 'INBOX';
+  renderMailFolderSelects();
+  loadMail();
+});
+
+$('mailMoveSel').addEventListener('change', async e => {
+  const sel = e.target;
+  let to = sel.value;
+  if(!to || !mailOpenUid) return;
+  if(to === '__new__'){
+    const name = (prompt('Name the new folder:') || '').trim();
+    if(!name){ sel.value = ''; return; }
+    try {
+      const j = await api('create-mail-folder', {method:'POST', body:{ name }});
+      to = j.path;
+    } catch(err){ toast('Could not create folder: ' + err.message, 'err'); sel.value = ''; return; }
+  }
+  sel.disabled = true;
+  try {
+    await api('move-email', {method:'POST', body:{ uid: mailOpenUid, folder: mailFolder, toFolder: to }});
+    const dest = mailFolders.find(f => f.path === to);
+    toast('Moved to ' + (dest ? folderLabel(dest) : to) + ' ✓', 'ok');
+    $('mailReadModal').classList.remove('open');
+    removeMailRow(mailOpenUid);
+    if(!dest) loadMailFolders();   // a brand-new folder joins the list
+  } catch(err){ toast(err.message, 'err'); }
+  sel.disabled = false; sel.value = '';
+});
+
+$('mailDeleteBtn').addEventListener('click', async () => {
+  if(!mailOpenUid) return;
+  const cur = mailFolders.find(f => f.path === mailFolder);
+  const inTrash = cur && cur.specialUse === '\\Trash';
+  if(!confirm(inTrash ? 'Delete this email forever? This cannot be undone.' : 'Move this email to Trash?')) return;
+  const btn = $('mailDeleteBtn');
+  btn.disabled = true;
+  try {
+    const r = await api('delete-email', {method:'POST', body:{ uid: mailOpenUid, folder: mailFolder }});
+    toast(r.permanent ? 'Deleted for good' : 'Moved to Trash', 'ok');
+    $('mailReadModal').classList.remove('open');
+    removeMailRow(mailOpenUid);
+  } catch(err){ toast(err.message, 'err'); }
+  btn.disabled = false;
+});
+
+$('composeFiles').addEventListener('change', async e => {
+  const files = Array.from(e.target.files || []);
+  e.target.value = '';
+  for(const f of files){
+    const used = composeFiles.reduce((s, x) => s + x.size, 0);
+    if(used + f.size > MAIL_ATTACH_MAX){
+      toast(`"${f.name}" won't fit. Attachments are limited to about 3.5 MB per email.`, 'err');
+      continue;
+    }
+    const contentBase64 = await new Promise((res, rej) => {
+      const r = new FileReader();
+      r.onload = () => res(String(r.result).split(',')[1] || '');
+      r.onerror = rej;
+      r.readAsDataURL(f);
+    });
+    composeFiles.push({ filename: f.name, contentType: f.type || 'application/octet-stream', contentBase64, size: f.size });
+  }
+  renderComposeAttachments();
+});
+function renderComposeAttachments(){
+  $('composeAttachList').innerHTML = composeFiles.map((f, i) =>
+    `<div class="mail-attach-chip">📄 <span>${escapeHtml(f.filename)}</span><em>${fmtFileSize(f.size)}</em>` +
+    `<button type="button" data-rm-attach="${i}" title="Remove">✕</button></div>`).join('');
+}
+$('composeAttachList').addEventListener('click', e => {
+  const b = e.target.closest('[data-rm-attach]');
+  if(!b) return;
+  composeFiles.splice(parseInt(b.dataset.rmAttach, 10), 1);
+  renderComposeAttachments();
+});
+
+// Open one email in the reader modal (body rendered in a sandboxed iframe)
+document.addEventListener('click', async e => {
+  const row = e.target.closest('[data-mailuid]');
+  if(!row) return;
+  const uid = row.dataset.mailuid;
+  openModal('mailReadModal');
+  $('mailReadSubject').textContent = 'Loading…';
+  $('mailReadMeta').innerHTML = '';
+  $('mailReadFrame').srcdoc = '<p style="font-family:sans-serif;color:#888">Loading…</p>';
+  try {
+    mailOpenUid = parseInt(uid,10);
+    renderMailFolderSelects();
+    const m = await api('fetch-email', {method:'POST', body:{ uid: mailOpenUid, folder: mailFolder }});
+    $('mailReadSubject').textContent = m.subject || '(no subject)';
+    $('mailReadMeta').innerHTML = `<div class="mail-meta"><b>From:</b> ${escapeHtml(m.from||'')}</div>
+      <div class="mail-meta"><b>Date:</b> ${escapeHtml(m.date? new Date(m.date).toLocaleString():'')}</div>`;
+    const bodyHtml = m.html || (m.text ? '<pre style="white-space:pre-wrap;font-family:sans-serif">'+escapeHtml(m.text)+'</pre>' : '<em>(empty message)</em>');
+    $('mailReadFrame').srcdoc = bodyHtml;
+    mailReplyCtx = { to: m.from, subject: m.subject };
+    const c = mailCache.find(x => String(x.uid) === String(uid)); if(c){ c.seen = true; renderMail(mailCache); }
+  } catch(err){
+    $('mailReadSubject').textContent = 'Error';
+    $('mailReadFrame').srcdoc = '<p style="font-family:sans-serif;color:#b91c1c">'+escapeHtml(err.message)+'</p>';
+  }
+});
+
+// Reply → prefill compose
+$('mailReplyBtn')?.addEventListener('click', () => {
+  if(!mailReplyCtx) return;
+  $('mailReadModal').classList.remove('open');
+  const subj = mailReplyCtx.subject || '';
+  openCompose({ to: extractEmail(mailReplyCtx.to), subject: /^re:/i.test(subj) ? subj : 'Re: ' + subj });
+});
+
+// Compose
+function openCompose(prefill){
+  prefill = prefill || {};
+  $('composeTo').value = prefill.to || '';
+  $('composeSubject').value = prefill.subject || '';
+  $('composeBody').value = prefill.body || '';
+  composeFiles = [];
+  renderComposeAttachments();
+  openModal('mailComposeModal');
+}
+$('mailCompose')?.addEventListener('click', () => openCompose());
+$('composeSend')?.addEventListener('click', async () => {
+  const to = $('composeTo').value.trim();
+  if(!to){ toast('Enter a recipient','err'); return; }
+  const btn = $('composeSend'); btn.disabled = true; btn.textContent = 'Sending…';
+  try {
+    await api('send-email', {method:'POST', body:{
+      to,
+      subject: $('composeSubject').value.trim(),
+      text: $('composeBody').value,
+      html: $('composeBody').value.replace(/\n/g,'<br>'),
+      attachments: composeFiles.map(f => ({ filename: f.filename, contentType: f.contentType, contentBase64: f.contentBase64 })),
+    }});
+    toast(composeFiles.length ? `Email sent with ${composeFiles.length} attachment${composeFiles.length===1?'':'s'} ✓` : 'Email sent ✓','ok');
+    composeFiles = [];
+    renderComposeAttachments();
+    $('mailComposeModal').classList.remove('open');
+  } catch(err){ toast('Send failed: '+err.message,'err'); }
+  btn.disabled = false; btn.textContent = '📤 Send';
+});
+
+// ── SMS consent toggle on Pipeline cards (during call) ──────────
+// Renders into the call drawer area — we add a quick consent toggle
+// that callers tap at end of call. For simplicity, we expose it on
+// each card's expanded view (existing card UI).
+// (Cards already show notes/status; we add a consent button.)
+
+// ── Deal Detail SMS section ─────────────────────────────────────
+// Hook into renderDealDetail by patching it to append our section.
+const _origRenderDealDetail = renderDealDetail;
+renderDealDetail = function(){
+  _origRenderDealDetail();
+  if(!openDealData) return;
+  const body = $('ddBody');
+  const d = openDealData.deal;
+
+  // ── Send to Buyers button (only meaningful if deal is offer+ stage) ─
+  const buyersCard = el(`<div class="dd-card">
+    <div class="dd-section-title">Cash Buyers</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn-primary" id="ddSendBuyers" style="font-size:13px;padding:9px 14px">📧 Email this deal to buyers</button>
+    </div>
+    <div id="ddBuyerSendsList" style="margin-top:10px"></div>
+  </div>`);
+  body.appendChild(buyersCard);
+
+  // ── SMS + drips section ────────────────────────────────────
+  const card = el(`<div class="dd-card">
+    <div class="dd-section-title">Text Messages</div>
+    <div id="smsConsentBlock"></div>
+    <div id="smsThread"></div>
+    <div id="smsCompose"></div>
+    <div class="dd-section-title" style="margin-top:18px">Drip Campaigns</div>
+    <div id="dripActive"></div>
+    <div id="dripStarters"></div>
+  </div>`);
+  body.appendChild(card);
+  renderSmsSection();
+
+  // Wire up buyer send button + load history
+  setTimeout(() => {
+    document.getElementById('ddSendBuyers')?.addEventListener('click', async () => {
+      // Need buyers loaded
+      if(!allBuyers.length) await loadBuyers();
+      const active = allBuyers.filter(b => b.active && b.email);
+      if(!active.length){ toast('No active buyers with email','err'); switchView('buyers'); return; }
+      // Switch to buyers tab and pre-select all active, with this deal pre-filled
+      switchView('buyers');
+      setTimeout(() => {
+        selectedBuyerIds = new Set(active.map(b => b.id));
+        renderBuyers();
+        openBlastModal(active.map(b => b.id), openDealId, {
+          subject: 'New off-market deal — ' + (d.property_address || ''),
+          body: defaultBlastBodyForDeal(d),
+        });
+      }, 100);
+    });
+    // Load past send history
+    loadDealBuyerSends();
+  }, 0);
+};
+
+function defaultBlastBodyForDeal(d){
+  const lines = [
+    'Hey {first_name},',
+    '',
+    'Got a new off-market property at ' + (d.property_address || '{address}') + ' that I think might fit your buy box.',
+    '',
+  ];
+  if(d.bed || d.bath || d.sqft){
+    const pieces = [];
+    if(d.bed) pieces.push(d.bed + 'bd');
+    if(d.bath) pieces.push(d.bath + 'ba');
+    if(d.sqft) pieces.push(d.sqft + ' sqft');
+    if(d.year_built) pieces.push('built ' + d.year_built);
+    lines.push(pieces.join(' / '));
+    lines.push('');
+  }
+  if(d.arv) lines.push('ARV: $' + Number(d.arv).toLocaleString());
+  if(d.repairs) lines.push('Est. repairs: $' + Number(d.repairs).toLocaleString());
+  if(d.your_offer) lines.push('Asking: $' + Number(d.your_offer).toLocaleString());
+  lines.push('');
+  lines.push('Photos / comps / contract available. Reply if interested and I\'ll send everything over.');
+  lines.push('');
+  lines.push('— ' + (activeProfileName || 'Tony'));
+  return lines.join('\n');
+}
+
+async function loadDealBuyerSends(){
+  if(!openDealId) return;
+  try {
+    const j = await api('deal-buyer-sends&dealId='+openDealId);
+    const container = document.getElementById('ddBuyerSendsList');
+    if(!container) return;
+    if(!j.sends.length){
+      container.innerHTML = '<div style="font-size:11px;color:#9ca3af;margin-top:6px">Not sent to any buyers yet.</div>';
+      return;
+    }
+    container.innerHTML = '<div style="font-size:10px;color:#6b7280;letter-spacing:1px;font-weight:600;margin-bottom:6px">SENT TO</div>';
+    j.sends.forEach(s => {
+      const buyer = allBuyers.find(b => b.id === s.buyer_id);
+      const row = el(`<div style="font-size:12px;padding:8px 0;border-bottom:1px solid #f3f4f6">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <span>${escapeHtml(buyer?buyer.name:'Buyer #'+s.buyer_id)} <span style="color:#9ca3af;font-size:10px">${escapeHtml(s.status)}</span></span>
+          <span style="color:#9ca3af;font-size:11px">${formatRelTime(new Date(s.created_at))}</span>
+        </div>
+        <button class="btn-ghost" data-send-assignment="${s.buyer_id}" style="font-size:11px;padding:5px 10px;margin-top:6px">✍️ Send Assignment Agreement</button>
+      </div>`);
+      container.appendChild(row);
+    });
+  } catch(e){ /* silent */ }
+}
+
+// ── Contract: populate dropdowns when section opens ─────────────
+document.addEventListener('click', e => {
+  const toggle = e.target.closest('.pre-call-toggle');
+  if(!toggle) return;
+  const content = toggle.nextElementSibling;
+  const sel = content?.querySelector('[data-contract-select]');
+  if(!sel) return;
+  // Populate with saved contracts
+  sel.innerHTML = '<option value="">— pick an uploaded contract —</option>' +
+    savedContracts.map(c => `<option value="${escapeHtml(c.url)}">${escapeHtml(c.filename)}</option>`).join('');
+});
+
+// ── Contract: handle new file selection ─────────────────────────
+document.addEventListener('change', async e => {
+  const fileInput = e.target.closest('[data-contract-file]');
+  if(!fileInput || !fileInput.files[0]) return;
+  const file = fileInput.files[0];
+  const form = fileInput.closest('.contract-send-form');
+  const filenameEl = form.querySelector('[data-contract-filename]');
+  filenameEl.textContent = 'Uploading…';
+  try {
+    const base64 = await new Promise((res,rej) => {
+      const r = new FileReader();
+      r.onload = () => res(r.result.split(',')[1]);
+      r.onerror = rej;
+      r.readAsDataURL(file);
+    });
+    const result = await api('upload-contract', {method:'POST', body:{
+      dataBase64: base64,
+      filename: file.name,
+      mimeType: file.type || 'application/pdf',
+    }});
+    // Save to local list and select it
+    savedContracts.push({ url: result.url, filename: result.filename });
+    const sel = form.querySelector('[data-contract-select]');
+    const opt = document.createElement('option');
+    opt.value = result.url; opt.textContent = result.filename; opt.selected = true;
+    sel.appendChild(opt);
+    filenameEl.textContent = '✓ ' + result.filename;
+    toast('Contract uploaded ✓','ok');
+  } catch(err) {
+    filenameEl.textContent = 'Upload failed: ' + err.message;
+    toast('Upload failed: '+err.message,'err');
+  }
+});
+
+// ── Postcard drop ─────────────────────────────────────────────
+const POSTCARD_TONES = {
+  warm:    "Hi {FirstName}, really enjoyed our call! Wanted to follow up — whenever you're ready to talk numbers, I'd love to work out a deal that makes sense for you. No rush, just give me a shout.",
+  friendly:"{FirstName}, great talking with you the other day. When you're ready to move forward, I'm ready too — let's find a number that works for both of us. Call me anytime.",
+  folksy:  "Hey {FirstName}, enjoyed catching up on the phone! Whenever the time feels right on your end, let's sit down and get you a fair deal. I'll be here.",
+  pro:     "{FirstName}, it was a pleasure speaking with you. I'm confident we can put together an offer that works well for you — whenever you're ready to move forward, just reach out.",
+};
+let postcardPid = null;
+document.addEventListener('click', e => {
+  const btn = e.target.closest('[data-sendpostcard]');
+  if(!btn) return;
+  postcardPid = btn.dataset.sendpostcard;
+  const p = properties.find(x => x.id === postcardPid);
+  if(!p) return;
+  $('postcardRecipient').textContent = p.owners || '(no owner name on file)';
+  $('postcardAddress').textContent = p.mailing_address || p.property_address || 'No mailing address on file';
+  $('postcardTone').value = 'warm';
+  $('postcardCustomWrap').classList.add('hide');
+  $('postcardCustomMsg').value = '';
+  const sendBtn = $('postcardSendBtn');
+  sendBtn.disabled = !(p.mailing_address || p.property_address);
+  sendBtn.textContent = '📬 Send Postcard';
+  openModal('postcardModal');
+});
+$('postcardTone').addEventListener('change', e => {
+  $('postcardCustomWrap').classList.toggle('hide', e.target.value !== 'custom');
+});
+$('postcardSendBtn').addEventListener('click', async () => {
+  if(!postcardPid) return;
+  const tone = $('postcardTone').value;
+  const message = tone === 'custom' ? $('postcardCustomMsg').value.trim() : POSTCARD_TONES[tone];
+  if(!message){ toast('Write a message first','err'); return; }
+  const btn = $('postcardSendBtn');
+  btn.disabled = true; btn.textContent = 'Sending…';
+  try {
+    const r = await api('send-postcard', {method:'POST', body:{propertyId: postcardPid, message}});
+    toast(r.mode === 'test' ? 'Postcard sent (test mode — nothing mailed)' : 'Postcard sent!', 'ok');
+    const p = properties.find(x => x.id === postcardPid);
+    if(p) p.postcard_sent_at = new Date().toISOString();
+    $('postcardModal').classList.remove('open');
+    renderPage();
+  } catch(err){
+    toast('Postcard failed: '+err.message,'err');
+  } finally {
+    btn.disabled = false; btn.textContent = '📬 Send Postcard';
+  }
+});
+
+// ── Contract: send email ─────────────────────────────────────────
+document.addEventListener('click', async e => {
+  const btn = e.target.closest('[data-sendcontract]');
+  if(!btn) return;
+  const pid = btn.dataset.sendcontract;
+  const form = btn.closest('.contract-send-form');
+  const toEmail      = form.querySelector('[data-contract-email]').value.trim();
+  const subject      = form.querySelector('[data-contract-subject]').value.trim();
+  const message      = form.querySelector('[data-contract-message]').value.trim();
+  const contractUrl  = form.querySelector('[data-contract-select]').value;
+  const p = properties.find(x => x.id === pid);
+  if(!toEmail)       { toast('Please enter the seller\'s email','err'); return; }
+  if(!contractUrl)   { toast('Please select or upload a contract','err'); return; }
+  btn.disabled = true; btn.textContent = 'Sending…';
+  try {
+    await api('send-contract', {method:'POST', body:{
+      toEmail,
+      subject,
+      message,
+      contractUrl,
+      sellerName: p?.owners || 'there',
+      propertyAddress: p?.property_address || '',
+    }});
+    toast('Contract sent to ' + toEmail + ' ✓','ok');
+    btn.textContent = 'Sent ✓';
+    setTimeout(()=>{ btn.disabled=false; btn.textContent='📤 Send Contract'; }, 3000);
+  } catch(err) {
+    toast('Send failed: '+err.message,'err');
+    btn.disabled=false; btn.textContent='📤 Send Contract';
+  }
+});
+
+// ── Send Assignment Agreement to a winning buyer ─────────────────
+document.addEventListener('click', async e => {
+  const btn = e.target.closest('[data-send-assignment]');
+  if(!btn) return;
+  const buyerId = btn.dataset.sendAssignment;
+  const buyer = allBuyers.find(b => b.id === buyerId);
+  if(!buyer){ toast('Buyer not found','err'); return; }
+  if(!buyer.email && !buyer.phone){ toast('This buyer has no email or phone on file','err'); return; }
+  const d = openDealData?.deal;
+  const fee = prompt('Assignment fee (e.g. 10000):', d?.assignment_fee || '');
+  if(fee === null) return;
+  if(!fee.trim()){ toast('Assignment fee is required','err'); return; }
+  const deposit = prompt('Non-refundable deposit due on signing (blank = full fee):', '');
+  if(deposit === null) return;
+  btn.disabled = true; btn.textContent = 'Sending…';
+  try {
+    await api('esign-send', {method:'POST', body:{
+      docType: 'assignment',
+      dealId: d?.id || null,
+      propertyId: d?.property_id || null,
+      buyerId,
+      signerName: buyer.name,
+      signerEmail: buyer.email || '',
+      signerPhone: buyer.phone || '',
+      deliver: buyer.email && buyer.phone ? 'both' : (buyer.email ? 'email' : 'sms'),
+      fields: {
+        property_address: d?.property_address || '',
+        assignment_fee: fee,
+        deposit: deposit.trim(),
+        original_contract_date: d?.contract_date || '',
+      },
+    }});
+    toast('Assignment agreement sent ✓','ok');
+    btn.textContent = 'Sent ✓';
+    setTimeout(()=>{ btn.disabled=false; btn.textContent='✍️ Send Assignment Agreement'; }, 3000);
+  } catch(err) {
+    toast('Send failed: '+err.message,'err');
+    btn.disabled=false; btn.textContent='✍️ Send Assignment Agreement';
+  }
+});
+
+// ── Send for e-signature (Purchase & Sale Agreement) ─────────────
+document.addEventListener('click', async e => {
+  const btn = e.target.closest('[data-sendesign]');
+  if(!btn) return;
+  const form = btn.closest('.esign-form');
+  const pid = form.dataset.esignPid;
+  const prop = properties.find(x => x.id === pid);
+  const name    = form.querySelector('[data-esign-name]').value.trim();
+  const email   = form.querySelector('[data-esign-email]').value.trim();
+  const phone   = form.querySelector('[data-esign-phone]').value.trim();
+  const price   = form.querySelector('[data-esign-price]').value.trim();
+  const earnest = form.querySelector('[data-esign-earnest]').value.trim();
+  const closing = form.querySelector('[data-esign-closing]').value.trim();
+  const deliver = form.querySelector('[data-esign-deliver]').value;
+  if(!name){ toast("Please enter the seller's name",'err'); return; }
+  if((deliver==='email'||deliver==='both') && !email){ toast("Please enter the seller's email (or switch to Text only)",'err'); return; }
+  if((deliver==='sms'||deliver==='both') && !phone){ toast("Please enter the seller's cell (or switch to Email only)",'err'); return; }
+  if(!price){ toast('Please enter the purchase price','err'); return; }
+  btn.disabled = true; btn.textContent = 'Sending…';
+  try {
+    const res = await api('esign-send', {method:'POST', body:{
+      docType: 'purchase_sale',
+      propertyId: pid,
+      signerName: name,
+      signerEmail: email,
+      signerPhone: phone,
+      deliver,
+      fields: {
+        property_address: prop?.property_address || '',
+        purchase_price: price,
+        earnest_money: earnest,
+        closing_date: closing,
+      },
+    }});
+    toast('Sent for signature ✓','ok');
+    btn.textContent = 'Sent ✓';
+    const wrap = form.closest('.doc-send')?.querySelector('.esign-status-wrap');
+    if(wrap) loadEsignStatus(wrap);
+    setTimeout(()=>{ btn.disabled=false; btn.textContent='✍️ Send for Signature'; }, 3000);
+  } catch(err) {
+    toast('Send failed: '+err.message,'err');
+    btn.disabled=false; btn.textContent='✍️ Send for Signature';
+  }
+});
+
+// ── E-sign status on a lead card ─────────────────────────────────
+async function loadEsignStatus(form){
+  const box = form.querySelector('[data-esign-statusbox]');
+  if(!box) return;
+  box.textContent = 'Loading…';
+  try {
+    const res = await api('esign-list', {method:'POST', body:{ propertyId: form.dataset.esignPid }});
+    const envs = res.envelopes || [];
+    if(!envs.length){ box.innerHTML = '<span style="color:#9ca3af">No documents sent yet.</span>'; return; }
+    const icon = s => s==='signed'?'✅':s==='viewed'?'👀':s==='voided'?'🚫':'📤';
+    box.innerHTML = envs.map(v => `
+      <div style="padding:7px 0;border-bottom:1px solid #f3f4f6">
+        <div style="display:flex;justify-content:space-between;gap:8px">
+          <span>${icon(v.status)} <b>${escapeHtml(v.status.toUpperCase())}</b> — ${escapeHtml(v.document_name||v.doc_type)}</span>
+        </div>
+        <div style="color:#9ca3af;font-size:11px;margin-top:2px">
+          Sent ${v.sent_at ? new Date(v.sent_at).toLocaleString() : ''}${v.signed_at ? ' · Signed ' + new Date(v.signed_at).toLocaleString() : ''}
+        </div>
+        <div style="margin-top:4px;display:flex;gap:10px;flex-wrap:wrap">
+          ${v.pdfUrl ? `<a href="${v.pdfUrl}" target="_blank" rel="noopener" style="font-size:11px">📄 ${v.status==='signed'?'Signed PDF':'PDF'}</a>` : ''}
+          ${v.signUrl ? `<a href="#" data-copy-signlink="${v.signUrl}" style="font-size:11px">🔗 Copy signing link</a>` : ''}
+          ${v.status!=='signed'&&v.status!=='voided' ? `<a href="#" data-esign-void="${v.id}" data-esign-pid2="${escapeHtml(form.dataset.esignPid)}" style="font-size:11px;color:#dc2626">Void</a>` : ''}
+        </div>
+      </div>`).join('');
+  } catch(e){ box.innerHTML = '<span style="color:#dc2626">Could not load status: '+escapeHtml(e.message)+'</span>'; }
+}
+document.addEventListener('click', e => {
+  const btn = e.target.closest('[data-esign-status]');
+  if(!btn) return;
+  loadEsignStatus(btn.closest('.esign-status-wrap'));
+});
+// ── Send Documents: dropdown pane switcher ───────────────────────
+document.addEventListener('change', e => {
+  const sel = e.target.closest('[data-doc-type]');
+  if(!sel) return;
+  const wrap = sel.closest('.doc-send');
+  wrap.querySelectorAll('[data-doc-pane]').forEach(p =>
+    p.classList.toggle('hide', p.dataset.docPane !== sel.value));
+});
+// ── Send Assignment Agreement from the lead card ─────────────────
+document.addEventListener('click', async e => {
+  const btn = e.target.closest('[data-sendassign-card]');
+  if(!btn) return;
+  const form = btn.closest('.assign-form');
+  const pid = form.dataset.assignPid;
+  const prop = properties.find(x => x.id === pid);
+  const name    = form.querySelector('[data-assign-name]').value.trim();
+  const email   = form.querySelector('[data-assign-email]').value.trim();
+  const phone   = form.querySelector('[data-assign-phone]').value.trim();
+  const fee     = form.querySelector('[data-assign-fee]').value.trim();
+  const deposit = form.querySelector('[data-assign-deposit]').value.trim();
+  const deliver = form.querySelector('[data-assign-deliver]').value;
+  if(!name){ toast("Please enter the buyer's name",'err'); return; }
+  if((deliver==='email'||deliver==='both') && !email){ toast("Please enter the buyer's email (or switch to Text only)",'err'); return; }
+  if((deliver==='sms'||deliver==='both') && !phone){ toast("Please enter the buyer's cell (or switch to Email only)",'err'); return; }
+  if(!fee){ toast('Please enter the assignment fee','err'); return; }
+  btn.disabled = true; btn.textContent = 'Sending…';
+  try {
+    await api('esign-send', {method:'POST', body:{
+      docType: 'assignment',
+      propertyId: pid,
+      signerName: name,
+      signerEmail: email,
+      signerPhone: phone,
+      deliver,
+      fields: {
+        property_address: prop?.property_address || '',
+        assignment_fee: fee,
+        deposit,
+      },
+    }});
+    toast('Assignment agreement sent ✓','ok');
+    btn.textContent = 'Sent ✓';
+    const wrap = form.closest('.doc-send')?.querySelector('.esign-status-wrap');
+    if(wrap) loadEsignStatus(wrap);
+    setTimeout(()=>{ btn.disabled=false; btn.textContent='✍️ Send for Signature'; }, 3000);
+  } catch(err) {
+    toast('Send failed: '+err.message,'err');
+    btn.disabled=false; btn.textContent='✍️ Send for Signature';
+  }
+});
+document.addEventListener('click', async e => {
+  const a = e.target.closest('[data-copy-signlink]');
+  if(!a) return;
+  e.preventDefault();
+  try { await navigator.clipboard.writeText(a.dataset.copySignlink); toast('Signing link copied ✓','ok'); }
+  catch { prompt('Copy this signing link:', a.dataset.copySignlink); }
+});
+document.addEventListener('click', async e => {
+  const a = e.target.closest('[data-esign-void]');
+  if(!a) return;
+  e.preventDefault();
+  if(!confirm('Void this document? The signing link will stop working.')) return;
+  try {
+    await api('esign-void', {method:'POST', body:{ envelopeId: a.dataset.esignVoid }});
+    toast('Document voided','ok');
+    const wrap = a.closest('.esign-status-wrap');
+    if(wrap) loadEsignStatus(wrap);
+  } catch(err){ toast('Void failed: '+err.message,'err'); }
+});
+
+// ── Dial a realtor from search results ──────────────────────────
+document.addEventListener('click', e => {
+  const btn = e.target.closest('[data-realtor-call]');
+  if(!btn) return;
+  const phone = btn.dataset.realtorCall;
+  const name  = btn.dataset.realtorName || 'Realtor';
+  $('manualDialNumber').value = phone;
+  $('manualDialLabel').value  = name;
+  openModal('manualDialModal');
+});
+
+// ── Assign to team member ────────────────────────────────────────
+document.addEventListener('change', async e => {
+  const sel = e.target.closest('[data-assignsel]');
+  if(!sel) return;
+  const pid = sel.dataset.id;
+  const profileId = sel.value ? parseInt(sel.value, 10) : null;
+  const p = properties.find(x => x.id === pid);
+  if(!p) return;
+  if(!p.lead) p.lead = {};
+  p.lead.assigned_to = profileId;
+  try {
+    await api('update-lead', {method:'POST', body:{ propertyId: pid, assignedTo: profileId }});
+    const name = profileId ? (allProfiles.find(pr => String(pr.id) === String(profileId))?.name || '') : '';
+    toast(name ? `Assigned to ${name}` : 'Unassigned', 'ok');
+  } catch(err){ toast('Save failed: '+err.message,'err'); }
+  renderPage();
+});
+
+// ── Per-lead highlight color (works any time, after upload too) ───
+document.addEventListener('click', async e => {
+  const dot = e.target.closest('[data-hl]');
+  if(!dot) return;
+  const pid = dot.dataset.id;
+  const color = dot.dataset.hl || '';
+  const p = properties.find(x => x.id === pid);
+  if(!p) return;
+  if(!p.lead) p.lead = {};
+  if((p.lead.highlight || '') === color) return; // already set, nothing to do
+  p.lead.highlight = color;
+  try {
+    await api('update-lead', {method:'POST', body:{ propertyId: pid, highlight: color }});
+    toast(color ? `Highlighted ${color}` : 'Highlight cleared', 'ok');
+  } catch(err){ toast('Save failed: '+err.message,'err'); }
+  renderPage();
+});
+
+async function renderSmsSection(){
+  const d = openDealData.deal;
+  if(!d.property_id){
+    $('smsConsentBlock').innerHTML = '<div style="font-size:12px;color:#6b7280;padding:8px 0">No linked property — SMS unavailable.</div>';
+    return;
+  }
+  // Phones + consent come from the already-loaded properties cache.
+  // (There used to be a full list-properties fetch here whose result was never
+  // used — it pulled the entire table on every render for nothing.)
+  const prop = properties.find(p => p.id === d.property_id);
+  const phones = prop ? prop.phones : [];
+  const leadInfo = prop ? prop.lead : null;
+  const currentConsent = (leadInfo && leadInfo.sms_consent) || 'none';
+  const currentCell = (leadInfo && leadInfo.sms_cell) || '';
+
+  // Consent block
+  const consentBlock = $('smsConsentBlock');
+  const cellOptions = phones.map(ph => `<option value="${escapeHtml(ph.e164)}"${ph.e164===currentCell?' selected':''}>${escapeHtml(ph.display || ph.e164)}${ph.type?' ('+escapeHtml(ph.type)+')':''}</option>`).join('');
+  consentBlock.innerHTML = `<div class="sms-consent-block ${currentConsent==='verbal'||currentConsent==='written'?'granted':(currentConsent==='revoked'?'revoked':'')}">
+    <div class="sms-consent-row">
+      <label>SMS consent</label>
+      <select id="smsConsentSelect">
+        <option value="none"${currentConsent==='none'?' selected':''}>None — cannot text</option>
+        <option value="verbal"${currentConsent==='verbal'?' selected':''}>✓ Verbal (asked on call)</option>
+        <option value="written"${currentConsent==='written'?' selected':''}>✓ Written (form/email)</option>
+        <option value="revoked"${currentConsent==='revoked'?' selected':''}>✕ Revoked / opted-out</option>
+      </select>
+    </div>
+    <div class="sms-cell-row">
+      <select id="smsCellSelect">
+        <option value="">— pick the cell number —</option>
+        ${cellOptions}
+      </select>
+    </div>
+  </div>`;
+  $('smsConsentSelect').addEventListener('change', e => saveSmsConsent());
+  $('smsCellSelect').addEventListener('change', e => saveSmsConsent());
+
+  // Messages thread + compose
+  await loadMessages();
+
+  // Drip campaigns
+  await loadDrips();
+}
+
+async function saveSmsConsent(){
+  const d = openDealData.deal;
+  const consent = $('smsConsentSelect').value;
+  const cell = $('smsCellSelect').value;
+  try {
+    await api('set-sms-consent',{method:'POST', body:{
+      propertyId: d.property_id,
+      consent,
+      cell,
+      by: activeProfileName || '',
+    }});
+    // Update local cache
+    const prop = properties.find(p => p.id === d.property_id);
+    if(prop){
+      prop.lead = prop.lead || {};
+      prop.lead.sms_consent = consent;
+      prop.lead.sms_cell = cell;
+    }
+    toast('Consent saved','ok');
+    renderSmsSection();
+  } catch(e){ toast('Save failed: '+e.message,'err'); }
+}
+
+async function loadMessages(){
+  try {
+    const j = await api('list-messages&dealId='+openDealId);
+    renderThread(j.messages || []);
+  } catch(e){
+    $('smsThread').innerHTML = '<div class="msg-empty" style="color:#b91c1c">'+escapeHtml(e.message)+'</div>';
+  }
+}
+function renderThread(messages){
+  const wrap = $('smsThread');
+  if(!messages.length){
+    wrap.innerHTML = '<div class="msg-empty">No messages yet</div>';
+  } else {
+    wrap.innerHTML = '<div class="msg-thread" id="msgThreadInner"></div>';
+    const inner = $('msgThreadInner');
+    messages.forEach(m => {
+      const cls = m.direction === 'outbound' ? 'out' : 'in';
+      const failed = m.status === 'failed' ? ' failed' : '';
+      const bub = el(`<div class="msg-bubble ${cls}${failed}">
+        ${escapeHtml(m.body)}
+        <div class="meta">${fmtTime(m.created_at)} ${m.status==='failed'?'· failed':(m.status?'· '+escapeHtml(m.status):'')}</div>
+      </div>`);
+      inner.appendChild(bub);
+    });
+    // Scroll to bottom
+    setTimeout(() => { inner.scrollTop = inner.scrollHeight; }, 50);
+  }
+  renderCompose();
+}
+function renderCompose(){
+  const prop = properties.find(p => p.id === openDealData.deal.property_id);
+  const lead = prop ? prop.lead : null;
+  const canText = lead && (lead.sms_consent === 'verbal' || lead.sms_consent === 'written') && lead.sms_cell;
+  const wrap = $('smsCompose');
+  if(!canText){
+    wrap.innerHTML = '<div class="msg-compose-warn">⚠ Cannot text: set consent to Verbal/Written and pick a cell number above.</div>';
+    return;
+  }
+  wrap.innerHTML = `<div class="msg-compose">
+    <textarea id="msgInput" placeholder="Write a message to ${escapeHtml(fmtPhone(lead.sms_cell))}…" rows="2"></textarea>
+    <button class="msg-send-btn" id="msgSendBtn">→</button>
+  </div>`;
+  const input = $('msgInput');
+  const btn = $('msgSendBtn');
+  input.addEventListener('input', () => { btn.disabled = !input.value.trim(); });
+  btn.disabled = true;
+  btn.addEventListener('click', async () => {
+    const text = input.value.trim();
+    if(!text) return;
+    btn.disabled = true;
+    try {
+      await api('send-manual-sms',{method:'POST', body:{
+        dealId: openDealId,
+        propertyId: openDealData.deal.property_id,
+        to: lead.sms_cell,
+        body: text,
+      }});
+      input.value = '';
+      await loadMessages();
+      toast('Sent','ok');
+    } catch(e){
+      toast('Failed: '+e.message,'err');
+      btn.disabled = false;
+    }
+  });
+}
+
+// ── Drip campaigns on deal detail ───────────────────────────────
+async function loadDrips(){
+  try {
+    const j = await api('list-drips&dealId='+openDealId);
+    renderDripList(j.drips || []);
+  } catch(e){
+    $('dripActive').innerHTML = '<div class="msg-empty" style="color:#b91c1c">'+escapeHtml(e.message)+'</div>';
+  }
+}
+function renderDripList(drips){
+  const active = $('dripActive');
+  const starters = $('dripStarters');
+  const byKind = {};
+  drips.forEach(d => byKind[d.kind] = d);
+
+  // Active list
+  active.innerHTML = '';
+  const activeDrips = drips.filter(d => d.status !== 'completed' && d.status !== 'opted_out');
+  if(activeDrips.length){
+    const list = el('<div class="drip-list"></div>');
+    activeDrips.forEach(d => {
+      const meta = DRIP_KINDS.find(k => k.id === d.kind);
+      const row = el(`<div class="drip-row">
+        <div style="flex:1">
+          <div class="lbl">${escapeHtml(meta?meta.label:d.kind)}</div>
+          <div style="font-size:10px;color:#9ca3af">${meta?escapeHtml(meta.hint):''}</div>
+        </div>
+        <span class="status ${d.status}">${d.status}</span>
+        ${d.status==='active' ? `<button data-pause="${d.id}">Pause</button>` : (d.status==='paused' ? `<button data-resume="${d.id}">Resume</button>` : '')}
+        <button data-cancel="${d.id}">✕</button>
+      </div>`);
+      row.querySelector('[data-pause]')?.addEventListener('click', async e => {
+        await api('pause-drip',{method:'POST', body:{id:d.id}});
+        toast('Drip paused','ok'); loadDrips();
+      });
+      row.querySelector('[data-resume]')?.addEventListener('click', async e => {
+        await api('resume-drip',{method:'POST', body:{id:d.id}});
+        toast('Drip resumed','ok'); loadDrips();
+      });
+      row.querySelector('[data-cancel]')?.addEventListener('click', async e => {
+        if(!confirm('Cancel this drip?')) return;
+        await api('cancel-drip',{method:'POST', body:{id:d.id}});
+        toast('Drip cancelled','ok'); loadDrips();
+      });
+      list.appendChild(row);
+    });
+    active.appendChild(list);
+  }
+
+  // Starter buttons for drips not yet running
+  starters.innerHTML = '';
+  const startable = DRIP_KINDS.filter(k => !byKind[k.id] || byKind[k.id].status === 'completed' || byKind[k.id].status === 'opted_out');
+  if(startable.length){
+    const grid = el('<div class="drip-start-grid"></div>');
+    startable.forEach(k => {
+      const btn = el(`<button class="drip-start-btn" data-start="${k.id}">
+        ▶ Start ${escapeHtml(k.label)}
+        <span class="sub">${escapeHtml(k.hint)}</span>
+      </button>`);
+      btn.addEventListener('click', async () => {
+        if(!confirm(`Start the "${k.label}" drip for this lead?\n\nMessages will be sent according to the schedule, only during 8am–9pm ET.`)) return;
+        try {
+          await api('start-drip',{method:'POST', body:{dealId:openDealId, kind:k.id}});
+          toast('Drip started','ok');
+          loadDrips();
+          loadMessages();
+        } catch(e){ toast('Failed: '+e.message,'err'); }
+      });
+      grid.appendChild(btn);
+    });
+    starters.appendChild(grid);
+  }
+}
+
+// ── SMS settings handlers ───────────────────────────────────────
+async function loadSmsConfig(){
+  try {
+    const cfg = await api('get-sms-config');
+    $('smsBizName').value = cfg.business_name || '';
+    // Populate the sender dropdown from owned numbers (already loaded into ownedNumbers)
+    const sel = $('smsFromSelect');
+    sel.innerHTML = '<option value="">— pick a Twilio number —</option>';
+    (ownedNumbers || []).forEach(n => {
+      const opt = document.createElement('option');
+      opt.value = n.phone_number;
+      opt.textContent = n.phone_number + (n.friendly_name && n.friendly_name !== n.phone_number ? ' · '+n.friendly_name : '');
+      if(n.phone_number === cfg.from_number) opt.selected = true;
+      sel.appendChild(opt);
+    });
+  } catch(e){ /* silent */ }
+}
+$('smsConfigSave')?.addEventListener('click', async () => {
+  const from_number = $('smsFromSelect').value;
+  const business_name = $('smsBizName').value.trim();
+  try {
+    await api('set-sms-config',{method:'POST', body:{from_number, business_name}});
+    toast('SMS settings saved','ok');
+  } catch(e){ toast('Failed: '+e.message,'err'); }
+});
+
+// When settings modal opens, refresh SMS config
+document.querySelector('[data-open="settingsModal"]')?.addEventListener('click', () => {
+  checkApiVersion();
+  loadVoiceSettings();
+  setTimeout(() => loadSmsConfig(), 100);
+});
+
+// ── Periodic drip processor trigger ─────────────────────────────
+// Frontend hits process-drips every 5 min while app is open so
+// scheduled messages actually fire even without a cron service.
+async function tickDrips(){
+  try { await api('process-drips',{method:'POST', body:{}}); } catch {}
+}
+setInterval(tickDrips, 5 * 60 * 1000);  // every 5 min
+
+// ═══════════════════════════════════════════════════════════════
+// CASH BUYERS
+// ═══════════════════════════════════════════════════════════════
+
+let allBuyers = [];
+let selectedBuyerIds = new Set();
+let editingBuyerId = null;
+
+async function loadBuyers(){
+  $('buyersList').innerHTML = '<div class="empty">Loading…</div>';
+  try {
+    const j = await api('list-buyers');
+    allBuyers = j.buyers || [];
+    renderBuyers();
+  } catch(e){
+    $('buyersList').innerHTML = '<div class="empty" style="color:#b91c1c">'+escapeHtml(e.message)+'</div>';
+  }
+}
+
+function renderBuyers(){
+  const activeCount = allBuyers.filter(b => b.active).length;
+  $('buyersSummary').textContent = activeCount + ' active buyer' + (activeCount===1?'':'s') + (allBuyers.length > activeCount ? ` · ${allBuyers.length-activeCount} inactive` : '');
+  $('buyersBadge').textContent = activeCount ? '· '+activeCount : '';
+
+  const list = $('buyersList');
+  list.innerHTML = '';
+  if(!allBuyers.length){
+    list.innerHTML = `<div style="text-align:center;padding:32px 20px;background:#fff;border:2px dashed #d1d5db;border-radius:12px;margin-top:8px">
+      <div style="font-size:48px;margin-bottom:8px">💰</div>
+      <div style="font-size:16px;font-weight:600;color:#0f0d0a;margin-bottom:4px">No buyers yet</div>
+      <div style="font-size:12px;color:#6b7280;margin-bottom:18px;max-width:300px;margin-left:auto;margin-right:auto;line-height:1.4">Add cash buyers one at a time. They'll appear here so you can blast deals to them later.</div>
+      <button class="btn-primary" id="buyersAddFirst" style="padding:11px 22px;font-size:14px;font-weight:600">+ Add your first buyer</button>
+    </div>`;
+    setTimeout(() => {
+      document.getElementById('buyersAddFirst')?.addEventListener('click', () => openBuyerForm(null));
+    }, 0);
+    updateBlastButton();
+    return;
+  }
+
+  allBuyers.forEach(b => {
+    const stars = '★'.repeat(b.rating || 0) + '☆'.repeat(5-(b.rating || 0));
+    const priceRange = (b.min_price || b.max_price) ? `$${b.min_price?Math.round(b.min_price/1000)+'k':'?'}-${b.max_price?Math.round(b.max_price/1000)+'k':'?'}` : '';
+    const checked = selectedBuyerIds.has(b.id) ? 'checked' : '';
+    const row = el(`<div class="buyer-row${b.active?'':' inactive'}" data-buyer="${b.id}">
+      <div class="buyer-checkbox"><input type="checkbox" data-select="${b.id}" ${checked} ${b.active && b.email ? '' : 'disabled title="No email or inactive"'}></div>
+      <div class="buyer-info" data-edit="${b.id}">
+        <div class="buyer-name">
+          ${escapeHtml(b.name)}
+          ${b.company?`<span class="co">· ${escapeHtml(b.company)}</span>`:''}
+          ${b.rating > 0 ? `<span class="stars">${stars}</span>` : ''}
+          ${!b.active?`<span class="co" style="color:#b91c1c">· inactive</span>`:''}
+        </div>
+        <div class="buyer-meta">
+          ${b.email?`<span class="pill">📧 ${escapeHtml(b.email)}</span>`:'<span class="pill" style="color:#b91c1c">⚠ no email</span>'}
+          ${b.phone?`<span class="pill">📞 ${escapeHtml(b.phone)}</span>`:''}
+          ${priceRange?`<span class="pill">${escapeHtml(priceRange)}</span>`:''}
+          ${b.property_types?`<span class="pill">${escapeHtml(b.property_types)}</span>`:''}
+          ${b.preferred_areas?`<span class="pill">📍 ${escapeHtml(b.preferred_areas)}</span>`:''}
+          ${b.funding_proof_on_file?`<span class="pill" style="background:#dcfce7;color:#166534">✓ POF on file</span>`:''}
+        </div>
+      </div>
+      <div class="buyer-links"></div>
+      <div class="buyer-stats">
+        <span class="big">${b.deals_sent || 0}</span>
+        sent
+      </div>
+      <div class="buyer-actions-btns">
+        <button data-send-one="${b.id}" title="Send a deal to this buyer">📧 Send deal</button>
+      </div>
+    </div>`);
+    // Links live outside [data-edit] so tapping a logo opens the site
+    // instead of the edit form.
+    const links = row.querySelector('.buyer-links');
+    const chips = socialChipsHtml(b.social_links, b.website);
+    if(chips){
+      links.innerHTML = `<div class="social-chips">${chips}</div>`;
+      links.addEventListener('click', e => e.stopPropagation());
+    }
+    row.querySelector('[data-edit]').addEventListener('click', () => openBuyerForm(b));
+    row.querySelector('[data-select]').addEventListener('change', e => {
+      e.stopPropagation();
+      if(e.target.checked) selectedBuyerIds.add(b.id);
+      else selectedBuyerIds.delete(b.id);
+      updateBlastButton();
+    });
+    row.querySelector('[data-send-one]').addEventListener('click', e => {
+      e.stopPropagation();
+      if(!b.email){ toast('No email on file for '+b.name,'err'); return; }
+      openBlastModal([b.id]);
+    });
+    list.appendChild(row);
+  });
+
+  updateBlastButton();
+}
+
+function updateBlastButton(){
+  // Only count buyers that are still in the list (in case some got deleted)
+  const validIds = new Set(allBuyers.map(b => b.id));
+  selectedBuyerIds = new Set([...selectedBuyerIds].filter(id => validIds.has(id)));
+  const ct = selectedBuyerIds.size;
+  const btn = $('buyersBlastSelected');
+  btn.textContent = `📧 Blast selected (${ct})`;
+  btn.disabled = ct === 0;
+}
+
+$('buyersBlastSelected').addEventListener('click', () => {
+  if(!selectedBuyerIds.size) return;
+  openBlastModal([...selectedBuyerIds]);
+});
+
+$('buyersAddNew').addEventListener('click', () => openBuyerForm(null));
+
+// ── Buyers CSV upload ─────────────────────────────────────────
+let buyerCsvRows = null;
+
+// Header synonyms, checked in order. Several sheets in the wild call the
+// same thing different names, so match loosely rather than demanding an
+// exact template.
+const BUYER_COLS = {
+  name:           [/^buyer\s*name$/, /^name$/, /^buyer$/, /^contact\s*name$/, /^full\s*name$/, /^company$/, /^company\s*name$/, /^business\s*name$/],
+  company:        [/^company$/, /^company\s*name$/, /^business\s*name$/, /^business$/, /^entity$/, /^llc$/, /^organization$/],
+  phone:          [/^phone$/, /^phone\s*number$/, /^phone\s*\d+$/, /^mobile$/, /^cell$/, /^tel$/, /^telephone$/, /^contact\s*phone$/],
+  email:          [/^email$/, /^e-?mail$/, /^email\s*address$/, /^contact\s*email$/],
+  website:        [/^website$/, /^web\s*site$/, /^site$/, /^url$/, /^web$/, /^webpage$/, /^domain$/],
+  buyBox:         [/^buy\s*box$/, /^criteria$/, /^buying\s*criteria$/, /^buybox$/],
+  propertyTypes:  [/^property\s*types?$/, /^asset\s*types?$/, /^types?$/],
+  preferredAreas: [/^preferred\s*areas?$/, /^areas?$/, /^markets?$/, /^zips?$/, /^neighborhoods?$/, /^target\s*areas?$/],
+  minPrice:       [/^min\s*price$/, /^minimum\s*price$/, /^price\s*min$/, /^budget\s*min$/],
+  maxPrice:       [/^max\s*price$/, /^maximum\s*price$/, /^price\s*max$/, /^budget$/, /^budget\s*max$/],
+  city:           [/^city$/, /^property\s*city$/],
+  state:          [/^state$/, /^property\s*state$/],
+  notes:          [/^notes?$/, /^comments?$/, /^note$/],
+};
+// Any of these become social links; several can appear at once.
+const BUYER_SOCIAL_COLS = [/social/i, /^linked\s*in$/i, /^linkedin$/i, /^facebook$/i, /^fb$/i,
+  /^instagram$/i, /^ig$/i, /^twitter$/i, /^x$/i, /^tiktok$/i, /^youtube$/i];
+
+function mapBuyerHeaders(headers){
+  const used = new Set();
+  const pick = pats => {
+    for(const pat of pats){
+      const h = headers.find(x => !used.has(x) && pat.test(x.toLowerCase().trim()));
+      if(h){ used.add(h); return h; }
+    }
+    return '';
+  };
+  const m = {};
+  // Name first so a "Company" column isn't stolen by it when a real
+  // name column also exists.
+  m.name = pick(BUYER_COLS.name);
+  Object.keys(BUYER_COLS).forEach(k => { if(k !== 'name') m[k] = pick(BUYER_COLS[k]); });
+  m.socials = headers.filter(h => !used.has(h) && BUYER_SOCIAL_COLS.some(p => p.test(h.trim())));
+  return m;
+}
+
+function buyerRowFrom(r, m){
+  const get = k => (m[k] ? String(r[m[k]] || '').trim() : '');
+  const socials = (m.socials || [])
+    .map(h => normalizeUrl(String(r[h] || '').trim()))
+    .filter(Boolean);
+  const digits = get('phone').replace(/\D/g, '');
+  const phone = digits.length === 11 && digits[0] === '1' ? digits.slice(1) : digits;
+  return {
+    name: get('name'),
+    company: get('company'),
+    phone: phone.length === 10 ? fmtPhone('+1' + phone) : get('phone'),
+    email: get('email'),
+    website: normalizeUrl(get('website')),
+    socialLinks: socials.join('\n'),
+    buyBox: get('buyBox'),
+    propertyTypes: get('propertyTypes'),
+    preferredAreas: get('preferredAreas'),
+    minPrice: get('minPrice').replace(/[^0-9.]/g, ''),
+    maxPrice: get('maxPrice').replace(/[^0-9.]/g, ''),
+    city: get('city'),
+    state: get('state').toUpperCase().slice(0, 2),
+    notes: get('notes'),
+    active: true,
+  };
+}
+
+$('buyersUpload').addEventListener('click', () => {
+  buyerCsvRows = null;
+  $('buyerCsvFile').value = '';
+  $('buyerCsvPreview').classList.add('hide');
+  openModal('buyerUploadModal');
+});
+
+$('buyerCsvFile').addEventListener('change', async e => {
+  const file = e.target.files[0];
+  if(!file) return;
+  const text = await file.text();
+  const parsed = parseCsv(text);
+  if(!parsed.headers.length){ toast('Could not read that CSV','err'); return; }
+  const m = mapBuyerHeaders(parsed.headers);
+  if(!m.name){
+    $('buyerCsvPreview').className = '';
+    $('buyerCsvPreview').innerHTML =
+      '<div style="color:#b91c1c;font-size:12px">No name column found. The sheet needs a header like <b>Name</b>, <b>Buyer</b> or <b>Company</b>.</div>';
+    return;
+  }
+  buyerCsvRows = parsed.rows.map(r => buyerRowFrom(r, m)).filter(r => r.name);
+
+  const matched = Object.entries(m)
+    .filter(([k,v]) => k !== 'socials' && v)
+    .map(([k,v]) => `${k} ← ${escapeHtml(v)}`);
+  if(m.socials.length) matched.push('socials ← ' + m.socials.map(escapeHtml).join(', '));
+
+  const sample = buyerCsvRows.slice(0, 3).map(b =>
+    `<div style="font-size:11px;color:#374151;padding:5px 0;border-top:1px solid #f3f4f6">
+      <b>${escapeHtml(b.name)}</b>${b.phone?' · '+escapeHtml(b.phone):''}${b.email?' · '+escapeHtml(b.email):''}
+      ${b.website?'<br><span style="color:#96751A">'+escapeHtml(b.website)+'</span>':''}
+      ${b.socialLinks?'<br>'+socialChipsHtml(b.socialLinks,''):''}
+    </div>`).join('');
+
+  const pv = $('buyerCsvPreview');
+  pv.className = '';
+  pv.innerHTML = `
+    <div style="background:#f0fdf4;border:1px solid #86efac;color:#166534;border-radius:9px;padding:10px 12px;font-size:12px;font-weight:700">
+      ${buyerCsvRows.length} buyer${buyerCsvRows.length===1?'':'s'} ready
+    </div>
+    <div style="font-size:11px;color:#6b7280;margin-top:8px;line-height:1.6">${matched.map(escapeHtml).join('<br>')}</div>
+    ${sample}
+    <div style="font-size:11px;color:#6b7280;margin-top:8px">Anyone already on your list — matched by email, then name — is updated rather than duplicated.</div>
+    <button class="btn-primary" id="buyerCsvGo" style="width:100%;margin-top:12px">⬆ Import ${buyerCsvRows.length} buyers</button>`;
+
+  $('buyerCsvGo').addEventListener('click', async () => {
+    const btn = $('buyerCsvGo');
+    btn.disabled = true; btn.textContent = 'Importing…';
+    try {
+      const r = await api('import-buyers', {method:'POST', body:{
+        buyers: buyerCsvRows, createdByProfileId: activeProfileId,
+      }});
+      $('buyerUploadModal').classList.remove('open');
+      toast(`${r.added} added, ${r.updated} updated`, 'ok');
+      loadBuyers();
+    } catch(err){
+      toast('Import failed: ' + err.message, 'err');
+      btn.disabled = false; btn.textContent = 'Retry import';
+    }
+  });
+});
+
+// A pasted link is usually missing its scheme. Add one, and reject
+// anything that still doesn't parse — no dead chips on the buyer row.
+function normalizeUrl(raw){
+  let u = String(raw || '').trim();
+  if(!u) return '';
+  if(!/^https?:\/\//i.test(u)) u = 'https://' + u.replace(/^\/+/, '');
+  try {
+    const parsed = new URL(u);
+    if(!parsed.hostname.includes('.')) return '';
+    return parsed.href;
   } catch { return ''; }
 }
 
-async function setAppConfig(key, value) {
-  // Upsert
-  await supa('/app_config?on_conflict=key', 'POST', [{ key, value }], { Prefer: 'resolution=merge-duplicates,return=minimal' });
-}
-
-// Time-zone-friendly send-window check. Default 8 AM – 9 PM US/Eastern.
-// (Production would derive from area code; v1 uses one app-wide window.)
-function withinSendWindow(now = new Date()) {
-  // Convert to America/New_York using Intl
-  const fmt = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour12: false, hour: 'numeric' });
-  const hour = parseInt(fmt.format(now), 10);
-  return hour >= 8 && hour < 21;
-}
-
-async function sendOneSms(toE164, body, dealId, propertyId, campaignId, stepIndex) {
-  // Pre-flight checks
-  if (await isOptedOut(toE164)) {
-    return { skipped: true, reason: 'opted_out' };
-  }
-  const fromNumber = await getAppConfig('sms_from_number');
-  if (!fromNumber) return { error: 'No SMS sending number configured (Settings → SMS).' };
-
-  // Send via Twilio
-  try {
-    const j = await tw(`/Accounts/${twilioSid()}/Messages.json`, 'POST', {
-      From: fromNumber,
-      To: toE164,
-      Body: body,
-    });
-    // Persist
-    await supa('/messages', 'POST', [{
-      twilio_sid: j.sid,
-      deal_id: dealId || null,
-      property_id: propertyId || null,
-      to_number: toE164,
-      from_number: fromNumber,
-      direction: 'outbound',
-      body,
-      status: j.status || 'sent',
-      campaign_id: campaignId || null,
-      step_index: stepIndex || null,
-      sent_at: new Date().toISOString(),
-    }], { Prefer: 'return=minimal' });
-    return { ok: true, sid: j.sid };
-  } catch (e) {
-    // Persist failure too so it shows in the conversation
-    await supa('/messages', 'POST', [{
-      deal_id: dealId || null,
-      property_id: propertyId || null,
-      to_number: toE164,
-      from_number: fromNumber,
-      direction: 'outbound',
-      body,
-      status: 'failed',
-      error_message: e.message || String(e),
-      campaign_id: campaignId || null,
-      step_index: stepIndex || null,
-    }], { Prefer: 'return=minimal' });
-    return { error: e.message };
-  }
-}
-
-// ── Drip templates (the 4 we agreed on) ─────────────────────
-// Each step has { dayOffset, body } — dayOffset is days from drip start.
-// The body uses {first_name}, {address}, {your_name} placeholders.
-const DRIP_TEMPLATES = {
-  reconsider: {
-    label: 'Reconsider',
-    steps: [
-      { dayOffset: 3,  body: "Hey {first_name}, it's {your_name}. Wanted to circle back on {address} — no pressure, just keeping the door open. My offer's still good if you ever want to revisit. Reply STOP to opt out." },
-      { dayOffset: 10, body: "Hey {first_name} — checking in on {address}. The market's moved a bit since we talked. I might have more room than before if you're open to chatting again." },
-      { dayOffset: 17, body: "Hey {first_name}, hope you're doing well. Last quick check on {address} — if anything's changed on your end, you've got my number. Either way, take care." },
-      { dayOffset: 24, body: "Hey {first_name} — won't keep bugging you. If life ever shifts and selling {address} makes sense, I'm a text away. Wishing you the best." },
-    ],
-  },
-  comp: {
-    label: 'Working with Comp',
-    steps: [
-      { dayOffset: 0, body: "Hey {first_name}, it's {your_name}. Saw you've got {address} closing soon — hoping it goes smooth for you. Just wanted to say: if anything falls through (it happens more than you'd think), I can close cash in 30 days, no inspections, no contingencies. Hit me up if you need a backup. Reply STOP to opt out." },
-    ],
-  },
-  three_month: {
-    label: '3 Month Check-in',
-    steps: [
-      { dayOffset: 0, body: "Hey {first_name}, it's {your_name} — you asked me to check back around now on {address}. How's everything? Still thinking about selling, or did life take a turn? Reply STOP to opt out." },
-    ],
-  },
-  six_month: {
-    label: '6 Month Check-in',
-    steps: [
-      { dayOffset: 0, body: "Hey {first_name}, it's {your_name}. Time flies — it's been about 6 months since we talked about {address}. Just checking in: anything changed on your end? No rush, just keeping in touch like you asked. Reply STOP to opt out." },
-    ],
-  },
-};
-
-function firstName(owners) {
-  if (!owners) return 'there';
-  // "DAVID & AMY JENKINS" → "David"; "JANE DOE" → "Jane"
-  const cleaned = owners.replace(/[·,&]/g, ' ').split(/\s+/).filter(Boolean);
-  if (!cleaned.length) return 'there';
-  const first = cleaned[0];
-  // Title-case
-  return first.charAt(0).toUpperCase() + first.slice(1).toLowerCase();
-}
-function shortAddress(addr) {
-  if (!addr) return 'your property';
-  // Take just the street portion before the first comma
-  const parts = addr.split(',');
-  return parts[0].trim();
-}
-function fillTemplate(body, ctx) {
-  return body
-    .replace(/\{first_name\}/g, ctx.firstName || 'there')
-    .replace(/\{address\}/g, ctx.address || 'your property')
-    .replace(/\{your_name\}/g, ctx.yourName || '');
-}
-
-// ════════════════════════════════════════════════════════════
-// VOICEMAIL DROP — message building
-// ════════════════════════════════════════════════════════════
-// The drop message used to be whatever text the front end happened to
-// send, which is why drops went out with no rep name, no callback
-// number and no address. It is now assembled here, from the lead row
-// and the rep's profile, so every drop is complete no matter which
-// screen fired it.
-
-const VM_DEFAULT_TEMPLATE =
-  "Hi {first_name}, this is {your_name} with {company}. " +
-  "I'm calling about your property at {address}. " +
-  "We'd like to get you a quick cash offer on it — no obligation, no repairs, " +
-  "and no commissions. You can reach me back at {callback}. " +
-  "Again, that's {your_name} at {callback}, or you can visit {website}. " +
-  "Thanks, and have a great day.";
-
-// Two lines is the ceiling on purpose. The FCC caps abandoned calls at
-// 3% per campaign; at 3+ lines that rate is very hard to hold on a
-// wholesaling list, and the exposure isn't worth the extra contacts.
-const MAX_PD_LINES = 2;
-
-// One place that builds the AMD callback, so every dial path carries the
-// room, the rep's leg (never hung up) and the auto-drop flag.
-function amdCallbackUrl(room, agentSid, autoVm) {
-  let u = `${APP_BASE_URL}?action=amd-status`;
-  if (room)     u += `&room=${encodeURIComponent(room)}`;
-  if (agentSid) u += `&agent=${encodeURIComponent(agentSid)}`;
-  if (autoVm)   u += `&auto=1`;
-  return u;
-}
-
-const VM_COMPANY_DEFAULT = 'Win Win Properties';
-const VM_WEBSITE_DEFAULT = 'winwinproperties.net';
-
-// A raw 10-digit string gets read by Polly as one enormous number.
-// <say-as interpret-as="telephone"> makes it "three oh two ... five two six ..."
-// with natural pauses, which is the difference between a callback and a
-// deleted message.
-function spokenPhoneSsml(num) {
-  const digits = String(num || '').replace(/[^0-9]/g, '').replace(/^1(?=\d{10}$)/, '');
-  if (digits.length !== 10) return escapeXml(String(num || '').trim());
-  return `<say-as interpret-as="telephone">${digits}</say-as>`;
-}
-
-// Street line only, with the unit stripped. "12 Oak St, Apt 2B, Freeport NY"
-// reads as "twelve Oak Street" instead of spelling out "pound two bee".
-function spokenAddress(addr) {
-  let s = shortAddress(addr);
-  s = s.replace(/\s+(apt|apartment|unit|ste|suite|#)\s*[\w-]*\s*$/i, '').trim();
-  return s || 'your property';
-}
-
-// Pulls everything the message needs: owner name + address from the lead,
-// rep name + callback number from the profile, company/website from settings.
-async function vmContext(propertyId, profileId, overrides) {
-  const o = overrides || {};
-  const ctx = {
-    firstName: 'there',
-    address:   'your property',
-    yourName:  '',
-    company:   (await getAppConfig('vm_company_name')) || VM_COMPANY_DEFAULT,
-    website:   (await getAppConfig('vm_website')) || VM_WEBSITE_DEFAULT,
-    callback:  '',
-  };
-
-  if (propertyId) {
-    try {
-      const { json: rows } = await supa(
-        `/properties?id=eq.${encodeURIComponent(propertyId)}&select=owners,property_address`
-      );
-      const p = Array.isArray(rows) && rows[0];
-      if (p) {
-        ctx.firstName = firstName(p.owners);
-        ctx.address   = spokenAddress(p.property_address);
-      }
-    } catch (e) { console.warn('vm property lookup failed', e.message); }
-  }
-
-  if (profileId) {
-    try {
-      const { json: rows } = await supa(
-        `/profiles?id=eq.${encodeURIComponent(profileId)}&select=name,phone`
-      );
-      const pr = Array.isArray(rows) && rows[0];
-      if (pr) {
-        if (pr.name)  ctx.yourName = firstName(pr.name);
-        if (pr.phone) ctx.callback = pr.phone;
-      }
-    } catch (e) { console.warn('vm profile lookup failed', e.message); }
-  }
-
-  // Explicit overrides from the caller win, then the app-wide fallbacks.
-  if (o.yourName) ctx.yourName = o.yourName;
-  if (o.callback) ctx.callback = o.callback;
-  if (o.company)  ctx.company  = o.company;
-  if (o.website)  ctx.website  = o.website;
-  if (!ctx.yourName) ctx.yourName = (await getAppConfig('vm_rep_name')) || ctx.company;
-  // Last resort for the callback: the app-wide number, then the caller ID
-  // the call actually went out on, so the seller always has something to dial.
-  if (!ctx.callback) ctx.callback = (await getAppConfig('vm_callback_number')) || o.fromNumber || '';
-
-  return ctx;
-}
-
-// Escape the literal text first, then substitute — so a seller named
-// "O'Brien & Sons" can't break the TwiML, while the telephone SSML tag
-// we insert deliberately survives.
-function renderVmSsml(template, ctx) {
-  let raw = String(template || VM_DEFAULT_TEMPLATE);
-  // If no callback number resolved, drop the whole sentence rather than
-  // say "you can reach me back at" and then nothing.
-  if (!ctx.callback) {
-    raw = raw.split(/(?<=[.!?])\s+/)
-             .filter(s => s.indexOf('{callback}') === -1)
-             .join(' ')
-             .trim();
-  }
-  let out = escapeXml(raw);
-  out = out
-    .replace(/\{first_name\}/g, escapeXml(ctx.firstName || 'there'))
-    .replace(/\{address\}/g,    escapeXml(ctx.address || 'your property'))
-    .replace(/\{your_name\}/g,  escapeXml(ctx.yourName || ''))
-    .replace(/\{company\}/g,    escapeXml(ctx.company || VM_COMPANY_DEFAULT))
-    .replace(/\{website\}/g,    escapeXml(ctx.website || VM_WEBSITE_DEFAULT))
-    .replace(/\{callback\}/g,   ctx.callback ? spokenPhoneSsml(ctx.callback) : '');
-  return out;
-}
-
-// The saved template, or the default if nothing has been customized.
-async function vmTemplate() {
-  return (await getAppConfig('vm_template')) || VM_DEFAULT_TEMPLATE;
-}
-
-const VM_VOICE_ALLOWLIST = [
-  'Polly.Ruth-Generative', 'Polly.Matthew-Generative', 'Polly.Danielle-Generative',
-  'Polly.Joanna-Neural', 'Polly.Matthew-Neural', 'Polly.Stephen-Neural', 'alice',
+// Brand-coloured badges, matched on hostname.
+const SOCIAL_BRANDS = [
+  {key:'linkedin',  test:/(^|\.)linkedin\.com$/i,               label:'in', bg:'#0A66C2', name:'LinkedIn'},
+  {key:'facebook',  test:/(^|\.)(facebook\.com|fb\.com)$/i,      label:'f',  bg:'#1877F2', name:'Facebook'},
+  {key:'instagram', test:/(^|\.)instagram\.com$/i,              label:'◎',  bg:'#C13584', name:'Instagram'},
+  {key:'x',         test:/(^|\.)(twitter\.com|x\.com)$/i,        label:'𝕏',  bg:'#0f0d0a', name:'X'},
+  {key:'youtube',   test:/(^|\.)(youtube\.com|youtu\.be)$/i,     label:'▶',  bg:'#FF0000', name:'YouTube'},
+  {key:'tiktok',    test:/(^|\.)tiktok\.com$/i,                 label:'♪',  bg:'#010101', name:'TikTok'},
+  {key:'zillow',    test:/(^|\.)zillow\.com$/i,                 label:'Z',  bg:'#006AFF', name:'Zillow'},
+  {key:'biggerp',   test:/(^|\.)biggerpockets\.com$/i,          label:'BP', bg:'#1F6F3D', name:'BiggerPockets'},
 ];
-function vmVoice(requested) {
-  return VM_VOICE_ALLOWLIST.includes(requested) ? requested : 'Polly.Ruth-Generative';
-}
 
-// Redirect a live leg into a voicemail message and hang up.
-async function dropVmOnLeg(targetSid, innerTwiml) {
-  const dropTwiml =
-    `<?xml version="1.0" encoding="UTF-8"?><Response><Pause length="1"/>${innerTwiml}<Hangup/></Response>`;
-  await tw(`/Accounts/${twilioSid()}/Calls/${encodeURIComponent(targetSid)}.json`,
-    'POST', { Twiml: dropTwiml });
-}
-
-// ── Twilio inbound webhook handler ──────────────────────────
-async function handleTwilioInbound(event) {
-  // Twilio sends application/x-www-form-urlencoded
-  const params = parseFormEncoded(event.body || '');
-  // Optional: verify signature. Skip if AUTH_TOKEN isn't set (e.g. dev).
-  if (process.env.TWILIO_AUTH_TOKEN) {
-    if (!verifyTwilioSignature(event, params)) {
-      return { statusCode: 403, body: 'invalid signature' };
-    }
+function socialChipsHtml(socialText, website){
+  const chips = [];
+  const site = normalizeUrl(website);
+  if(site){
+    chips.push(`<a class="social-chip" href="${escapeHtml(site)}" target="_blank" rel="noopener"
+      style="background:#96751A" title="${escapeHtml(site)}">🌐</a>`);
   }
-  const from = params.From || '';
-  const to   = params.To   || '';
-  const body = params.Body || '';
-  const sid  = params.MessageSid || '';
-  const trimmed = body.trim().toUpperCase();
-  const isStop = STOP_KEYWORDS.includes(trimmed);
-
-  // Persist inbound message
-  await supa('/messages', 'POST', [{
-    twilio_sid: sid,
-    to_number: to,
-    from_number: from,
-    direction: 'inbound',
-    body,
-    status: 'received',
-  }], { Prefer: 'return=minimal' });
-
-  // Pause any active drip campaigns to this number (find via leads.sms_cell)
-  try {
-    const { json: leads } = await supa(`/leads?sms_cell=eq.${encodeURIComponent(from)}&select=property_id`);
-    if (Array.isArray(leads) && leads.length) {
-      const propIds = leads.map(l => l.property_id);
-      const inList = propIds.map(id => `"${String(id).replace(/"/g, '\\"')}"`).join(',');
-      const { json: deals } = await supa(`/deals?property_id=in.(${encodeURIComponent(inList)})&select=id`);
-      const dealIds = (deals || []).map(d => d.id);
-      if (dealIds.length) {
-        const dInList = dealIds.join(',');
-        await supa(`/drip_campaigns?deal_id=in.(${dInList})&status=eq.active`, 'PATCH', {
-          status: 'paused',
-          paused_reason: isStop ? 'opted_out' : 'inbound_reply',
-        }, { Prefer: 'return=minimal' });
-      }
-    }
-  } catch (e) { /* non-fatal */ }
-
-  // Handle STOP
-  if (isStop) {
-    await supa('/sms_opt_outs?on_conflict=e164', 'POST', [{
-      e164: from, reason: 'stop_keyword',
-    }], { Prefer: 'resolution=merge-duplicates,return=minimal' });
-    // Mark the lead as revoked consent
-    await supa(`/leads?sms_cell=eq.${encodeURIComponent(from)}`, 'PATCH', {
-      sms_consent: 'revoked',
-    }, { Prefer: 'return=minimal' });
-    // Per Twilio + carrier rules we MUST acknowledge. Reply with confirmation.
-    const twiml = '<?xml version="1.0" encoding="UTF-8"?><Response><Message>You\'ve been opted out. You won\'t receive any more texts from us. Reply START to resubscribe.</Message></Response>';
-    return { statusCode: 200, headers: { 'Content-Type': 'text/xml' }, body: twiml };
-  }
-
-  // Empty TwiML response = "received, no auto-reply"
-  return { statusCode: 200, headers: { 'Content-Type': 'text/xml' }, body: '<?xml version="1.0" encoding="UTF-8"?><Response></Response>' };
-}
-
-// ── Twilio inbound VOICE webhook (callback forwarding) ─────────
-// When a seller calls back the Twilio number, look up the most recent
-// outbound call placed TO that seller's number, find which team member
-// (profile) placed it and what cell number it was bridged to, and forward
-// the inbound call straight to that person. Falls back to a configured
-// default number if no matching history is found.
-const TEAM_FORWARD_NUMBERS = {
-  // name -> E.164 cell number (kept here as a simple, no-DB-required map;
-  // profiles.phone in Supabase is the source of truth when present —
-  // this is just the fallback / seed list)
-  Kyle:   '+15162734255',
-  Paul:   '+15162707064',
-  Mark:   '+12022130776',
-  Khalid: '+15165956250',
-};
-
-async function handleTwilioVoiceInbound(event) {
-  // Top-level guard: any unhandled error returns valid TwiML so Twilio
-  // never plays its generic "callback error" message.
-  try {
-    return await _handleTwilioVoiceInboundInner(event);
-  } catch (e) {
-    console.error('handleTwilioVoiceInbound error:', e.message);
-    const twiml = '<?xml version="1.0" encoding="UTF-8"?><Response><Say voice="alice">Sorry, we are having a technical issue. Please try again in a moment.</Say></Response>';
-    return { statusCode: 200, headers: { 'Content-Type': 'text/xml' }, body: twiml };
-  }
-}
-
-async function _handleTwilioVoiceInboundInner(event) {
-  const params = parseFormEncoded(event.body || '');
-  if (process.env.TWILIO_AUTH_TOKEN) {
-    if (!verifyTwilioSignature(event, params)) {
-      return { statusCode: 403, body: 'invalid signature' };
-    }
-  }
-
-  const qs   = event.queryStringParameters || {};
-  const from = params.From || '';
-  const to   = params.To   || '';
-  const step = qs.step || '';
-
-  const xml = (inner) => ({
-    statusCode: 200,
-    headers: { 'Content-Type': 'text/xml' },
-    body: `<?xml version="1.0" encoding="UTF-8"?><Response>${inner}</Response>`,
+  String(socialText || '').split('\n').forEach(line => {
+    const url = normalizeUrl(line);
+    if(!url) return;
+    let host = '';
+    try { host = new URL(url).hostname.replace(/^www\./i, ''); } catch { return; }
+    const brand = SOCIAL_BRANDS.find(b => b.test.test(host));
+    chips.push(`<a class="social-chip" href="${escapeHtml(url)}" target="_blank" rel="noopener"
+      style="background:${brand ? brand.bg : '#6b7280'}"
+      title="${escapeHtml(brand ? brand.name + ' — ' + url : url)}">${escapeHtml(brand ? brand.label : '🔗')}</a>`);
   });
-  const selfUrl = (st) => escapeXml(`${APP_BASE_URL}?action=twilio-voice-inbound&step=${st}`);
+  return chips.join('');
+}
 
-  // ── Whisper endpoint — played ONLY to the team member answering ──
-  // The seller never hears this. No keypress needed — connects instantly.
-  if (qs.whisper === '1') {
-    const name = decodeURIComponent(qs.name || 'a seller');
-    return xml(`<Say voice="alice">Call from ${escapeXml(name)}</Say>`);
-  }
+function openBuyerForm(buyer, prefill){
+  // prefill = the values came off a lead card, so this is still a NEW buyer
+  // even though the form arrives with fields already filled in.
+  editingBuyerId = prefill ? null : (buyer?.id || null);
+  const isEdit = !!buyer && !prefill;
+  const b = buyer || {};
+  const holder = $('buyerFormHolder');
+  holder.innerHTML = '';
+  const form = el(`<div class="buyer-form">
+    <h3>${isEdit ? '✎ Edit buyer' : (prefill ? '+ Add buyer from lead' : '+ Add new buyer')}</h3>
+    ${prefill ? '<div style="font-size:12px;color:#96751A;background:#fffdf5;border:1px solid #e8d29a;border-radius:8px;padding:9px 11px;margin-bottom:12px">Filled in from the lead card. Add an email and anything else you know, then save.</div>' : ''}
+    <div class="buyer-form-grid">
+      <div><label>Name *</label><input type="text" id="bfName" value="${escapeHtml(b.name||'')}" placeholder="John Smith"></div>
+      <div><label>Company</label><input type="text" id="bfCompany" value="${escapeHtml(b.company||'')}" placeholder="Smith Investments LLC"></div>
+      <div><label>Email *</label><input type="email" id="bfEmail" value="${escapeHtml(b.email||'')}" placeholder="john@example.com"></div>
+      <div><label>Phone</label><input type="tel" id="bfPhone" value="${escapeHtml(b.phone||'')}" placeholder="(555) 123-4567"></div>
+      <div><label>City</label><input type="text" id="bfCity" value="${escapeHtml(b.city||'')}"></div>
+      <div><label>State</label><input type="text" id="bfState" value="${escapeHtml(b.state||'')}" maxlength="2"></div>
+      <div class="full"><label>Buy box (free-text criteria)</label><textarea id="bfBuyBox" placeholder="SFR 3/2, 1200-2000 sqft, ARV $200-400k, light/medium rehab only">${escapeHtml(b.buy_box||'')}</textarea></div>
+      <div><label>Min price ($)</label><input type="number" id="bfMinPrice" value="${b.min_price||''}" placeholder="50000"></div>
+      <div><label>Max price ($)</label><input type="number" id="bfMaxPrice" value="${b.max_price||''}" placeholder="500000"></div>
+      <div><label>Property types</label><input type="text" id="bfPropTypes" value="${escapeHtml(b.property_types||'')}" placeholder="SFR, Duplex, Townhome"></div>
+      <div><label>Rehab level</label>
+        <select id="bfRehab">
+          <option value=""${!b.rehab_level?' selected':''}>— any —</option>
+          <option value="Light"${b.rehab_level==='Light'?' selected':''}>Light only</option>
+          <option value="Medium"${b.rehab_level==='Medium'?' selected':''}>Up to medium</option>
+          <option value="Heavy"${b.rehab_level==='Heavy'?' selected':''}>Heavy / teardown OK</option>
+        </select>
+      </div>
+      <div class="full"><label>Preferred areas (zips, neighborhoods)</label><input type="text" id="bfAreas" value="${escapeHtml(b.preferred_areas||'')}" placeholder="30315, 30318, East Atlanta, West End"></div>
+      <div class="full"><label>Website</label><input type="url" id="bfWebsite" value="${escapeHtml(b.website||'')}" placeholder="acmebuilders.com"></div>
+      <div class="full">
+        <label>Social media links (one per line)</label>
+        <textarea id="bfSocials" rows="3" placeholder="linkedin.com/in/janedoe&#10;instagram.com/acmebuilders&#10;facebook.com/acmebuilders">${escapeHtml(b.social_links||'')}</textarea>
+        <div id="bfSocialPreview" class="social-chips" style="margin-top:7px"></div>
+        <div style="font-size:11px;color:#6b7280;margin-top:4px">Paste any profile links. Recognised ones turn into tappable logos on the buyer's row. https:// is added for you.</div>
+      </div>
+      <div><label>Rating (0-5 ★)</label>
+        <select id="bfRating">
+          ${[0,1,2,3,4,5].map(n => `<option value="${n}"${b.rating===n?' selected':''}>${n} ${'★'.repeat(n)}${'☆'.repeat(5-n)}</option>`).join('')}
+        </select>
+      </div>
+      <div>
+        <label>Status</label>
+        <select id="bfActive">
+          <option value="true"${b.active!==false?' selected':''}>Active</option>
+          <option value="false"${b.active===false?' selected':''}>Inactive</option>
+        </select>
+      </div>
+      <div class="full">
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+          <input type="checkbox" id="bfPOF" ${b.funding_proof_on_file?'checked':''} style="width:auto"> Proof of funds on file
+        </label>
+      </div>
+      <div class="full"><label>Notes (private)</label><textarea id="bfNotes">${escapeHtml(b.notes||'')}</textarea></div>
+    </div>
+    <div class="buyer-form-actions">
+      ${isEdit ? `<button class="btn-ghost" id="bfDelete" style="color:#b91c1c">Delete buyer</button>` : ''}
+      <div style="flex:1"></div>
+      <button class="btn-ghost" id="bfCancel">Cancel</button>
+      <button class="btn-primary" id="bfSave">${isEdit ? 'Save changes' : 'Add buyer'}</button>
+    </div>
+  </div>`);
+  holder.appendChild(form);
+  setTimeout(() => {
+    const first = ['bfName','bfEmail','bfPhone'].map(id => $(id)).find(el => el && !el.value);
+    (first || $('bfName')).focus();
+  }, 50);
 
-  const vmVoice = 'Polly.Ruth-Generative';
+  const renderSocialPreview = () => {
+    const html = socialChipsHtml($('bfSocials').value, $('bfWebsite').value);
+    $('bfSocialPreview').innerHTML = html || '<span style="font-size:11px;color:#9ca3af">No links yet</span>';
+  };
+  $('bfSocials').addEventListener('input', renderSocialPreview);
+  $('bfWebsite').addEventListener('input', renderSocialPreview);
+  renderSocialPreview();
 
-  // ── Step 3: the caller finished leaving a message ─────────────
-  // Twilio POSTs here with the recording. One row per message; the
-  // dialer's Voicemail tab reads them back.
-  if (step === 'vmdone') {
-    const recSid = params.RecordingSid || '';
-    const dur    = parseInt(params.RecordingDuration || '0', 10) || 0;
-    // Under two seconds is a hangup, not a message. Don't clutter the box.
-    if (recSid && dur >= 2) {
+  $('bfCancel').addEventListener('click', () => { holder.innerHTML = ''; editingBuyerId = null; });
+  $('bfSave').addEventListener('click', saveBuyer);
+  if(isEdit){
+    $('bfDelete').addEventListener('click', async () => {
+      if(!confirm('Delete '+buyer.name+'? This cannot be undone.')) return;
       try {
-        await supa('/inbound_voicemails', 'POST', [{
-          from_number: from,
-          to_number:   to,
-          recording_sid: recSid,
-          duration:    dur,
-          heard:       false,
-        }], { Prefer: 'return=minimal,resolution=merge-duplicates' });
-      } catch (e) { console.error('voicemail save failed:', e.message); }
-    }
-    return xml(`<Say voice="${vmVoice}">Got it. We will call you right back. Goodbye.</Say><Hangup/>`);
-  }
-
-  const vmGreeting = (await getAppConfig('voice_vm_greeting')) ||
-    'You have reached Win Win Properties. Nobody can take your call right now. ' +
-    'Please leave your name, your number, and the property address after the tone, and we will call you right back.';
-
-  const voicemailXml = () =>
-    `<Say voice="${vmVoice}">${escapeXml(vmGreeting)}</Say>` +
-    `<Record maxLength="120" playBeep="true" trim="trim-silence" timeout="4" ` +
-    `action="${selfUrl('vmdone')}" method="POST"/>` +
-    `<Say voice="${vmVoice}">We did not get that. Goodbye.</Say><Hangup/>`;
-
-  // ── Step 2b: the forward is over ──────────────────────────────
-  // Answered → nothing left to do. Anything else (no answer, busy,
-  // declined) → take a message instead of dropping the call.
-  if (step === 'after') {
-    const st = params.DialCallStatus || '';
-    if (st === 'completed' || st === 'answered') return xml('<Hangup/>');
-    return xml(voicemailXml());
-  }
-
-  // ── Step 1: screen the caller ─────────────────────────────────
-  // This is the fix for phones ringing with nobody there. Auto-dialers
-  // and robocallers never press a key, so they never reach a handset —
-  // they hit the voicemail box or drop. A real seller presses 1.
-  const screenOn = (await getAppConfig('voice_screen')) !== '0';
-  if (screenOn && step !== 'connect') {
-    const greeting = (await getAppConfig('voice_greeting')) ||
-      'Thanks for calling Win Win Properties. Press 1 to be connected, ' +
-      'or stay on the line to leave a message.';
-    return xml(
-      `<Gather numDigits="1" timeout="6" action="${selfUrl('connect')}" method="POST">` +
-        `<Say voice="${vmVoice}">${escapeXml(greeting)}</Say>` +
-        `<Pause length="2"/>` +
-        `<Say voice="${vmVoice}">${escapeXml(greeting)}</Say>` +
-      `</Gather>` +
-      voicemailXml()
-    );
-  }
-
-  let forwardTo  = null;
-  let sellerName = null;
-
-  try {
-    const { json: calls } = await supa(
-      `/calls?to_number=eq.${encodeURIComponent(from)}&select=profile_id,property_id,started_at&order=started_at.desc&limit=1`
-    );
-    const lastCall = Array.isArray(calls) && calls[0];
-
-    if (lastCall) {
-      if (lastCall.profile_id) {
-        const { json: profiles } = await supa(`/profiles?id=eq.${encodeURIComponent(lastCall.profile_id)}&select=name,phone`);
-        const profile = Array.isArray(profiles) && profiles[0];
-        if (profile) {
-          if (profile.phone) {
-            forwardTo = profile.phone;
-          } else if (TEAM_FORWARD_NUMBERS[profile.name]) {
-            forwardTo = TEAM_FORWARD_NUMBERS[profile.name];
-          }
-        }
-      }
-      if (lastCall.property_id) {
-        const { json: props } = await supa(`/properties?id=eq.${encodeURIComponent(lastCall.property_id)}&select=owners`);
-        const prop = Array.isArray(props) && props[0];
-        if (prop && prop.owners) sellerName = prop.owners.trim();
-      }
-    }
-  } catch (e) { /* fall through */ }
-
-  if (!forwardTo) forwardTo = await getAppConfig('default_voice_forward_number');
-  // Final hardcoded fallback — forwards to Kyle if nothing else resolves
-  if (!forwardTo) forwardTo = '+15162734255';
-
-  // Nobody to ring — go straight to the message.
-  if (!forwardTo) return xml(voicemailXml());
-
-  const ringSecs = parseInt(await getAppConfig('voice_ring_seconds'), 10) || 25;
-  // Show the SELLER's number on the team member's phone (and in iPhone
-  // Recents), not our own Twilio number. Twilio allows passing the inbound
-  // caller's number through on a forwarded call. Blocked / anonymous
-  // callers have no usable number, so those still show the Twilio line.
-  const showNumber = /^\+\d{10,15}$/.test(from) ? from : to;
-  // action= is what makes the voicemail box work: when this Dial ends
-  // unanswered, Twilio comes back to us instead of hanging up on them.
-  return xml(
-    `<Dial callerId="${escapeXml(showNumber)}" timeout="${ringSecs}" answerOnBridge="true" ` +
-    `action="${selfUrl('after')}" method="POST">` +
-    `<Number>${escapeXml(forwardTo)}</Number>` +
-    `</Dial>`
-  );
-}
-// ── Twilio status callback (delivery status updates) ────────
-async function handleTwilioStatus(event) {
-  const params = parseFormEncoded(event.body || '');
-  if (process.env.TWILIO_AUTH_TOKEN) {
-    if (!verifyTwilioSignature(event, params)) {
-      return { statusCode: 403, body: 'invalid signature' };
-    }
-  }
-  // ── SMS status ──────────────────────────────────────────
-  const sid = params.MessageSid || '';
-  const status = params.MessageStatus || '';
-  if (sid && status) {
-    try {
-      await supa(`/messages?twilio_sid=eq.${encodeURIComponent(sid)}`, 'PATCH', {
-        status,
-      }, { Prefer: 'return=minimal' });
-    } catch {}
-  }
-
-  // ── Voice status ────────────────────────────────────────
-  // BUGFIX: the power dialer pointed StatusCallback here, but this handler
-  // only ever looked at MessageSid/MessageStatus. Every voice callback was
-  // silently discarded, so call rows never left "queued" and the dialer had
-  // no reliable signal that a call had ended.
-  const callSid = params.CallSid || '';
-  const callStatus = params.CallStatus || '';
-  if (callSid && callStatus) {
-    const patch = { status: callStatus };
-    const dur = parseInt(params.CallDuration || '0', 10);
-    if (dur > 0) patch.duration = dur;
-    if (callStatus === 'completed' || callStatus === 'no-answer' ||
-        callStatus === 'busy' || callStatus === 'failed' || callStatus === 'canceled') {
-      patch.ended_at = new Date().toISOString();
-    }
-    try {
-      await supa(`/calls?twilio_sid=eq.${encodeURIComponent(callSid)}`, 'PATCH',
-        patch, { Prefer: 'return=minimal' });
-    } catch (e) { console.warn('voice status patch failed', e.message); }
-  }
-
-  return { statusCode: 200, body: 'ok' };
-}
-
-// ── Recording playback proxy ────────────────────────────────
-// Twilio's media URLs sit behind HTTP Basic auth, so an <audio> tag pointed
-// straight at them gets a 401 and fails silently. This attaches the
-// credentials server-side.
-//
-// The Range passthrough matters: iOS Safari opens every audio file with
-// "Range: bytes=0-1" and refuses to play if it gets a 200 back instead of
-// a 206. That alone will make a recording silent on an iPhone.
-async function handleRecordingProxy(event) {
-  const qs = event.queryStringParameters || {};
-  const sid = (qs.sid || '').trim();
-
-  if (!/^RE[0-9a-fA-F]{32}$/.test(sid)) {
-    return { statusCode: 400, body: 'invalid recording sid' };
-  }
-
-  const url = `${TWILIO_BASE}/Accounts/${twilioSid()}/Recordings/${sid}.mp3`;
-  const headers = { Authorization: twilioAuth() };
-
-  const range = event.headers.range || event.headers.Range;
-  if (range) headers.Range = range;
-
-  let r;
-  try {
-    r = await fetch(url, { headers });
-  } catch (e) {
-    return { statusCode: 502, body: 'upstream fetch failed' };
-  }
-
-  if (r.status === 404) {
-    // Not finished processing yet, or aged out of Twilio's retention.
-    return { statusCode: 404, body: 'recording not available' };
-  }
-  if (!r.ok && r.status !== 206) {
-    return { statusCode: r.status, body: `twilio returned ${r.status}` };
-  }
-
-  const buf = Buffer.from(await r.arrayBuffer());
-  const out = {
-    'Content-Type': 'audio/mpeg',
-    'Accept-Ranges': 'bytes',
-    'Cache-Control': 'private, max-age=3600',
-    'Access-Control-Allow-Origin': '*',
-  };
-  const cr = r.headers.get('content-range');
-  if (cr) out['Content-Range'] = cr;
-
-  return {
-    statusCode: r.status === 206 ? 206 : 200,
-    headers: out,
-    body: buf.toString('base64'),
-    isBase64Encoded: true,
-  };
-}
-
-// ── Conference status callback (power dialer) ───────────────
-// Fires when the agent's leg actually joins the conference. Only then do we
-// dial the seller, so the seller never sits listening to dead air while the
-// agent's phone is still ringing.
-//
-// This is also where answering machine detection lives. AMD cannot run on a
-// <Dial><Conference> leg — Twilio treats that destination as internal — so it
-// has to be set on the Participant we create here.
-async function handleConferenceStatus(event) {
-  const params = parseFormEncoded(event.body || '');
-  const qs = event.queryStringParameters || {};
-
-  if (process.env.TWILIO_AUTH_TOKEN) {
-    if (!verifyTwilioSignature(event, params)) {
-      return { statusCode: 403, body: 'invalid signature' };
-    }
-  }
-
-  const evt = params.StatusCallbackEvent || '';
-  const conferenceSid = params.ConferenceSid || '';
-  const room = qs.room || params.FriendlyName || '';
-
-  if (evt !== 'conference-start' || !conferenceSid) {
-    return { statusCode: 200, body: 'ok' };
-  }
-
-  const to   = qs.to   || '';
-  const from = qs.from || '';
-  if (!to || !from) return { statusCode: 200, body: 'missing to/from' };
-
-  const baseUrl = APP_BASE_URL;
-  // auto=1 → a detected answering machine gets the merged voicemail
-  // message dropped on it automatically (see handleAmdStatus).
-  const amdCb = `${baseUrl}?action=amd-status&room=${encodeURIComponent(room)}&auto=1`;
-
-  try {
-    await tw(`/Accounts/${twilioSid()}/Conferences/${encodeURIComponent(conferenceSid)}/Participants.json`, 'POST', {
-      From: from,
-      To:   to,
-      // No ringback to the agent — they sit in silence until the seller is in.
-      EarlyMedia: 'false',
-      // Short tone the moment the seller joins. This is the "connected" cue.
-      Beep: 'onEnter',
-      StartConferenceOnEnter: 'true',
-      EndConferenceOnExit:    'true',
-      Timeout: 30,
-      // Answering machine detection.
-      // 'DetectMessageEnd' waits for the greeting to finish, so the verdict
-      // arrives right at the beep — which is when a voicemail drop should
-      // start speaking. A human still comes back as 'human' immediately.
-      MachineDetection: 'DetectMessageEnd',
-      MachineDetectionTimeout: 30,
-      // Tuned for cell phones and residences per Twilio's guidance.
-      MachineDetectionSpeechThreshold: 1900,
-      MachineDetectionSpeechEndThreshold: 1400,
-      AmdStatusCallback: amdCb,
-      AmdStatusCallbackMethod: 'POST',
-      StatusCallback: `${baseUrl}?action=twilio-status`,
-      StatusCallbackMethod: 'POST',
-      StatusCallbackEvent: 'ringing answered completed',
+        await api('delete-buyer',{method:'POST', body:{id:buyer.id}});
+        toast('Deleted','ok');
+        holder.innerHTML = '';
+        editingBuyerId = null;
+        loadBuyers();
+      } catch(e){ toast('Failed: '+e.message,'err'); }
     });
-  } catch (e) {
-    console.warn('participant create failed', e.message);
   }
-
-  return { statusCode: 200, body: 'ok' };
 }
 
-// ── AMD result callback ─────────────────────────────────────
-// Twilio posts here once it decides whether a human or a machine picked up.
-// We stamp it on the call row; the dialer polls call-status to read it.
-async function handleAmdStatus(event) {
-  const params = parseFormEncoded(event.body || '');
-  const qs = event.queryStringParameters || {};
-
-  if (process.env.TWILIO_AUTH_TOKEN) {
-    if (!verifyTwilioSignature(event, params)) {
-      return { statusCode: 403, body: 'invalid signature' };
-    }
-  }
-
-  const room     = qs.room  || '';
-  const agentSid = qs.agent || '';        // the rep's own leg — never hang this up
-  const autoVm   = qs.auto === '1';       // auto-drop enabled for this session
-  const callSid  = params.CallSid || '';
-  // human | machine_start | machine_end_beep | machine_end_silence |
-  // machine_end_other | fax | unknown
-  const answeredBy = params.AnsweredBy || '';
-
-  if (answeredBy && (callSid || room)) {
-    const filter = callSid
-      ? `twilio_sid=eq.${encodeURIComponent(callSid)}`
-      : `conference_room=eq.${encodeURIComponent(room)}`;
-    try {
-      await supa(`/calls?${filter}`, 'PATCH', {
-        answered_by: answeredBy,
-      }, { Prefer: 'return=minimal' });
-    } catch (e) { console.warn('amd patch failed', e.message); }
-  }
-
-  // ── Multi-line: first human wins ──────────────────────────────
-  // On 2 lines both legs are dialed MUTED. The first human to answer
-  // gets unmuted and joined to the rep; any other seller leg still up
-  // is hung up immediately (inside ~2s, which is what keeps the
-  // abandoned-call rate compliant). Without this, two people who both
-  // pick up end up in the same conference talking to each other.
-  if (answeredBy === 'human' && room && callSid) {
-    try {
-      const { json: humans } = await supa(
-        `/calls?conference_room=eq.${encodeURIComponent(room)}` +
-        `&answered_by=eq.human&select=twilio_sid,created_at&order=created_at.asc&limit=5`
-      );
-      const rows = Array.isArray(humans) ? humans : [];
-      const winner = rows.length ? rows[0].twilio_sid : callSid;
-
-      if (winner && winner !== callSid) {
-        // Somebody else already got the rep. Release this one right away.
-        await hangupCall(callSid);
-        return { statusCode: 200, body: 'ok' };
-      }
-
-      // This leg is the winner — open its audio to the rep.
-      await unmuteInConference(room, callSid);
-      // ...and clear every other seller leg still ringing or connected.
-      await releaseLosingLegs(room, callSid, agentSid);
-    } catch (e) { console.warn('multi-line arbitration failed', e.message); }
-  }
-
-  // ── Automatic voicemail drop on a detected machine ────────────
-  // DetectMessageEnd means we're arriving right at the beep, which is
-  // exactly when the message should start. The leg gets redirected out
-  // of the conference, speaks, and hangs up — the rep hears none of it
-  // and the dialer moves on.
-  if (autoVm && /^machine_end/.test(answeredBy) && callSid) {
-    try {
-      await autoDropVoicemail(callSid);
-    } catch (e) { console.warn('auto vm drop failed', e.message); }
-  }
-
-  return { statusCode: 200, body: 'ok' };
-}
-
-// ── Conference plumbing used by the multi-line arbitration ─────
-async function conferenceSidFor(room) {
-  const j = await tw(
-    `/Accounts/${twilioSid()}/Conferences.json` +
-    `?FriendlyName=${encodeURIComponent(room)}&Status=in-progress`
-  );
-  const conf = j && Array.isArray(j.conferences) && j.conferences[0];
-  return conf ? conf.sid : null;
-}
-
-async function hangupCall(sid) {
+async function saveBuyer(){
+  const body = {
+    id: editingBuyerId,
+    name: $('bfName').value.trim(),
+    company: $('bfCompany').value.trim(),
+    email: $('bfEmail').value.trim(),
+    phone: $('bfPhone').value.trim(),
+    city: $('bfCity').value.trim(),
+    state: $('bfState').value.trim().toUpperCase(),
+    website: normalizeUrl($('bfWebsite').value.trim()),
+    socialLinks: $('bfSocials').value.split('\n').map(x => normalizeUrl(x.trim())).filter(Boolean).join('\n'),
+    buyBox: $('bfBuyBox').value.trim(),
+    minPrice: $('bfMinPrice').value,
+    maxPrice: $('bfMaxPrice').value,
+    propertyTypes: $('bfPropTypes').value.trim(),
+    rehabLevel: $('bfRehab').value,
+    preferredAreas: $('bfAreas').value.trim(),
+    rating: parseInt($('bfRating').value, 10) || 0,
+    active: $('bfActive').value === 'true',
+    fundingProofOnFile: $('bfPOF').checked,
+    notes: $('bfNotes').value,
+    createdByProfileId: activeProfileId,
+  };
+  if(!body.name){ toast('Name required','err'); return; }
   try {
-    await tw(`/Accounts/${twilioSid()}/Calls/${encodeURIComponent(sid)}.json`,
-      'POST', { Status: 'completed' });
-  } catch (e) { /* already gone is fine */ }
+    await api('save-buyer',{method:'POST', body});
+    toast('Saved','ok');
+    $('buyerFormHolder').innerHTML = '';
+    editingBuyerId = null;
+    loadBuyers();
+  } catch(e){ toast('Failed: '+e.message,'err'); }
 }
 
-async function unmuteInConference(room, callSid) {
-  const confSid = await conferenceSidFor(room);
-  if (!confSid) return;
+// ── Blast modal ─────────────────────────────────────────────────
+let blastBuyerIds = [];
+let blastDealId = null;
+function openBlastModal(buyerIds, dealId, prefill){
+  blastBuyerIds = buyerIds;
+  blastDealId = dealId || null;
+  const buyers = allBuyers.filter(b => buyerIds.includes(b.id));
+  const recipients = buyers.map(b => b.email ? `${b.name} <${b.email}>` : `${b.name} (no email — will skip)`).join(', ');
+
+  const holder = $('buyerFormHolder');
+  holder.innerHTML = '';
+  const form = el(`<div class="blast-modal-card">
+    <h3>📧 Email ${buyers.length} buyer${buyers.length===1?'':'s'}</h3>
+    <div class="recipients"><b>To:</b> ${escapeHtml(recipients)}</div>
+    <label>Subject</label>
+    <input type="text" id="blastSubject" value="${escapeHtml(prefill?.subject || 'New off-market deal — {address}')}" placeholder="New off-market deal — {address}">
+    <div class="hint">Use <code>{first_name}</code> and <code>{address}</code> for personalization.</div>
+    <label>Message body</label>
+    <textarea id="blastBody" placeholder="Hey {first_name},&#10;&#10;Got a new off-market property at {address} you might be interested in...">${escapeHtml(prefill?.body || defaultBlastBody())}</textarea>
+    <div class="hint">Plain-text email. Personalization placeholders work here too.</div>
+    <div class="blast-actions">
+      <button class="btn-ghost" id="blastCancel">Cancel</button>
+      <button class="btn-primary" id="blastSend">Send to ${buyers.length} buyer${buyers.length===1?'':'s'}</button>
+    </div>
+  </div>`);
+  holder.appendChild(form);
+  setTimeout(() => $('blastSubject').focus(), 50);
+
+  $('blastCancel').addEventListener('click', () => { holder.innerHTML = ''; });
+  $('blastSend').addEventListener('click', sendBlast);
+}
+
+function defaultBlastBody(){
+  return `Hey {first_name},
+
+Got a new off-market property at {address} that I think fits what you're looking for.
+
+[Brief property description — bed/bath, sqft, condition]
+
+Asking: $XXX
+Comps support: $XXX
+Est. repairs: $XXX
+
+If you want more info, reply to this email or text me at [your number].
+
+— ${activeProfileName || 'Tony'}`;
+}
+
+async function sendBlast(){
+  const subject = $('blastSubject').value.trim();
+  const body = $('blastBody').value.trim();
+  if(!subject || !body){ toast('Subject and body required','err'); return; }
+  const sendBtn = $('blastSend');
+  sendBtn.disabled = true;
+  sendBtn.textContent = 'Sending…';
   try {
-    await tw(
-      `/Accounts/${twilioSid()}/Conferences/${encodeURIComponent(confSid)}` +
-      `/Participants/${encodeURIComponent(callSid)}.json`,
-      'POST', { Muted: 'false', Hold: 'false' }
-    );
-  } catch (e) { console.warn('unmute failed', e.message); }
+    const r = await api('send-deal-to-buyers', {method:'POST', body:{
+      buyerIds: blastBuyerIds,
+      dealId: blastDealId,
+      subject,
+      body,
+      sentByProfileId: activeProfileId,
+    }});
+    let msg = `Sent: ${r.sent}`;
+    if(r.failed) msg += ` · Failed: ${r.failed}`;
+    if(r.skipped) msg += ` · Skipped: ${r.skipped}`;
+    toast(msg, r.failed?'err':'ok');
+    $('buyerFormHolder').innerHTML = '';
+    selectedBuyerIds.clear();
+    loadBuyers();
+  } catch(e){
+    toast('Failed: '+e.message, 'err');
+    sendBtn.disabled = false;
+    sendBtn.textContent = 'Try again';
+  }
 }
 
-// Everyone in the room except the rep and the winner gets released.
-async function releaseLosingLegs(room, winnerSid, agentSid) {
-  const confSid = await conferenceSidFor(room);
-  if (!confSid) return;
-  let list;
+// ═══════════════════════════════════════════════════════════════
+// VA RECORDINGS (audio upload — click opens in device player)
+// ═══════════════════════════════════════════════════════════════
+
+async function loadRecordings(propertyId, containerId){
+  const container = document.getElementById(containerId);
+  if(!container) return;
   try {
-    list = await tw(
-      `/Accounts/${twilioSid()}/Conferences/${encodeURIComponent(confSid)}/Participants.json`
-    );
-  } catch (e) { return; }
-  const parts = (list && list.participants) || [];
-  for (const p of parts) {
-    const sid = p.call_sid;
-    if (!sid || sid === winnerSid || (agentSid && sid === agentSid)) continue;
-    await hangupCall(sid);
-  }
+    const j = await api('list-recordings&propertyId='+encodeURIComponent(propertyId));
+    renderRecordings(j.recordings || [], container);
+  } catch(e){ container.innerHTML = ''; } // silent — playback is a bonus, not core
 }
-
-// Looks up who this leg belongs to and speaks a fully merged message.
-async function autoDropVoicemail(callSid) {
-  const { json: rows } = await supa(
-    `/calls?twilio_sid=eq.${encodeURIComponent(callSid)}` +
-    `&select=property_id,profile_id,from_number&limit=1`
-  );
-  const row = Array.isArray(rows) && rows[0];
-  if (!row) return;
-
-  // Prefer the rep's own recorded audio when one exists.
-  let playUrl = null;
-  if (row.profile_id) {
-    try {
-      const { json: profs } = await supa(
-        `/profiles?id=eq.${encodeURIComponent(row.profile_id)}&select=vm_recording_sid`
-      );
-      const pr = Array.isArray(profs) && profs[0];
-      if (pr && pr.vm_recording_sid) playUrl = recordingPlaybackUrl(pr.vm_recording_sid);
-    } catch (e) { /* fall through to TTS */ }
-  }
-  // A recorded file can't name the property, so the AI voice is the
-  // default here unless the rep explicitly prefers their own audio.
-  const preferRecording = (await getAppConfig('vm_prefer_recording')) === '1';
-
-  let inner;
-  if (playUrl && preferRecording) {
-    inner = `<Play>${escapeXml(playUrl)}</Play>`;
-  } else {
-    const voice = vmVoice(await getAppConfig('vm_voice'));
-    const ctx = await vmContext(row.property_id, row.profile_id, { fromNumber: row.from_number });
-    inner = `<Say voice="${escapeXml(voice)}">${renderVmSsml(await vmTemplate(), ctx)}</Say>`;
-  }
-  await dropVmOnLeg(callSid, inner);
-  try {
-    await supa(`/calls?twilio_sid=eq.${encodeURIComponent(callSid)}`, 'PATCH',
-      { vm_dropped: true }, { Prefer: 'return=minimal' });
-  } catch (e) { /* column may not exist yet — non-fatal */ }
+function fmtFileSize(bytes){
+  if(!bytes || bytes < 1024) return (bytes||0) + 'B';
+  if(bytes < 1024*1024) return Math.round(bytes/1024) + 'KB';
+  return (bytes/(1024*1024)).toFixed(1) + 'MB';
 }
-
-// ── Drip processor (called by frontend each page load) ──────
-// Walks active drip_campaigns and sends any message that's due now.
-async function processDueDrips() {
-  const now = new Date();
-  if (!withinSendWindow(now)) {
-    return { processed: 0, skipped: 0, reason: 'outside send window' };
-  }
-  const yourName = await getAppConfig('sms_business_name') || 'me';
-  // Get all active drips
-  const { json: drips } = await supa('/drip_campaigns?status=eq.active&select=*&limit=200');
-  if (!Array.isArray(drips) || !drips.length) return { processed: 0, skipped: 0 };
-
-  let processed = 0, skipped = 0;
-  for (const drip of drips) {
-    try {
-      const template = DRIP_TEMPLATES[drip.kind];
-      if (!template) continue;
-      // Find the deal + lead info
-      const { json: dealRows } = await supa(`/deals?id=eq.${drip.id ? drip.deal_id : drip.deal_id}&select=*`);
-      const deal = dealRows && dealRows[0];
-      if (!deal || !deal.property_id) { skipped++; continue; }
-      const { json: leadRows } = await supa(`/leads?property_id=eq.${encodeURIComponent(deal.property_id)}&select=sms_consent,sms_cell`);
-      const lead = leadRows && leadRows[0];
-      if (!lead || !lead.sms_cell || (lead.sms_consent !== 'verbal' && lead.sms_consent !== 'written')) {
-        skipped++; continue;
-      }
-      if (await isOptedOut(lead.sms_cell)) { skipped++; continue; }
-
-      // Which step is next? Look at message log.
-      const { json: alreadySent } = await supa(`/messages?campaign_id=eq.${drip.id}&direction=eq.outbound&select=step_index,status&order=step_index.asc`);
-      const sentSteps = new Set((alreadySent || []).filter(m => m.status !== 'failed').map(m => m.step_index));
-      // Find first un-sent step whose dayOffset is due
-      const start = new Date(drip.started_at || drip.trigger_date);
-      let didSendOne = false;
-      for (let i = 0; i < template.steps.length; i++) {
-        if (sentSteps.has(i)) continue;
-        const step = template.steps[i];
-        const dueAt = new Date(start.getTime() + step.dayOffset * 86400000);
-        if (dueAt > now) break; // not due yet
-        // Send it
-        const body = fillTemplate(step.body, {
-          firstName: firstName(deal.owners),
-          address: shortAddress(deal.property_address),
-          yourName,
-        });
-        const result = await sendOneSms(lead.sms_cell, body, deal.id, deal.property_id, drip.id, i);
-        if (result.ok) { processed++; didSendOne = true; }
-        else if (result.skipped && result.reason === 'opted_out') {
-          await supa(`/drip_campaigns?id=eq.${drip.id}`, 'PATCH', { status: 'opted_out', paused_reason: 'opted_out' }, { Prefer: 'return=minimal' });
-          break;
-        }
-        else if (result.error) { skipped++; break; }
-        // Only send one step per drip per processor run to avoid burst
-        break;
-      }
-      // If all steps are done, mark complete
-      if (sentSteps.size + (didSendOne ? 1 : 0) >= template.steps.length) {
-        await supa(`/drip_campaigns?id=eq.${drip.id}`, 'PATCH', { status: 'completed' }, { Prefer: 'return=minimal' });
-      }
-    } catch (e) {
-      console.warn('drip step failed', drip.id, e.message);
-      skipped++;
-    }
-  }
-  return { processed, skipped };
+function fmtRecDate(d){
+  if(!d) return '';
+  const dt = new Date(d);
+  return dt.toLocaleDateString(undefined,{month:'short',day:'numeric'}) + ' ' + dt.toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});
 }
-
-// ════════════════════════════════════════════════════════════════
-// EMAIL (Resend) — for buyer-list blasts
-// ════════════════════════════════════════════════════════════════
-
-async function sendEmail({ to, subject, html, text, replyTo }) {
-  const apiKey = process.env.RESEND_API_KEY;
-  if (!apiKey) return { error: 'RESEND_API_KEY not set in Netlify env vars' };
-  const from = process.env.RESEND_FROM_EMAIL;
-  if (!from) return { error: 'RESEND_FROM_EMAIL not set (e.g. "Your Name <you@yourdomain.com>")' };
-
-  const r = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: { 'Authorization': 'Bearer ' + apiKey, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      from,
-      to: Array.isArray(to) ? to : [to],
-      subject: subject || '(no subject)',
-      html: html || (text ? text.replace(/\n/g, '<br>') : ''),
-      text: text || (html ? html.replace(/<[^>]+>/g, '') : ''),
-      reply_to: replyTo || undefined,
-    }),
+// Listen only: tap a row to play. No upload, no delete.
+function renderRecordings(recordings, container){
+  container.innerHTML = '';
+  if(!recordings.length) return;
+  const list = el('<div class="rec-list"></div>');
+  recordings.forEach(r => {
+    const daysLeft = Math.max(0, Math.ceil((new Date(r.expires_at) - Date.now())/86400000));
+    const expClass = daysLeft <= 5 ? 'expires' : '';
+    list.appendChild(el(`<a href="${escapeHtml(r.playback_url||'#')}" target="_blank" rel="noopener" class="rec-link">
+      <span class="icon">🎙</span>
+      <span class="info">
+        <span class="name">${escapeHtml(r.filename || 'recording')}</span>
+        <span class="meta">${fmtRecDate(r.uploaded_at)} · ${fmtFileSize(r.size_bytes)} · <span class="${expClass}">${daysLeft}d left</span></span>
+      </span>
+      <span class="icon">▶</span>
+    </a>`));
   });
-  const j = await r.json();
-  if (!r.ok) return { error: j.message || ('HTTP ' + r.status) };
-  return { ok: true, id: j.id };
+  container.appendChild(list);
 }
 
-// ════════════════════════════════════════════════════════════════
-// SPACEMAIL (branded email — SMTP send + IMAP inbox)
-// Credentials come ONLY from Netlify env vars, never hardcoded:
-//   SPACEMAIL_USER = kyleg@winwinproperties.net
-//   SPACEMAIL_PASS = <mailbox password>   (or app password if 2FA on)
-//   SPACEMAIL_FROM_NAME (optional display name)
-// ════════════════════════════════════════════════════════════════
-
-function spacemailReady() {
-  return !!(process.env.SPACEMAIL_USER && process.env.SPACEMAIL_PASS);
-}
-function spacemailFrom() {
-  const name = process.env.SPACEMAIL_FROM_NAME || 'Win Win Property Solutions NY';
-  return `${name} <${process.env.SPACEMAIL_USER}>`;
-}
-async function sendViaSpacemail({ to, subject, html, text, replyTo, cc, attachments }) {
-  if (!spacemailReady()) return { error: 'SPACEMAIL_USER / SPACEMAIL_PASS not set in Netlify env vars' };
-  const nodemailer = require('nodemailer');
-  const transporter = nodemailer.createTransport({
-    host: 'mail.spacemail.com',
-    port: 465,
-    secure: true,
-    auth: { user: process.env.SPACEMAIL_USER, pass: process.env.SPACEMAIL_PASS },
+// Tag website leads on the dialer cards
+const _renderPageBeforeWeb = renderPage;
+renderPage = function(){
+  _renderPageBeforeWeb();
+  document.querySelectorAll('.card').forEach(card => {
+    const id = card.dataset.id;
+    if(!id || !webLeadIndex[id]) return;
+    if(card.querySelector('.web-lead-tag')) return;
+    const owners = card.querySelector('.owners');
+    if(!owners) return;
+    const src = webLeadIndex[id].source || 'Website';
+    const isImn = /imn/i.test(src);
+    // IMN leads arrive with the built-in red highlight; tag says CALL ASAP
+    owners.insertAdjacentHTML('beforeend',
+      ' <span class="web-lead-tag" style="display:inline-block;background:#ef4444;color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;margin-left:6px;vertical-align:middle;letter-spacing:.4px">' +
+      (isImn ? '🔥 IMN · CALL ASAP' : '🌐 ' + escapeHtml(src.toUpperCase())) + '</span>');
   });
-  const info = await transporter.sendMail({
-    from: spacemailFrom(),
-    to: Array.isArray(to) ? to.join(', ') : to,
-    cc: cc || undefined,
-    replyTo: replyTo || undefined,
-    subject: subject || '(no subject)',
-    text: text || (html ? html.replace(/<[^>]+>/g, ' ') : ''),
-    html: html || (text ? text.replace(/\n/g, '<br>') : ''),
-    attachments: Array.isArray(attachments) && attachments.length ? attachments : undefined,
-  });
-  return { ok: true, id: info.messageId };
-}
-
-function spacemailImapClient() {
-  const { ImapFlow } = require('imapflow');
-  return new ImapFlow({
-    host: 'mail.spacemail.com',
-    port: 993,
-    secure: true,
-    auth: { user: process.env.SPACEMAIL_USER, pass: process.env.SPACEMAIL_PASS },
-    logger: false,
-  });
-}
-
-// ════════════════════════════════════════════════════════════════
-// SUPABASE STORAGE (audio recordings)
-// ════════════════════════════════════════════════════════════════
-
-async function uploadToStorage(bucket, path, base64Data, mimeType) {
-  const url = `${process.env.SUPABASE_URL}/storage/v1/object/${bucket}/${encodeURIComponent(path)}`;
-  const buf = Buffer.from(base64Data, 'base64');
-  const r = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Authorization': 'Bearer ' + process.env.SUPABASE_SERVICE_ROLE_KEY,
-      'Content-Type': mimeType || 'application/octet-stream',
-      'x-upsert': 'true',
-    },
-    body: buf,
-  });
-  if (!r.ok) {
-    const txt = await r.text();
-    return { error: 'Upload failed: ' + r.status + ' ' + txt };
-  }
-  return { ok: true, path };
-}
-
-async function signedUrl(bucket, path, expiresInSec = 3600) {
-  const url = `${process.env.SUPABASE_URL}/storage/v1/object/sign/${bucket}/${encodeURIComponent(path)}`;
-  const r = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Authorization': 'Bearer ' + process.env.SUPABASE_SERVICE_ROLE_KEY,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ expiresIn: expiresInSec }),
-  });
-  if (!r.ok) return null;
-  const j = await r.json();
-  if (!j.signedURL && !j.signedUrl) return null;
-  const rel = j.signedURL || j.signedUrl;
-  return process.env.SUPABASE_URL + '/storage/v1' + rel;
-}
-
-async function deleteFromStorage(bucket, paths) {
-  if (!Array.isArray(paths)) paths = [paths];
-  const url = `${process.env.SUPABASE_URL}/storage/v1/object/${bucket}`;
-  const r = await fetch(url, {
-    method: 'DELETE',
-    headers: {
-      'Authorization': 'Bearer ' + process.env.SUPABASE_SERVICE_ROLE_KEY,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ prefixes: paths }),
-  });
-  return r.ok;
-}
-
-async function cleanupExpiredRecordings() {
-  const now = new Date().toISOString();
-  const { json: expired } = await supa(`/va_recordings?select=id,storage_path&deleted_at=is.null&expires_at=lt.${encodeURIComponent(now)}&limit=100`);
-  if (!Array.isArray(expired) || !expired.length) return { deleted: 0 };
-  let deleted = 0;
-  for (const rec of expired) {
-    try {
-      await deleteFromStorage('va-recordings', rec.storage_path);
-      await supa(`/va_recordings?id=eq.${rec.id}`, 'PATCH', { deleted_at: now }, { Prefer: 'return=minimal' });
-      deleted++;
-    } catch (e) { /* skip, try next time */ }
-  }
-  return { deleted };
-}
-
-// Bumped whenever this file changes in a way the frontend depends on.
-// The Settings screen reads it, so a half-finished deploy is visible
-// instead of showing up later as a mystery "Unknown action" error.
-const API_VERSION = '2026-10-13-calllist2';
-
-// ── Main handler ──────────────────────────────────────────────
-// ════════════════════════════════════════════════════════════════
-// COMPS AGENT — PropStream lookups run by a Claude routine
-// ════════════════════════════════════════════════════════════════
-// The Comps button calls `request-comps`. That saves a row in
-// comp_requests and fires a Claude Code routine through Anthropic's
-// routine API. The routine drives PropStream in the owner's own
-// signed-in Chrome, then posts the results back to `comps-result`
-// using the one-time token stored on the row (no app password needed).
-//
-// Netlify env vars:
-//   COMPS_ROUTINE_ID     trig_... (from claude.ai/code/routines → API trigger)
-//   COMPS_ROUTINE_TOKEN  sk-ant-oat01-... (shown once when you generate it)
-const COMPS_DEFAULT_FILTERS = {
-  radius_miles: 0.5,
-  months_back: 6,
-  sqft_pct: 20,
-  beds_plus_minus: 1,
-  baths_plus_minus: 1,
-  year_built_plus_minus: 15,
-  same_property_type: true,
-  sold_only: true,
-  max_comps: 10,
-  notes: '',
 };
 
-function cleanCompFilters(f) {
-  const d = COMPS_DEFAULT_FILTERS, x = f || {};
-  const num = (v, def, lo, hi) => {
-    const n = parseFloat(v);
-    return Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : def;
-  };
-  return {
-    radius_miles:          num(x.radius_miles, d.radius_miles, 0.1, 10),
-    months_back:           num(x.months_back, d.months_back, 1, 36),
-    sqft_pct:              num(x.sqft_pct, d.sqft_pct, 0, 100),
-    beds_plus_minus:       num(x.beds_plus_minus, d.beds_plus_minus, 0, 5),
-    baths_plus_minus:      num(x.baths_plus_minus, d.baths_plus_minus, 0, 5),
-    year_built_plus_minus: num(x.year_built_plus_minus, d.year_built_plus_minus, 0, 100),
-    same_property_type:    x.same_property_type !== false,
-    sold_only:             x.sold_only !== false,
-    max_comps:             Math.round(num(x.max_comps, d.max_comps, 1, 25)),
-    notes:                 String(x.notes || '').slice(0, 500),
-  };
+
+// ═══════════════════════════════════════════════════════════════
+// CALL RECORDING
+// Records the team's own outbound calls so you can hear where a
+// call went wrong. The seller hears a disclosure before the two
+// legs bridge — see the note in Settings for why it plays on
+// every call rather than branching by state.
+// ═══════════════════════════════════════════════════════════════
+
+const REC_CRITERIA = [
+  ['gotLotZoning',      'Lot / zoning'],
+  ['surfacedMotivation','Motivation'],
+  ['namedANumber',      'Named a number'],
+  ['handledRebuttal',   'Handled rebuttal'],
+  ['setNextStep',       'Set next step'],
+];
+const REC_VOICE_DEFAULT = 'Polly.Ruth-Generative';
+const REC_TEXT_DEFAULT  = 'Just so you know, this call may be recorded for quality purposes.';
+
+// ── REC pill in the live-call drawer ───────────────────────────
+let recPillSid = null, recPillPaused = false;
+
+function recPillShow(sid, recordingOn){
+  const pill = $('recPill');
+  if(!pill) return;
+  recPillSid = sid;
+  recPillPaused = false;
+  pill.classList.remove('paused');
+  pill.innerHTML = '<span class="rec-dot"></span>REC';
+  // Backend tells us whether recording is actually on for this call
+  pill.classList.toggle('hide', !recordingOn);
+}
+function recPillReset(){
+  recPillSid = null;
+  recPillPaused = false;
+  const pill = $('recPill');
+  if(!pill) return;
+  pill.classList.add('hide');
+  pill.classList.remove('paused');
+  pill.innerHTML = '<span class="rec-dot"></span>REC';
+}
+$('recPill')?.addEventListener('click', async () => {
+  if(!recPillSid){ toast('No live call to pause','err'); return; }
+  const pill = $('recPill');
+  pill.disabled = true;
+  try {
+    await api(recPillPaused ? 'resume-recording' : 'pause-recording',
+      {method:'POST', body:{ callSid: recPillSid }});
+    recPillPaused = !recPillPaused;
+    pill.classList.toggle('paused', recPillPaused);
+    pill.innerHTML = '<span class="rec-dot"></span>' + (recPillPaused ? 'PAUSED' : 'REC');
+    toast(recPillPaused ? 'Recording paused' : 'Recording resumed','ok');
+  } catch(e){ toast(e.message,'err'); }
+  pill.disabled = false;
+});
+
+// ── Review queue ───────────────────────────────────────────────
+function recMmSs(sec){
+  sec = parseInt(sec || 0, 10);
+  return Math.floor(sec/60) + ':' + String(sec % 60).padStart(2,'0');
+}
+function recWhen(iso){
+  if(!iso) return '';
+  const d = new Date(iso);
+  return d.toLocaleDateString([], {month:'short', day:'numeric'}) + ' ' +
+         d.toLocaleTimeString([], {hour:'numeric', minute:'2-digit'});
 }
 
-async function fireCompsRoutine(text) {
-  const id = process.env.COMPS_ROUTINE_ID, token = process.env.COMPS_ROUTINE_TOKEN;
-  if (!id || !token) throw new Error('Comps agent not set up: add COMPS_ROUTINE_ID and COMPS_ROUTINE_TOKEN in Netlify');
-  const r = await fetch(`https://api.anthropic.com/v1/claude_code/routines/${encodeURIComponent(id)}/fire`, {
-    method: 'POST',
-    headers: {
-      Authorization: 'Bearer ' + token,
-      'anthropic-version': '2023-06-01',
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ text }),
+async function loadCallRecordings(){
+  const list = $('recList');
+  if(!list) return;
+  list.innerHTML = '<div class="list-loading">Loading…</div>';
+  try {
+    const days   = $('recRange').value;
+    const minDur = $('recMinDur').value;
+    const j = await api(`list-call-recordings&days=${days}&minDuration=${minDur}`);
+    renderCallRecordings(j.recordings || []);
+  } catch(e){
+    list.innerHTML = '<div class="empty" style="color:#b91c1c">'+escapeHtml(e.message)+'</div>';
+    $('recSummary').textContent = '—';
+  }
+}
+
+function renderCallRecordings(rows){
+  const list = $('recList');
+  const done = rows.filter(r => r.review).length;
+  $('recSummary').innerHTML = rows.length
+    ? `<b>${rows.length}</b> recording${rows.length===1?'':'s'} · <b>${done}</b> reviewed · <b>${rows.length-done}</b> waiting`
+    : '';
+  if(!rows.length){
+    list.innerHTML = '<div class="empty">No recordings in this window.<br><span style="font-size:11px">Short calls are filtered out — switch to “Everything” to see them all.</span></div>';
+    return;
+  }
+  list.innerHTML = '';
+  rows.forEach(r => {
+    const rev = r.review || {};
+    const row = document.createElement('div');
+    row.className = 'rv-row' + (r.review ? ' reviewed' : '');
+    row.innerHTML = `
+      <div class="rv-head">
+        <div class="rv-who">
+          <div class="nm">${escapeHtml(r.owners || fmtPhone(r.to_number) || '(unknown)')}</div>
+          <div class="mt">${escapeHtml(recWhen(r.started_at))}${r.property_address ? ' · '+escapeHtml(r.property_address) : ''}</div>
+        </div>
+        <span class="rv-dur">${recMmSs(r.recording_duration || r.duration)}</span>
+      </div>
+      ${r.playbackUrl
+        ? `<audio controls preload="none" src="${escapeHtml(r.playbackUrl)}"></audio>`
+        : '<div class="muted" style="font-size:12px;margin-bottom:8px">Audio unavailable — it may have passed the 30-day window.</div>'}
+      <div class="rv-score">
+        ${REC_CRITERIA.map(([k,label]) => {
+          const col = k.replace(/[A-Z]/g, m => '_' + m.toLowerCase());
+          return `<span class="rv-chk${rev[col] ? ' on' : ''}" data-k="${k}">${escapeHtml(label)}</span>`;
+        }).join('')}
+      </div>
+      <textarea class="rv-note" placeholder="What would you do differently?">${escapeHtml(rev.notes || '')}</textarea>
+      <button class="rv-save">Save review</button>`;
+
+    row.querySelectorAll('.rv-chk').forEach(c =>
+      c.addEventListener('click', () => c.classList.toggle('on')));
+
+    row.querySelector('.rv-save').addEventListener('click', async ev => {
+      const btn = ev.currentTarget;
+      btn.disabled = true; btn.textContent = 'Saving…';
+      const body = {
+        callId: r.id,
+        profileId: activeProfileId || null,
+        notes: row.querySelector('.rv-note').value.trim(),
+      };
+      row.querySelectorAll('.rv-chk').forEach(c => { body[c.dataset.k] = c.classList.contains('on'); });
+      try {
+        await api('save-call-review', {method:'POST', body});
+        row.classList.add('reviewed');
+        btn.textContent = 'Saved ✓';
+        setTimeout(() => { btn.disabled = false; btn.textContent = 'Save review'; }, 2000);
+      } catch(err){
+        toast('Could not save: '+err.message,'err');
+        btn.disabled = false; btn.textContent = 'Save review';
+      }
+    });
+    list.appendChild(row);
   });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) {
-    const m = (j && j.error && j.error.message) || `HTTP ${r.status}`;
-    const e = new Error('Could not start the comps agent: ' + m);
-    e.code = r.status === 429 ? 429 : 502;
-    throw e;
-  }
-  return j; // { claude_code_session_id, claude_code_session_url }
 }
 
-// Called by the agent, not the browser app. Authenticated by the
-// request id + one-time token that only the agent's job text contains.
-async function handleCompsResult(event) {
-  let b = {};
-  try { b = JSON.parse(event.body || '{}'); } catch { return err('Bad JSON'); }
-  const id = String(b.id || ''), token = String(b.token || '');
-  if (!id || !token) return err('id and token required', 401);
-  const { json } = await supa(`/comp_requests?id=eq.${encodeURIComponent(id)}&select=id,token,status&limit=1`);
-  const row = Array.isArray(json) && json[0];
-  if (!row || !row.token || row.token !== token) return err('Unauthorized', 401);
-  if (row.status === 'done') return err('This request is already finished', 409);
+$('recRefresh')?.addEventListener('click', loadCallRecordings);
+$('recRange')?.addEventListener('change', loadCallRecordings);
+$('recMinDur')?.addEventListener('change', loadCallRecordings);
 
-  const status = ['running', 'done', 'error'].includes(b.status) ? b.status : 'done';
-  const patch = { status, updated_at: new Date().toISOString() };
-  if (b.progress != null) patch.progress = String(b.progress).slice(0, 300);
-  if (status === 'done') {
-    const comps = Array.isArray(b.comps) ? b.comps.slice(0, 25) : [];
-    patch.comps = comps.map(c => ({
-      address:    String(c.address || '').slice(0, 200),
-      sold_date:  String(c.sold_date || '').slice(0, 20),
-      sold_price: Number(c.sold_price) || null,
-      beds:       c.beds == null ? null : Number(c.beds),
-      baths:      c.baths == null ? null : Number(c.baths),
-      sqft:       Number(c.sqft) || null,
-      year_built: Number(c.year_built) || null,
-      lot_sqft:   Number(c.lot_sqft) || null,
-      distance_miles: c.distance_miles == null ? null : Number(c.distance_miles),
-      property_type:  String(c.property_type || '').slice(0, 60),
-    }));
-    patch.summary = b.summary && typeof b.summary === 'object' ? b.summary : {};
-    patch.subject = b.subject && typeof b.subject === 'object' ? b.subject : {};
-    patch.finished_at = patch.updated_at;
-    patch.token = null; // one-time: burn it
-  }
-  if (status === 'error') {
-    patch.error = String(b.error || 'Unknown error').slice(0, 500);
-    patch.finished_at = patch.updated_at;
-    patch.token = null;
-  }
-  await supa(`/comp_requests?id=eq.${encodeURIComponent(id)}`, 'PATCH', patch, { Prefer: 'return=minimal' });
-  return ok({ ok: true });
+// ── Recording settings (team-wide, stored server-side) ─────────
+async function loadRecConfig(){
+  try {
+    const j = await api('get-recording-config');
+    const c = j.config || {};
+    $('recEnabled').checked = c.enabled !== false;
+    $('recVoice').value     = c.voice || REC_VOICE_DEFAULT;
+    $('recMode').value      = c.disclosure_mode || 'ai';
+    $('recAudioUrl').value  = c.disclosure_audio_url || '';
+    $('recText').value      = c.disclosure_text || REC_TEXT_DEFAULT;
+    $('recRetention').value = c.retention_days || 30;
+  } catch(e){ /* silent — settings still usable */ }
+}
+$('recSave')?.addEventListener('click', async () => {
+  const btn = $('recSave');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  try {
+    await api('set-recording-config', {method:'POST', body:{
+      enabled:            $('recEnabled').checked,
+      voice:              $('recVoice').value,
+      disclosureMode:     $('recMode').value,
+      disclosureAudioUrl: $('recAudioUrl').value.trim(),
+      disclosureText:     $('recText').value.trim(),
+      retentionDays:      $('recRetention').value,
+    }});
+    toast('Recording settings saved','ok');
+  } catch(e){ toast('Could not save: '+e.message,'err'); }
+  btn.disabled = false; btn.textContent = 'Save recording settings';
+});
+
+// ── 30-day purge ───────────────────────────────────────────────
+// Runs once per app load. With three people dialing six days a week
+// that fires far more often than a daily job needs to — so there's
+// no netlify.toml change and no scheduled function to maintain.
+async function tickRecordingPurge(){
+  try { await api('cleanup-call-recordings', {method:'POST', body:{}}); } catch {}
 }
 
-// ════════════════════════════════════════════════════════════════
-// AGENT CALL LIST — the ReplySmart daily check posts the sellers who
-// should get a call. New sellers become leads; sellers already in the
-// app get a dated note on their dialer card and are marked not-called
-// so they show up in the dialer again.
-// Netlify env var: AGENT_KEY (a long random string; the agent sends it
-// in the X-Agent-Key header). This key can ONLY add to the call list.
-// ════════════════════════════════════════════════════════════════
-const AGENT_CALL_LIST_NAME = 'ReplySmart Call List';
-
-function agentKeyOk(event) {
-  const want = process.env.AGENT_KEY || '';
-  const got  = event.headers['x-agent-key'] || event.headers['X-Agent-Key'] || '';
-  if (!want || want.length < 20 || !got) return false;
-  const a = Buffer.from(String(got)), b = Buffer.from(want);
-  return a.length === b.length && authCrypto.timingSafeEqual(a, b);
+// ── Boot ────────────────────────────────────────────────────────
+async function boot(){
+  // Verify password is still valid
+  badge('sync','Connecting…');
+  try {
+    const j = await api('ping');
+    currentUser = j.user || null;
+  }
+  catch(e){
+    if(e.status === 401){ password=''; localStorage.removeItem(LS.pwd); showLogin(); return; }
+    badge('err','Offline'); toast('Backend unreachable — check Settings','err');
+  }
+  await loadProfiles();
+  applyUser();
+  // A caller is already identified by their password. Only the owner —
+  // or an older build with no identity — still gets asked who's calling.
+  if(currentUser && currentUser.role === 'caller'){
+    updateProfileBadge();
+  } else if(!activeProfileId || !allProfiles.find(p => p.id === activeProfileId)){
+    showProfilePicker();
+  } else {
+    updateProfileBadge();
+  }
+  refreshCallerStrip();
+  $('hideOthersAssigned').checked = hideOthersAssigned;
+  populateListSelects();
+  await Promise.all([
+    loadProperties(),
+    loadOwnedNumbers().catch(()=>{}),
+    refreshDealsIndex(),
+  ]);
+  loadWebLeads(true);
+  // Kick the drip processor on load + load inbox badge count
+  tickDrips();
+  tickRecordingPurge();
+  api('list-inbox').then(j => {
+    const ct = (j.threads || []).length;
+    $('inboxBadge').textContent = ct ? '· '+ct : '';
+  }).catch(()=>{});
+  api('list-buyers').then(j => {
+    allBuyers = j.buyers || [];
+    const ct = allBuyers.filter(b => b.active).length;
+    $('buyersBadge').textContent = ct ? '· '+ct : '';
+  }).catch(()=>{});
 }
 
-function toE164US(raw) {
-  const d = String(raw || '').replace(/\D/g, '');
-  if (d.length === 10) return '+1' + d;
-  if (d.length === 11 && d[0] === '1') return '+' + d;
+// ═══════════════════════════════════════════════════════════════
+// DRIVING FOR DOLLARS
+// ═══════════════════════════════════════════════════════════════
+const D4D_TAGS = ['Vacant','Boarded up','Tall grass','Roof damage','Mail piling','Broken windows','Trash / debris','Fire damage','Code violation','For sale by owner'];
+let d4dMap = null, d4dLeads = [], d4dMarkers = {}, d4dLoaded = false;
+let d4dBaseStreet = null, d4dBaseSat = null, d4dSatOn = false;
+let d4dWatchId = null, d4dFollowOn = false, d4dMeMarker = null;
+let d4dDraft = null, d4dTempMarker = null;
+
+function loadLeaflet(){
+  return new Promise((res, rej) => {
+    if(window.L) return res();
+    const css = document.createElement('link');
+    css.rel = 'stylesheet';
+    css.href = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css';
+    document.head.appendChild(css);
+    const s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js';
+    s.onload = () => res();
+    s.onerror = () => rej(new Error('Map failed to load — check your connection'));
+    document.head.appendChild(s);
+  });
+}
+
+async function openD4D(){
+  try { await loadLeaflet(); }
+  catch(e){ toast(e.message, 'err'); return; }
+  if(!d4dMap) initD4DMap();
+  setTimeout(() => { if(d4dMap) d4dMap.invalidateSize(); }, 80);
+  refreshD4D();
+}
+
+function initD4DMap(){
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem('d4d_center') || 'null'); } catch {}
+  d4dMap = L.map('d4dMap', { zoomControl: true }).setView(saved || [40.6576, -73.5832], saved ? 17 : 13);
+  d4dBaseStreet = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19, attribution: '© OpenStreetMap contributors'
+  });
+  d4dBaseSat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+    maxZoom: 19, attribution: 'Imagery © Esri'
+  });
+  d4dBaseStreet.addTo(d4dMap);
+  d4dMap.on('click', e => onD4DMapTap(e.latlng.lat, e.latlng.lng));
+  d4dMap.on('moveend', () => {
+    const c = d4dMap.getCenter();
+    localStorage.setItem('d4d_center', JSON.stringify([c.lat, c.lng]));
+  });
+  d4dMap.on('dragstart', () => { if(d4dFollowOn) setD4DFollow(false); });
+  if(!saved && navigator.geolocation){
+    navigator.geolocation.getCurrentPosition(
+      p => d4dMap.setView([p.coords.latitude, p.coords.longitude], 17),
+      () => {}, { enableHighAccuracy: true, timeout: 8000 });
+  }
+}
+
+async function refreshD4D(){
+  try {
+    const j = await api('d4d-list');
+    d4dLeads = j.leads || [];
+    d4dLoaded = true;
+    renderD4DMarkers();
+    renderD4DList();
+    const fresh = d4dLeads.filter(l => l.status === 'new').length;
+    $('d4dCount').textContent = d4dLeads.length ? (d4dLeads.length + ' pins · ' + fresh + ' new') : '';
+    $('d4dBadge').textContent = fresh ? '· ' + fresh : '';
+  } catch(e){ toast('D4D load failed: ' + e.message, 'err'); }
+}
+
+function d4dStatusColor(st){
+  if(st === 'in_dialer') return '#15803d';
+  if(st === 'skip_traced') return '#1d4ed8';
+  return '#96751A';
+}
+function d4dStatusLabel(st){
+  if(st === 'in_dialer') return 'In Dialer';
+  if(st === 'skip_traced') return 'Skip traced';
+  return 'New';
+}
+
+function renderD4DMarkers(){
+  if(!d4dMap) return;
+  Object.values(d4dMarkers).forEach(m => d4dMap.removeLayer(m));
+  d4dMarkers = {};
+  d4dLeads.forEach(l => {
+    if(l.lat == null || l.lng == null) return;
+    const m = L.circleMarker([l.lat, l.lng], {
+      radius: 9, weight: 2, color: '#fff',
+      fillColor: d4dStatusColor(l.status), fillOpacity: 0.95,
+    }).addTo(d4dMap);
+    m.on('click', ev => { L.DomEvent.stopPropagation(ev); openD4DSheet(l); });
+    d4dMarkers[l.id] = m;
+  });
+}
+
+function renderD4DList(){
+  const w = $('d4dListWrap');
+  if(!d4dLeads.length){
+    w.innerHTML = '<div class="empty">No D4D leads yet. Switch to the map and tap a house to add your first one.</div>';
+    return;
+  }
+  w.innerHTML = d4dLeads.map(l => `
+    <div class="d4d-card" data-d4d="${escapeHtml(l.id)}">
+      ${l.photo_url ? '<img src="' + escapeHtml(l.photo_url) + '" alt="">' : ''}
+      <div class="meta">
+        <div class="addr">${escapeHtml(l.address || '(no address)')}</div>
+        ${l.tags ? '<div class="tags">' + escapeHtml(l.tags) + '</div>' : ''}
+        ${l.notes ? '<div class="st">' + escapeHtml(l.notes) + '</div>' : ''}
+        <div class="st" style="color:${d4dStatusColor(l.status)}">● ${d4dStatusLabel(l.status)} · ${new Date(l.created_at).toLocaleDateString()}</div>
+      </div>
+      <div class="acts">
+        <button class="btn-ghost" data-d4dact="open">✏️ Open</button>
+        ${l.lat != null ? '<button class="btn-ghost" data-d4dact="map">🗺 Map</button>' : ''}
+        ${l.status !== 'in_dialer' ? '<button class="btn-ghost" data-d4dact="dialer">➡ Dialer</button>' : ''}
+      </div>
+    </div>`).join('');
+}
+
+$('d4dListWrap').addEventListener('click', e => {
+  const btn = e.target.closest('[data-d4dact]');
+  if(!btn) return;
+  const card = e.target.closest('[data-d4d]');
+  const lead = d4dLeads.find(l => String(l.id) === card.dataset.d4d);
+  if(!lead) return;
+  const act = btn.dataset.d4dact;
+  if(act === 'open') openD4DSheet(lead);
+  if(act === 'map'){ d4dShowMode('map'); d4dMap.setView([lead.lat, lead.lng], 18); }
+  if(act === 'dialer') d4dSendToDialer(lead.id, btn);
+});
+
+// ── Map / List mode ────────────────────────────────────────────
+function d4dShowMode(mode){
+  const mapOn = mode === 'map';
+  $('d4dMapWrap').classList.toggle('hide', !mapOn);
+  $('d4dListWrap').classList.toggle('hide', mapOn);
+  $('d4dModeMap').classList.toggle('on', mapOn);
+  $('d4dModeMap').classList.toggle('btn-primary', mapOn);
+  $('d4dModeMap').classList.toggle('btn-ghost', !mapOn);
+  $('d4dModeList').classList.toggle('on', !mapOn);
+  $('d4dModeList').classList.toggle('btn-primary', !mapOn);
+  $('d4dModeList').classList.toggle('btn-ghost', mapOn);
+  if(mapOn) setTimeout(() => { if(d4dMap) d4dMap.invalidateSize(); }, 80);
+}
+$('d4dModeMap').addEventListener('click', () => d4dShowMode('map'));
+$('d4dModeList').addEventListener('click', () => d4dShowMode('list'));
+
+// ── Satellite toggle ───────────────────────────────────────────
+$('d4dSatBtn').addEventListener('click', () => {
+  if(!d4dMap) return;
+  d4dSatOn = !d4dSatOn;
+  $('d4dSatBtn').classList.toggle('on', d4dSatOn);
+  if(d4dSatOn){ d4dMap.removeLayer(d4dBaseStreet); d4dBaseSat.addTo(d4dMap); }
+  else { d4dMap.removeLayer(d4dBaseSat); d4dBaseStreet.addTo(d4dMap); }
+});
+
+// ── GPS follow ─────────────────────────────────────────────────
+function setD4DFollow(on){
+  d4dFollowOn = on;
+  $('d4dFollowBtn').classList.toggle('on', on);
+  if(on){
+    if(!navigator.geolocation){ toast('Location not available on this device', 'err'); d4dFollowOn = false; $('d4dFollowBtn').classList.remove('on'); return; }
+    d4dWatchId = navigator.geolocation.watchPosition(p => {
+      const ll = [p.coords.latitude, p.coords.longitude];
+      if(!d4dMeMarker){
+        d4dMeMarker = L.circleMarker(ll, { radius: 7, weight: 2, color: '#fff', fillColor: '#2563eb', fillOpacity: 1 }).addTo(d4dMap);
+      } else d4dMeMarker.setLatLng(ll);
+      if(d4dFollowOn) d4dMap.panTo(ll);
+    }, err => {
+      toast('Location error: ' + err.message, 'err');
+      setD4DFollow(false);
+    }, { enableHighAccuracy: true, maximumAge: 3000, timeout: 15000 });
+  } else stopD4DFollow(true);
+}
+function stopD4DFollow(keepMarker){
+  d4dFollowOn = false;
+  const b = $('d4dFollowBtn'); if(b) b.classList.remove('on');
+  if(d4dWatchId != null){ navigator.geolocation.clearWatch(d4dWatchId); d4dWatchId = null; }
+  if(!keepMarker && d4dMeMarker && d4dMap){ d4dMap.removeLayer(d4dMeMarker); d4dMeMarker = null; }
+}
+$('d4dFollowBtn').addEventListener('click', () => setD4DFollow(!d4dFollowOn));
+
+$('d4dPinHereBtn').addEventListener('click', () => {
+  if(!navigator.geolocation){ toast('Location not available', 'err'); return; }
+  navigator.geolocation.getCurrentPosition(
+    p => { d4dMap.setView([p.coords.latitude, p.coords.longitude], 18); onD4DMapTap(p.coords.latitude, p.coords.longitude); },
+    err => toast('Location error: ' + err.message, 'err'),
+    { enableHighAccuracy: true, timeout: 10000 });
+});
+
+// ── Reverse geocoding (OpenStreetMap Nominatim, free) ──────────
+async function d4dReverseGeocode(lat, lng){
+  const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`);
+  if(!r.ok) throw new Error('Address lookup failed');
+  const j = await r.json();
+  const a = j.address || {};
+  const line1 = [a.house_number, a.road].filter(Boolean).join(' ');
+  const cityish = a.city || a.town || a.village || a.hamlet || a.suburb || '';
+  const tail = [a.state, a.postcode].filter(Boolean).join(' ');
+  return [line1, cityish, tail].filter(Boolean).join(', ') || (j.display_name || '');
+}
+
+// ── Add / edit sheet ───────────────────────────────────────────
+function d4dRenderTagRow(selected){
+  const sel = new Set(selected);
+  $('d4dTagRow').innerHTML = D4D_TAGS.map(t =>
+    `<span class="d4d-tag${sel.has(t) ? ' on' : ''}" data-tag="${escapeHtml(t)}">${escapeHtml(t)}</span>`).join('');
+}
+$('d4dTagRow').addEventListener('click', e => {
+  const chip = e.target.closest('.d4d-tag');
+  if(chip) chip.classList.toggle('on');
+});
+
+async function onD4DMapTap(lat, lng){
+  d4dDraft = { id: null, lat, lng, photoBase64: '' };
+  if(d4dTempMarker) d4dMap.removeLayer(d4dTempMarker);
+  d4dTempMarker = L.circleMarker([lat, lng], { radius: 9, weight: 2, color: '#fff', fillColor: '#dc2626', fillOpacity: .95 }).addTo(d4dMap);
+  $('d4dSheetTitle').textContent = 'Add to D4D list';
+  $('d4dAddr').value = 'Looking up address…';
+  $('d4dNotes').value = '';
+  d4dRenderTagRow([]);
+  d4dClearPhoto();
+  $('d4dSheetDelete').classList.add('hide');
+  $('d4dSheetToDialer').classList.add('hide');
+  $('d4dSheet').classList.remove('hide');
+  try {
+    const addr = await d4dReverseGeocode(lat, lng);
+    if(d4dDraft && d4dDraft.lat === lat) $('d4dAddr').value = addr;
+  } catch { $('d4dAddr').value = ''; toast('Could not find the address — type it in', 'err'); }
+}
+
+function openD4DSheet(lead){
+  d4dDraft = { id: lead.id, lat: lead.lat, lng: lead.lng, photoBase64: '' };
+  $('d4dSheetTitle').textContent = 'Edit D4D lead';
+  $('d4dAddr').value = lead.address || '';
+  $('d4dNotes').value = lead.notes || '';
+  d4dRenderTagRow((lead.tags || '').split(',').map(s => s.trim()).filter(Boolean));
+  d4dClearPhoto();
+  if(lead.photo_url){
+    $('d4dPhotoPreview').src = lead.photo_url;
+    $('d4dPhotoPreviewWrap').classList.remove('hide');
+  }
+  $('d4dSheetDelete').classList.remove('hide');
+  $('d4dSheetToDialer').classList.toggle('hide', lead.status === 'in_dialer');
+  $('d4dSheet').classList.remove('hide');
+}
+
+function closeD4DSheet(){
+  $('d4dSheet').classList.add('hide');
+  d4dDraft = null;
+  if(d4dTempMarker && d4dMap){ d4dMap.removeLayer(d4dTempMarker); d4dTempMarker = null; }
+}
+$('d4dSheetCancel').addEventListener('click', closeD4DSheet);
+
+// Photo: capture, downscale to ~1280px JPEG, keep as base64
+function d4dClearPhoto(){
+  $('d4dPhotoInput').value = '';
+  $('d4dPhotoPreviewWrap').classList.add('hide');
+  $('d4dPhotoPreview').src = '';
+}
+$('d4dPhotoBtn').addEventListener('click', () => $('d4dPhotoInput').click());
+$('d4dPhotoInput').addEventListener('change', () => {
+  const f = $('d4dPhotoInput').files[0];
+  if(!f || !d4dDraft) return;
+  const img = new Image();
+  img.onload = () => {
+    const MAX = 1280;
+    const scale = Math.min(1, MAX / Math.max(img.width, img.height));
+    const cv = document.createElement('canvas');
+    cv.width = Math.round(img.width * scale);
+    cv.height = Math.round(img.height * scale);
+    cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+    const dataUrl = cv.toDataURL('image/jpeg', 0.8);
+    d4dDraft.photoBase64 = dataUrl.split(',')[1] || '';
+    $('d4dPhotoPreview').src = dataUrl;
+    $('d4dPhotoPreviewWrap').classList.remove('hide');
+    URL.revokeObjectURL(img.src);
+  };
+  img.src = URL.createObjectURL(f);
+});
+
+$('d4dSheetSave').addEventListener('click', async () => {
+  if(!d4dDraft) return;
+  const address = $('d4dAddr').value.trim();
+  if(address === 'Looking up address…'){ toast('Still looking up the address — one sec', 'err'); return; }
+  const tags = Array.from($('d4dTagRow').querySelectorAll('.d4d-tag.on')).map(c => c.dataset.tag).join(', ');
+  const notes = $('d4dNotes').value.trim();
+  const btn = $('d4dSheetSave');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  try {
+    if(d4dDraft.id){
+      await api('d4d-update', { method: 'POST', body: { id: d4dDraft.id, address, tags, notes, ...(d4dDraft.photoBase64 ? { photoBase64: d4dDraft.photoBase64 } : {}) } });
+    } else {
+      await api('d4d-add', { method: 'POST', body: { address, lat: d4dDraft.lat, lng: d4dDraft.lng, tags, notes, createdBy: activeProfileId, ...(d4dDraft.photoBase64 ? { photoBase64: d4dDraft.photoBase64 } : {}) } });
+    }
+    toast('Saved to D4D list ✅');
+    closeD4DSheet();
+    refreshD4D();
+  } catch(e){ toast('Save failed: ' + e.message, 'err'); }
+  btn.disabled = false; btn.textContent = '💾 Save';
+});
+
+$('d4dSheetDelete').addEventListener('click', async () => {
+  if(!d4dDraft || !d4dDraft.id) return;
+  if(!confirm('Delete this D4D lead?')) return;
+  try {
+    await api('d4d-delete', { method: 'POST', body: { id: d4dDraft.id } });
+    toast('Deleted');
+    closeD4DSheet();
+    refreshD4D();
+  } catch(e){ toast('Delete failed: ' + e.message, 'err'); }
+});
+
+$('d4dSheetToDialer').addEventListener('click', () => {
+  if(d4dDraft && d4dDraft.id) d4dSendToDialer(d4dDraft.id, $('d4dSheetToDialer'));
+});
+
+async function d4dSendToDialer(id, btn){
+  if(btn){ btn.disabled = true; btn.textContent = 'Sending…'; }
+  try {
+    const j = await api('d4d-to-dialer', { method: 'POST', body: { id } });
+    toast(j.already ? 'Already in the Dialer' : 'Added to the Dialer ✅');
+    closeD4DSheet();
+    refreshD4D();
+    loadProperties().catch(() => {});
+  } catch(e){ toast('Failed: ' + e.message, 'err'); }
+  if(btn){ btn.disabled = false; btn.textContent = '➡ Send to Dialer'; }
+}
+
+// Show new-lead count on the tab at boot
+api('d4d-list').then(j => {
+  const fresh = (j.leads || []).filter(l => l.status === 'new').length;
+  $('d4dBadge').textContent = fresh ? '· ' + fresh : '';
+}).catch(() => {});
+
+// ═══════════════════════════════════════════════════════════════
+// IMN QUALIFICATION SCRIPT  (added 2026-09-23)
+// ═══════════════════════════════════════════════════════════════
+
+// Lines can carry  if:'field'  (show only when the lead has it) or
+// ifNot:'field'  (show only when it's missing), so the script asks
+// cold when IMN sent nothing and confirms when IMN already told us.
+CALL_SCRIPTS.imn = {
+  name: '🔥 IMN Qualification',
+  sections: [
+    { t:'Intro', lines:[
+      { k:'sub', x:'Remember: Urgency · Motivation · Ballpark Price · Condition' },
+      { k:'say', x:'Hi {FirstName}, my name is {YourName}, how are you today?' },
+      { k:'note', x:'[PAUSE]' },
+      { k:'say', x:'I am calling to see if you are interested in selling your property at {StreetAddress} now or in the near future.' },
+      { k:'note', x:'[PAUSE]' },
+    ]},
+    { t:'Urgency / Now factor', lines:[
+      { k:'say', x:"So, I'm glad I got a hold of you today. We just sold a property close to your area and we are looking for another one to buy this week. With that being said, if we come to an agreement on a fair price for the property, YOU ARE DEFINITELY READY TO MAKE A DECISION… RIGHT?" },
+      { k:'note', if:'timeline', x:'IMN says their timeline is: {Timeline}' },
+    ]},
+    { t:'Price', lines:[
+      { k:'note', if:'askingPrice', x:'IMN says they want {AskingPrice} — confirm it instead of asking cold.' },
+      { k:'ask', if:'askingPrice', x:'I have you down at around {AskingPrice} — is that still about where you want to be?' },
+      { k:'ask', ifNot:'askingPrice', x:'How much are you looking to get for that property?' },
+      { k:'note', x:"Do not press if they don't have an asking price yet." },
+    ]},
+    { t:'Motivation', lines:[
+      { k:'note', if:'motivation', x:'IMN says: {Motivation} — let them tell it in their own words.' },
+      { k:'ask', x:"What's got you thinking about selling the property?" },
+      { k:'sub', x:'Open-ended questions — ask a minimum of 3' },
+      { k:'note', x:"1. Mirror the seller — repeat their last word or phrase with a questioning tone." },
+      { k:'ask', x:'How long have you been thinking about selling?' },
+      { k:'ask', x:"What's stopping you from fixing up the property yourself and listing it with an agent?" },
+      { k:'ask', x:"What would be your plan in the event that you're not able to get the home sold?" },
+      { k:'note', x:"5. Ask a fifth open-ended question relevant to the seller's situation." },
+      { k:'ask', x:'[Picture perfect] What does your picture perfect scenario look like after you have sold this home?' },
+    ]},
+    { t:'Condition', lines:[
+      { k:'note', if:'condition', x:'IMN says condition: {Condition} — confirm it.' },
+      { k:'note', if:'yearBuilt', x:'Built in {YearBuilt}.' },
+      { k:'ask', x:'Overall condition — On a scale of 1 to 10, how would you rate the overall condition of the property, with 10 being completely move-in ready?' },
+      { k:'note', x:'[PAUSE]' },
+      { k:'ask', x:'Recent updates — Has anything been updated or renovated in the last few years — things like the roof, HVAC, kitchen, or bathrooms?' },
+      { k:'ask', x:'Known issues — Are there any known repairs or issues the property needs right now — anything structural, electrical, plumbing, or cosmetic?' },
+      { k:'note', x:'[PAUSE]' },
+      { k:'note', if:'occupancy', x:'IMN says occupancy: {Occupancy} — confirm it.' },
+      { k:'ask', x:'Occupancy — Is the property currently occupied — is someone living there, or is it vacant?' },
+      { k:'ask', x:'If vacant — How long has it been sitting vacant?' },
+      { k:'note', x:'Ask only if vacant.' },
+    ]},
+    { t:'Setting expectations — for next call', lines:[
+      { k:'say', x:'Okay, I believe I have all the information I need right now.' },
+      { k:'say', x:"I'm going to take some time to talk with the partners to see what the property qualifies for. Then I will call you back. It usually takes about 5 minutes to let you know what it looks like to work with us and let you know what the property qualifies for. All I ask from you is that you make a confident yes or no decision, and NO is perfectly ok. With that being said, do you have any other questions for me?" },
+      { k:'ask', x:'Great, is there a good time for me to give you a call back?' },
+      { k:'say', x:'Perfect, talk with you soon.' },
+      { k:'note', x:'Log the callback time and their answers in the Live Notepad on the lead card.' },
+    ]},
+  ],
+};
+
+// Pull a "Key: value" detail out of the lead's notes (IMN intake,
+// Add Lead form, or anything typed that way). Handles "·"-joined lines.
+function leadDetail(text, ...keys){
+  const segs = String(text || '').split('\n')
+    .flatMap(line => line.split('·')).map(s => s.trim()).filter(Boolean);
+  for(const k of keys){
+    const safe = k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp('^' + safe + '\\s*[:=]\\s*(.+)$', 'i');
+    for(const seg of segs){
+      const m = seg.match(re);
+      if(m && m[1].trim()) return m[1].trim();
+    }
+  }
   return '';
 }
+const LEAD_DETAIL_KEYS = {
+  askingPrice: ['asking price','asking','desired price','expected price','price wanted','price'],
+  motivation:  ['motivation','reason for selling','why selling','reason'],
+  condition:   ['condition','property condition'],
+  occupancy:   ['occupancy','occupancy status','occupied'],
+  timeline:    ['timeline','timeframe','time frame','how soon','when to sell'],
+};
 
-async function handleAgentCallList(event) {
-  if (!agentKeyOk(event)) return err('Unauthorized', 401);
-  let b = {};
-  try { b = JSON.parse(event.body || '{}'); } catch { return err('Bad JSON'); }
-  const leads = Array.isArray(b.leads) ? b.leads.slice(0, 200) : [];
-  if (!leads.length) return ok({ created: 0, updated: 0, skipped: 0, note: 'empty list' });
-  const listName = String(b.listName || AGENT_CALL_LIST_NAME).slice(0, 80);
-  const day = String(b.date || new Date().toISOString().slice(0, 10)).slice(0, 10);
-  // Where the leads came from, shown at the top of each card note. 'ReplySmart' by default.
-  const source = String(b.source || 'ReplySmart').replace(/[\r\n]/g, ' ').slice(0, 40);
-  const sourceIcon = /replysmart/i.test(source) ? '📲' : '📥';
-
-  const normAddr = (a) => String(a || '').toLowerCase().replace(/[.,#]/g, ' ').replace(/\s+/g, ' ').trim();
-  const { json: props } = await supa('/properties?select=id,property_address&limit=20000');
-  const byAddr = new Map();
-  for (const ep of props || []) { const k = normAddr(ep.property_address); if (k && !byAddr.has(k)) byAddr.set(k, ep.id); }
-  const { json: phones } = await supa('/phones?select=property_id,e164&limit=50000');
-  const byPhone = new Map();
-  for (const ph of phones || []) if (ph.e164 && !byPhone.has(ph.e164)) byPhone.set(ph.e164, ph.property_id);
-
-  let created = 0, updated = 0, skipped = 0;
-  const results = [];
-  for (const raw of leads) {
-    const owners = String(raw.owners || raw.name || '').slice(0, 200).trim();
-    const address = String(raw.property_address || raw.address || '').slice(0, 250).trim();
-    const e164 = toE164US(raw.phone);
-    const priority = String(raw.priority || '').toUpperCase().slice(0, 20);
-    const notes = String(raw.notes || '').replace(/\r/g, '').slice(0, 1500).trim();
-    if (!e164 && !address) { skipped++; results.push({ owners, status: 'skipped: no phone or address' }); continue; }
-
-    const header = `${sourceIcon} ${source} ${day}${priority ? ' · ' + priority : ''}`;
-    const block = header + (notes ? '\n' + notes : '');
-
-    let pid = (address && byAddr.get(normAddr(address))) || (e164 && byPhone.get(e164)) || null;
-    if (pid) {
-      const { json: cur } = await supa(`/leads?property_id=eq.${encodeURIComponent(pid)}&select=va_notes&limit=1`);
-      const old = (Array.isArray(cur) && cur[0] && cur[0].va_notes) || '';
-      if (old.includes(header)) { skipped++; results.push({ owners, id: pid, status: 'already noted today' }); continue; }
-      await supa('/leads?on_conflict=property_id', 'POST', [{
-        property_id: pid,
-        va_notes: old ? block + '\n\n' + old : block,
-        called: false,
-        updated_at: new Date().toISOString(),
-      }], { Prefer: 'resolution=merge-duplicates,return=minimal' });
-      await supa(`/properties?id=eq.${encodeURIComponent(pid)}`, 'PATCH', { list_name: listName }, { Prefer: 'return=minimal' });
-      if (e164 && !byPhone.has(e164)) {
-        await supa('/phones', 'POST', [{ property_id: pid, e164, display: e164, type: 'ReplySmart' }], { Prefer: 'return=minimal' });
-        byPhone.set(e164, pid);
-      }
-      updated++; results.push({ owners, id: pid, status: 'updated' });
-    } else {
-      pid = 'rs-' + (e164 ? e164.replace(/\D/g, '') : authCrypto.createHash('sha1').update(normAddr(address)).digest('hex').slice(0, 12));
-      await supa('/properties?on_conflict=id', 'POST', [{
-        id: pid, owners, owner_last_name: '', property_address: address,
-        mailing_address: String(raw.mailing_address || '').slice(0, 250),
-        email: String(raw.email || '').slice(0, 200), list_name: listName,
-      }], { Prefer: 'resolution=merge-duplicates,return=minimal' });
-      if (e164) {
-        await supa('/phones', 'POST', [{ property_id: pid, e164, display: e164, type: 'ReplySmart' }], { Prefer: 'return=minimal' });
-        byPhone.set(e164, pid);
-      }
-      await supa('/leads?on_conflict=property_id', 'POST', [{
-        property_id: pid, va_notes: block, called: false, updated_at: new Date().toISOString(),
-      }], { Prefer: 'resolution=merge-duplicates,return=minimal' });
-      if (address) byAddr.set(normAddr(address), pid);
-      created++; results.push({ owners, id: pid, status: 'created' });
-    }
-  }
-  return ok({ listName, created, updated, skipped, results });
+function isImnLead(prop){
+  if(!prop) return false;
+  const web = webLeadIndex[prop.id];
+  if(web && /imn/i.test(web.source || '')) return true;
+  if(/imn/i.test(prop.list_name || '')) return true;
+  return /source:\s*imn/i.test((prop.lead || {}).va_notes || '');
 }
 
-exports.handler = async (event) => {
-  if (event.httpMethod === 'OPTIONS') return { statusCode: 204, headers: corsHeaders(), body: '' };
-
-  const qs   = event.queryStringParameters || {};
-  const action = qs.action || '';
-
-  // ─ Twilio webhook (inbound SMS) bypasses password gate ───────
-  // It's authenticated via Twilio's signature header.
-  // We validate that header separately to make sure the request
-  // really came from Twilio.
-  if (action === 'twilio-inbound') {
-    return await handleTwilioInbound(event);
-  }
-  if (action === 'twilio-voice-inbound') {
-    return await handleTwilioVoiceInbound(event);
-  }
-  if (action === 'twilio-status') {
-    return await handleTwilioStatus(event);
-  }
-  if (action === 'conference-status') {
-    return await handleConferenceStatus(event);
-  }
-  if (action === 'amd-status') {
-    return await handleAmdStatus(event);
-  }
-  // Recording playback also bypasses the password gate — an <audio> tag
-  // can't send the X-Access-Password header. Access is gated instead on
-  // knowing the 32-character recording SID, which is not guessable.
-  if (action === 'recording') {
-    return await handleRecordingProxy(event);
-  }
-  if (action === 'record-vm-twiml') {
-    return handleRecordVmTwiml(event);
-  }
-  if (action === 'record-vm-status') {
-    return await handleRecordVmStatus(event);
-  }
-  if (action === 'agent-call-list') {
-    try { return await handleAgentCallList(event); }
-    catch (e) { return err(e.message || String(e), 500); }
-  }
-  if (action === 'comps-result') {
-    try { return await handleCompsResult(event); }
-    catch (e) { return err(e.message || String(e), 500); }
-  }
-  // The drip processor can run via Netlify scheduled function or cron
-  // hitting a special key — but to keep it simple, it's behind the
-  // password gate like everything else and the admin can trigger it
-  // manually, plus the frontend pings it every page load.
-
-  // Password gate — the owner password, or any active caller's own password
-  const expected = process.env.ACCESS_PASSWORD;
-  if (!expected) return err('Server misconfigured: ACCESS_PASSWORD not set', 500);
-  const provided = event.headers['x-access-password'] || event.headers['X-Access-Password'];
-  let user;
-  try {
-    user = await identifyUser(provided);
-  } catch (e) {
-    // Almost always means the one-time SQL hasn't been run yet.
-    return err('Sign-in check failed (is password_hash on the profiles table?): ' + e.message, 500);
-  }
-  if (!user) return err('Unauthorized', 401);
-
-  let body = {};
-  if (event.body) { try { body = JSON.parse(event.body); } catch {} }
-
-  try {
-    switch (action) {
-
-      // ── Auth ping (used by HTML to verify password) ─────────
-      case 'ping':
-        return ok({ ok: true, user });
-
-      // ════════════════════════════════════════════════════════
-      // PROPERTIES & LEADS
-      // ════════════════════════════════════════════════════════
-
-      // Returns properties + their phones + lead state, ONE PAGE AT A TIME.
-      // Paged because a full 4,000+ lead payload (properties + every phone +
-      // every lead note) blows past Netlify's 6MB response cap and 502s.
-      // Query params: ?limit=500&offset=0 — the frontend loops until hasMore is false.
-      case 'list-properties': {
-        const MAX_LIMIT = 1000;
-        const reqLimit  = parseInt(qs.limit, 10);
-        const limit     = Number.isFinite(reqLimit) && reqLimit > 0 ? Math.min(reqLimit, MAX_LIMIT) : 500;
-        const reqOffset = parseInt(qs.offset, 10);
-        const offset    = Number.isFinite(reqOffset) && reqOffset > 0 ? reqOffset : 0;
-
-        // count=exact makes PostgREST return a Content-Range like "0-499/4679"
-        const { json: props, count } = await supa(
-          `/properties?select=id,owners,owner_last_name,property_address,mailing_address,email,list_name,imported_at,postcard_sent_at,postcard_id&order=imported_at.asc,id.asc&limit=${limit}&offset=${offset}`,
-          'GET', undefined, { Prefer: 'count=exact' }
-        );
-        const pageRows = props || [];
-
-        let total = offset + pageRows.length;
-        if (count && String(count).includes('/')) {
-          const t = parseInt(String(count).split('/')[1], 10);
-          if (Number.isFinite(t)) total = t;
-        }
-
-        // Only pull the phones and leads belonging to THIS page
-        let phones = [], leads = [];
-        if (pageRows.length) {
-          const inList = pageRows.map(p => `"${String(p.id).replace(/"/g, '\\"')}"`).join(',');
-          const filter = `property_id=in.(${encodeURIComponent(inList)})`;
-          ({ json: phones } = await supa(`/phones?select=property_id,e164,display,type&${filter}&order=property_id.asc,id.asc&limit=50000`));
-          ({ json: leads }  = await supa(`/leads?select=property_id,called,lead_status,notes,va_notes,recording_url,highlight,assigned_to,sms_consent,sms_cell&${filter}&limit=50000`));
-        }
-
-        const phonesBy = {};
-        for (const p of phones || []) (phonesBy[p.property_id] ||= []).push(p);
-        const leadsBy = {};
-        for (const l of leads || []) leadsBy[l.property_id] = l;
-        const out = pageRows.map(p => ({
-          ...p,
-          phones: phonesBy[p.id] || [],
-          lead: leadsBy[p.id] || { called: false, lead_status: '', notes: '', va_notes: '' },
-        }));
-        return ok({ properties: out, total, offset, limit, hasMore: offset + pageRows.length < total });
-      }
-
-      // Bulk import. LUX Teardown uses the same stable property payload and folds extra underwriting fields into va_notes.
-      // Bulk import. Body: {properties: [{id, owners, property_address, mailing_address, phones:[{e164,display,type}]}], replace: true|false}
-      case 'import-properties': {
-        const list = Array.isArray(body.properties) ? body.properties : [];
-        if (!list.length) return err('No properties to import');
-
-        if (body.replace) {
-          // Wipe first. ON DELETE CASCADE clears phones + leads.
-          await supa('/properties?id=not.is.null', 'DELETE');
-        }
-
-        // Normalize an address for comparison: lowercase, strip punctuation,
-        // collapse whitespace (exact-ish matching is safer than over-aggressive fuzzy logic)
-        const normAddr = (a) => String(a || '')
-          .toLowerCase()
-          .replace(/[.,#]/g, ' ')
-          .replace(/\s+/g, ' ')
-          .trim();
-
-        // ── Dedupe: merge rows with the same ID (last write wins for fields,
-        //    union phones). Any row missing a usable ID gets a synthetic one.
-        //    Rows sharing the same normalized address within this batch are
-        //    also merged together, even if their IDs differ.
-        let dupesCollapsed = 0;
-        let dupeAddressesSkipped = 0;
-        const byId = new Map();
-        const seenAddrInBatch = new Map(); // normAddr -> id (first occurrence in this batch)
-        let synthCounter = 0;
-        const synthPrefix = 'row-' + Date.now() + '-'; // unique per upload batch
-        for (const raw of list) {
-          let id = raw && raw.id != null ? String(raw.id).trim() : '';
-          if (!id) id = synthPrefix + (++synthCounter);
-
-          const addrKey = normAddr(raw.property_address);
-
-          // If this address was already seen in this batch under a different id,
-          // merge into that existing record instead of creating a new one.
-          if (addrKey && seenAddrInBatch.has(addrKey)) {
-            id = seenAddrInBatch.get(addrKey);
-          }
-
-          if (byId.has(id)) {
-            // Merge: combine phones (dedup by e164), prefer non-empty fields from later rows
-            const existing = byId.get(id);
-            const seenPhones = new Set((existing.phones || []).map(p => p.e164));
-            for (const ph of (raw.phones || [])) {
-              if (ph && ph.e164 && !seenPhones.has(ph.e164)) {
-                existing.phones.push(ph);
-                seenPhones.add(ph.e164);
-              }
-            }
-            // Fill blanks
-            if (!existing.owners && raw.owners) existing.owners = raw.owners;
-            if (!existing.property_address && raw.property_address) existing.property_address = raw.property_address;
-            if (!existing.mailing_address && raw.mailing_address) existing.mailing_address = raw.mailing_address;
-            if (!existing.email && raw.email) existing.email = raw.email;
-            if (!existing.va_notes && raw.va_notes) existing.va_notes = raw.va_notes;
-            if (!existing.recording_url && raw.recording_url) existing.recording_url = raw.recording_url;
-            if (!existing.highlight && raw.highlight) existing.highlight = raw.highlight;
-            if (!existing.list_name && raw.list_name) existing.list_name = raw.list_name;
-            dupesCollapsed++;
-          } else {
-            byId.set(id, {
-              id,
-              owners: raw.owners || '',
-              property_address: raw.property_address || '',
-              mailing_address: raw.mailing_address || '',
-              email: raw.email || '',
-              va_notes: raw.va_notes || '',
-              recording_url: raw.recording_url || '',
-              va_lead: !!raw.va_lead,
-              highlight: raw.highlight || '',
-              list_name: raw.list_name || '',
-              phones: Array.isArray(raw.phones) ? [...raw.phones] : [],
-            });
-            if (addrKey) seenAddrInBatch.set(addrKey, id);
-          }
-        }
-        let deduped = Array.from(byId.values());
-
-        // ── Cross-check against properties already in the DB. If an address
-        //    already exists, merge into that existing row instead of creating
-        //    a duplicate property (so re-uploads / overlapping lists don't
-        //    create copies).
-        const addrToExistingId = new Map();
-        {
-          const { json: existingProps } = await supa('/properties?select=id,property_address&limit=20000');
-          for (const ep of existingProps) {
-            const k = normAddr(ep.property_address);
-            if (k && !addrToExistingId.has(k)) addrToExistingId.set(k, ep.id);
-          }
-        }
-        // Skip new leads whose address already exists in the DB — never overwrite
-        // an existing lead's data with a new upload unless Replace is checked.
-        if (!body.replace) {
-          deduped = deduped.filter(p => {
-            const k = normAddr(p.property_address);
-            if (k && addrToExistingId.has(k)) {
-              dupeAddressesSkipped++;
-              return false;
-            }
-            return true;
-          });
-        } else {
-          // Replace mode: remap IDs to existing ones so the upsert updates them
-          deduped = deduped.map(p => {
-            const k = normAddr(p.property_address);
-            const existingId = k ? addrToExistingId.get(k) : null;
-            if (existingId && existingId !== p.id) {
-              p.id = existingId;
-              dupeAddressesSkipped++;
-            }
-            return p;
-          });
-        }
-
-        // ── skipDuplicates: if the caller asked to skip (not merge) dupes,
-        //    remove any property whose normalized address already exists in the
-        //    DB (we already built addrToExistingId above).  Also drop rows
-        //    whose phones ALL already exist in the phones table.
-        if (body.skipDuplicates) {
-          const { json: existingPhones } = await supa('/phones?select=e164&limit=50000');
-          const existingPhoneSet = new Set((existingPhones || []).map(p => p.e164));
-          deduped = deduped.filter(p => {
-            const k = normAddr(p.property_address);
-            if (k && addrToExistingId.has(k) && addrToExistingId.get(k) !== p.id) return false;
-            if (p.phones && p.phones.length && p.phones.every(ph => existingPhoneSet.has(ph.e164))) return false;
-            return true;
-          });
-        }
-
-        // Upsert properties
-        // Helper: derive owner_last_name from owners string
-        const parseLastName = (owners) => {
-          if (!owners || !owners.trim()) return '';
-          let candidate;
-          if (owners.includes(',')) {
-            // "LAST, FIRST" → first piece is the last name
-            candidate = owners.split(',')[0].trim();
-          } else {
-            // "FIRST [MI] LAST" or "FIRST & FIRST LAST" → last token before "&"
-            const cleaned = owners.replace(/\s+AND\s+/gi, ' & ');
-            const firstSeg = cleaned.split('&')[0].trim();
-            const tokens = firstSeg.split(/\s+/);
-            candidate = tokens[tokens.length - 1] || '';
-          }
-          // Title-case
-          return candidate.charAt(0).toUpperCase() + candidate.slice(1).toLowerCase();
-        };
-
-        const propRows = deduped.map(p => ({
-          id: p.id,
-          owners: p.owners,
-          owner_last_name: parseLastName(p.owners),
-          property_address: p.property_address,
-          mailing_address: p.mailing_address,
-          email: p.email || '',
-          list_name: p.list_name || '',
-        }));
-        for (let i = 0; i < propRows.length; i += 500) {
-          await supa('/properties?on_conflict=id', 'POST', propRows.slice(i, i + 500), { Prefer: 'resolution=merge-duplicates,return=minimal' });
-        }
-
-        // Only delete + replace phones for NEW properties (ones not already
-        // in the DB before this upload). Existing properties keep their phones
-        // untouched so uploading a second list never wipes the first list's data.
-        const existingIdSet = new Set(addrToExistingId.values());
-        const newPropertyIds = propRows.map(p => p.id).filter(id => !existingIdSet.has(id));
-
-        if (newPropertyIds.length) {
-          const idChunks = [];
-          for (let i = 0; i < newPropertyIds.length; i += 200) idChunks.push(newPropertyIds.slice(i, i + 200));
-          for (const chunk of idChunks) {
-            const inList = chunk.map(id => `"${id.replace(/"/g, '\\"')}"`).join(',');
-            await supa(`/phones?property_id=in.(${encodeURIComponent(inList)})`, 'DELETE');
-          }
-        }
-        const phoneRows = [];
-        for (const p of deduped) {
-          // Skip phones for existing properties
-          if (existingIdSet.has(p.id)) continue;
-          for (const ph of p.phones || []) {
-            if (!ph.e164) continue;
-            phoneRows.push({
-              property_id: p.id,
-              e164: ph.e164,
-              display: ph.display || ph.e164,
-              type: ph.type || '',
-            });
-          }
-        }
-        for (let i = 0; i < phoneRows.length; i += 500) {
-          await supa('/phones', 'POST', phoneRows.slice(i, i + 500), { Prefer: 'return=minimal' });
-        }
-
-        // Persist va_notes + recording_url + highlight (+ batch assignee) onto the leads row
-        const assignedToRaw = (body.assignedTo != null && body.assignedTo !== '')
-          ? parseInt(body.assignedTo, 10) : null;
-        const batchAssignee = Number.isFinite(assignedToRaw) ? assignedToRaw : null;
-        const leadRows = [];
-        for (const p of deduped) {
-          const va = (p.va_notes || '').trim();
-          const rec = (p.recording_url || '').trim();
-          const hl = (p.highlight || '').trim();
-          // Create a lead row when there are notes/recording/highlight OR a caller
-          // was chosen for this list (so the assignment sticks even with no notes).
-          if (va || rec || hl || batchAssignee != null) {
-            const lr = {
-              property_id: p.id,
-              va_notes: va,
-              recording_url: rec,
-              highlight: hl,
-              updated_at: new Date().toISOString(),
-            };
-            if (batchAssignee != null) lr.assigned_to = batchAssignee;
-            leadRows.push(lr);
-          }
-        }
-        for (let i = 0; i < leadRows.length; i += 500) {
-          await supa('/leads?on_conflict=property_id', 'POST', leadRows.slice(i, i + 500), { Prefer: 'resolution=merge-duplicates,return=minimal' });
-        }
-
-        return ok({ imported: propRows.length, phones: phoneRows.length, dupesCollapsed, dupeAddressesSkipped, leadsWithNotes: leadRows.length });
-      }
-
-      // Update lead state. Body: {propertyId, called, leadStatus, notes}
-      case 'update-lead': {
-        if (!body.propertyId) return err('propertyId required');
-        const patch = { property_id: String(body.propertyId), updated_at: new Date().toISOString() };
-        if ('called'       in body) patch.called        = !!body.called;
-        if ('leadStatus'   in body) patch.lead_status   = body.leadStatus || '';
-        if ('notes'        in body) patch.notes         = body.notes || '';
-        if ('recordingUrl' in body) patch.recording_url = body.recordingUrl || '';
-        if ('highlight'    in body) patch.highlight     = body.highlight || '';
-        if ('assignedTo'   in body) patch.assigned_to   = body.assignedTo || null;
-        // Implied: any non-empty status means called
-        if (patch.lead_status) patch.called = true;
-        await supa('/leads?on_conflict=property_id', 'POST', [patch], { Prefer: 'resolution=merge-duplicates,return=minimal' });
-        return ok({ ok: true });
-      }
-
-      // ════════════════════════════════════════════════════════
-      // TWILIO — NUMBERS
-      // ════════════════════════════════════════════════════════
-
-      case 'search-numbers': {
-        if (!/^\d{3}$/.test(qs.areaCode || '')) return err('areaCode must be 3 digits');
-        const params = new URLSearchParams({ AreaCode: qs.areaCode, VoiceEnabled: 'true', PageSize: '20' });
-        if (qs.contains) params.set('Contains', qs.contains);
-        const j = await tw(`/Accounts/${twilioSid()}/AvailablePhoneNumbers/US/Local.json?${params}`);
-        return ok({
-          numbers: (j.available_phone_numbers || []).map(n => ({
-            phoneNumber: n.phone_number,
-            friendlyName: n.friendly_name,
-            locality: n.locality, region: n.region, postalCode: n.postal_code,
-            capabilities: {
-              voice: !!n.capabilities?.voice,
-              SMS:   !!n.capabilities?.SMS,
-              MMS:   !!n.capabilities?.MMS,
-            },
-          })),
-        });
-      }
-
-      case 'buy-number': {
-        if (!body.phoneNumber) return err('phoneNumber required');
-        const j = await tw(`/Accounts/${twilioSid()}/IncomingPhoneNumbers.json`, 'POST', { PhoneNumber: body.phoneNumber });
-        return ok({ sid: j.sid, phoneNumber: j.phone_number, friendlyName: j.friendly_name });
-      }
-
-      case 'list-numbers': {
-        const j = await tw(`/Accounts/${twilioSid()}/IncomingPhoneNumbers.json?PageSize=200`);
-        return ok({
-          numbers: (j.incoming_phone_numbers || []).map(n => ({
-            sid: n.sid, phoneNumber: n.phone_number, friendlyName: n.friendly_name,
-          })),
-        });
-      }
-
-      case 'release-number': {
-        if (!body.sid) return err('sid required');
-        await tw(`/Accounts/${twilioSid()}/IncomingPhoneNumbers/${encodeURIComponent(body.sid)}.json`, 'DELETE');
-        return ok({ released: true });
-      }
-
-      // ════════════════════════════════════════════════════════
-      // TWILIO — CALLS
-      // ════════════════════════════════════════════════════════
-
-      // Place a bridge call. Body: {to, from, forwardTo, propertyId}
-      case 'make-call': {
-        if (!body.to)        return err('to required');
-        if (!body.from)      return err('from required');
-        if (!body.forwardTo) return err('forwardTo required');
-        const twiml = `<Response><Dial callerId="${escapeXml(body.from)}" timeout="30" answerOnBridge="true"><Number>${escapeXml(body.to)}</Number></Dial></Response>`;
-        const j = await tw(`/Accounts/${twilioSid()}/Calls.json`, 'POST', {
-          From: body.from, To: body.forwardTo, Twiml: twiml,
-        });
-        // Persist
-        try {
-          await supa('/calls', 'POST', [{
-            twilio_sid: j.sid,
-            property_id: body.propertyId ? String(body.propertyId) : null,
-            from_number: body.from,
-            to_number:   body.to,
-            status: j.status || 'queued',
-            profile_id: body.profileId || null,
-          }], { Prefer: 'return=minimal' });
-        } catch (e) { console.warn('call persist failed', e.message); }
-        return ok({ sid: j.sid, status: j.status });
-      }
-
-      // ── Power Dialer: place a call in a power dial session ─────
-      // Calls the agent's phone first, then when they answer bridges
-      // to the seller. The status callback URL triggers the next call
-      // automatically when the session call completes.
-      case 'power-dial-call': {
-        if (!body.to)        return err('to required');
-        if (!body.from)      return err('from required');
-        if (!body.agentPhone)return err('agentPhone required');
-
-        const baseUrl = APP_BASE_URL;
-        const sessionId  = body.sessionId  || '';
-        const propertyId = body.propertyId || '';
-
-        // Unique room per call. This doubles as the key the AMD callback
-        // uses to find the right call row, since Twilio can't tell us the
-        // agent's call SID before that call exists.
-        const room = `pd-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-
-        const sellerName = (body.sellerName || 'your next lead').replace(/[<>&"]/g, '');
-
-        // Conference callback — fires when the agent joins. That's the
-        // trigger to dial the seller (see handleConferenceStatus).
-        const confCb =
-          `${baseUrl}?action=conference-status` +
-          `&room=${encodeURIComponent(room)}` +
-          `&to=${encodeURIComponent(body.to)}` +
-          `&from=${encodeURIComponent(body.from)}` +
-          `&propertyId=${encodeURIComponent(propertyId)}` +
-          `&sessionId=${encodeURIComponent(sessionId)}`;
-
-        // The agent hears the seller's name, then silence, then a single
-        // beep when the seller actually joins.
-        //   waitUrl=""              → no hold music, just silence
-        //   beep="false" (agent)    → no tone for the agent's own entry
-        //   Beep:'onEnter' (seller) → the connect tone, set in the callback
-        const connectTwiml =
-          `<?xml version="1.0" encoding="UTF-8"?>` +
-          `<Response>` +
-            `<Say voice="alice">Calling ${sellerName}</Say>` +
-            `<Dial>` +
-              `<Conference beep="false" startConferenceOnEnter="true" ` +
-              `endConferenceOnExit="true" waitUrl="" ` +
-              `statusCallback="${escapeXml(confCb)}" ` +
-              `statusCallbackMethod="POST" ` +
-              `statusCallbackEvent="start end">${escapeXml(room)}</Conference>` +
-            `</Dial>` +
-          `</Response>`;
-
-        const j = await tw(`/Accounts/${twilioSid()}/Calls.json`, 'POST', {
-          From: body.from,
-          To:   body.agentPhone,
-          Twiml: connectTwiml,
-          StatusCallback: `${baseUrl}?action=twilio-status`,
-          StatusCallbackMethod: 'POST',
-          // BUGFIX: was 'completed' only, so the dialer never learned the
-          // agent leg had been answered or had failed to connect.
-          StatusCallbackEvent: 'initiated ringing answered completed',
-        });
-
-        // Persist call record
-        try {
-          await supa('/calls', 'POST', [{
-            twilio_sid: j.sid,
-            conference_room: room,
-            property_id: propertyId ? String(propertyId) : null,
-            from_number: body.from,
-            to_number:   body.to,
-            status: j.status || 'queued',
-            profile_id: body.profileId || null,
-          }], { Prefer: 'return=minimal' });
-        } catch (e) { console.warn('power dial persist failed', e.message); }
-
-        // sellerName / sellerPhone come back so the dialer can show who is
-        // being called while the call is live.
-        return ok({
-          sid: j.sid,
-          status: j.status,
-          room,
-          sellerName: body.sellerName || '',
-          sellerPhone: body.to,
-          callerId: body.from,
-        });
-      }
-
-      // ── Power Dialer: open the session ─────────────────────────
-      // MISSING ACTION — index.html has always called this, and api.js
-      // never implemented it, so pdStop() fired on every session start.
-      //
-      // Rings the agent once and parks them in a conference. Every lead
-      // for the rest of the session is dialed into that same conference,
-      // so the agent's phone never hangs up and calls back between leads.
-      case 'power-dial-start': {
-        if (!body.agentPhone) return err('agentPhone required');
-        if (!body.from)       return err('from required');
-
-        const room = `pd-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-
-        // waitUrl="" → silence, not hold music, between leads.
-        // beep="false" → no tone for the agent's own entry; the connect
-        // tone comes from the seller joining (Beep:'onEnter' below).
-        const twiml =
-          `<?xml version="1.0" encoding="UTF-8"?>` +
-          `<Response>` +
-            `<Say voice="alice">You are connected. Leads will come to you.</Say>` +
-            `<Dial>` +
-              `<Conference beep="false" startConferenceOnEnter="true" ` +
-              `endConferenceOnExit="true" waitUrl="">${escapeXml(room)}</Conference>` +
-            `</Dial>` +
-          `</Response>`;
-
-        const j = await tw(`/Accounts/${twilioSid()}/Calls.json`, 'POST', {
-          From: body.from,
-          To:   body.agentPhone,
-          Twiml: twiml,
-          StatusCallback: `${APP_BASE_URL}?action=twilio-status`,
-          StatusCallbackMethod: 'POST',
-          StatusCallbackEvent: 'initiated ringing answered completed',
-        });
-
-        return ok({ sid: j.sid, conference: room, status: j.status });
-      }
-
-      // ── Power Dialer: dial one lead into the open session ──────
-      // MISSING ACTION — see above.
-      case 'power-dial-lead': {
-        if (!body.to)         return err('to required');
-        if (!body.from)       return err('from required');
-        if (!body.conference) return err('conference required');
-
-        // Resolve the room name to a live conference SID.
-        const { json: cj } = { json: await tw(
-          `/Accounts/${twilioSid()}/Conferences.json` +
-          `?FriendlyName=${encodeURIComponent(body.conference)}&Status=in-progress`
-        ) };
-        const conf = cj && Array.isArray(cj.conferences) && cj.conferences[0];
-        if (!conf) return err('Your line dropped — restart the session', 409);
-
-        const p = await tw(
-          `/Accounts/${twilioSid()}/Conferences/${encodeURIComponent(conf.sid)}/Participants.json`,
-          'POST', {
-            From: body.from,
-            To:   body.to,
-            // No ringback to the agent — silence until the seller is in.
-            EarlyMedia: 'false',
-            // The connect cue: one short tone when the seller joins.
-            Beep: 'onEnter',
-            StartConferenceOnEnter: 'true',
-            // Deliberately false. If the seller hanging up ended the
-            // conference, the agent would be dropped after every lead —
-            // which is the whole problem this session design avoids.
-            EndConferenceOnExit: 'false',
-            Timeout: 30,
-            // Answering machine detection. 'DetectMessageEnd' holds the
-            // verdict until the outgoing greeting finishes, so an automatic
-            // voicemail drop starts speaking after the beep instead of
-            // talking over the greeting. Humans still return immediately.
-            MachineDetection: 'DetectMessageEnd',
-            MachineDetectionTimeout: 30,
-            MachineDetectionSpeechThreshold: 1900,
-            MachineDetectionSpeechEndThreshold: 1400,
-            AmdStatusCallback: amdCallbackUrl(body.conference, body.agentSid, body.autoVm !== false),
-            AmdStatusCallbackMethod: 'POST',
-            StatusCallback: `${APP_BASE_URL}?action=twilio-status`,
-            StatusCallbackMethod: 'POST',
-            StatusCallbackEvent: 'ringing answered completed',
-            // Off by default — pass record:true from the front end to
-            // record the seller's leg.
-            Record: body.record ? 'true' : 'false',
-          }
-        );
-
-        try {
-          await supa('/calls', 'POST', [{
-            twilio_sid: p.call_sid,
-            conference_room: body.conference,
-            property_id: body.propertyId ? String(body.propertyId) : null,
-            from_number: body.from,
-            to_number:   body.to,
-            status: 'queued',
-            profile_id: body.profileId || null,
-          }], { Prefer: 'return=minimal' });
-        } catch (e) { console.warn('lead persist failed', e.message); }
-
-        return ok({
-          sid: p.call_sid,
-          recording: !!body.record,
-          sellerName: body.sellerName || '',
-          sellerPhone: body.to,
-          callerId: body.from,
-        });
-      }
-
-      // ── Power Dialer: dial SEVERAL leads at once (multi-line) ──
-      // The reason the dialer was stuck on one line: nothing here ever
-      // dialed more than one participant per lead. The conference itself
-      // was always capable of holding more.
-      //
-      // Every leg goes out MUTED, so if two people answer they can't hear
-      // each other. handleAmdStatus unmutes the first human and releases
-      // the rest. Capped at MAX_PD_LINES.
-      case 'power-dial-lines': {
-        if (!body.from)       return err('from required');
-        if (!body.conference) return err('conference required');
-        const leads = Array.isArray(body.leads) ? body.leads.filter(l => l && l.to) : [];
-        if (!leads.length) return err('leads required');
-        if (leads.length > MAX_PD_LINES) {
-          return err(`Too many lines — ${MAX_PD_LINES} is the compliant maximum`);
-        }
-
-        const confSid = await conferenceSidFor(body.conference);
-        if (!confSid) return err('Your line dropped — restart the session', 409);
-
-        const multi  = leads.length > 1;
-        const amdCb  = amdCallbackUrl(body.conference, body.agentSid, body.autoVm !== false);
-        const placed = [];
-
-        for (const lead of leads) {
-          try {
-            const p = await tw(
-              `/Accounts/${twilioSid()}/Conferences/${encodeURIComponent(confSid)}/Participants.json`,
-              'POST', {
-                From: body.from,
-                To:   lead.to,
-                EarlyMedia: 'false',
-                // On one line the connect tone fires on entry as before.
-                // On two, the tone would sound for a leg that may be about
-                // to be released, so it moves to the unmute instead.
-                Beep: multi ? 'false' : 'onEnter',
-                Muted: multi ? 'true' : 'false',
-                StartConferenceOnEnter: 'true',
-                EndConferenceOnExit: 'false',
-                Timeout: 30,
-                MachineDetection: 'DetectMessageEnd',
-                MachineDetectionTimeout: 30,
-                MachineDetectionSpeechThreshold: 1900,
-                MachineDetectionSpeechEndThreshold: 1400,
-                AmdStatusCallback: amdCb,
-                AmdStatusCallbackMethod: 'POST',
-                StatusCallback: `${APP_BASE_URL}?action=twilio-status`,
-                StatusCallbackMethod: 'POST',
-                StatusCallbackEvent: 'ringing answered completed',
-                Record: body.record ? 'true' : 'false',
-              }
-            );
-            placed.push({
-              sid: p.call_sid,
-              to: lead.to,
-              propertyId: lead.propertyId || '',
-              sellerName: lead.sellerName || '',
-            });
-            try {
-              await supa('/calls', 'POST', [{
-                twilio_sid: p.call_sid,
-                conference_room: body.conference,
-                property_id: lead.propertyId ? String(lead.propertyId) : null,
-                from_number: body.from,
-                to_number:   lead.to,
-                status: 'queued',
-                profile_id: body.profileId || null,
-              }], { Prefer: 'return=minimal' });
-            } catch (e) { console.warn('line persist failed', e.message); }
-          } catch (e) {
-            placed.push({ to: lead.to, error: e.message });
-          }
-        }
-
-        return ok({
-          lines: placed.length,
-          calls: placed,
-          muted: multi,
-          callerId: body.from,
-        });
-      }
-
-      // ── Click to call ──────────────────────────────────────────
-      // Tap any number anywhere in the app and dial it. Two paths:
-      //   in a live power dial session → the number joins the conference
-      //     the rep is already sitting in, so their phone never re-rings
-      //   no session → a plain bridge call, rep's phone first
-      case 'click-to-call': {
-        if (!body.to)   return err('to required');
-        if (!body.from) return err('from required');
-
-        // Path 1: drop it into the open session.
-        if (body.conference) {
-          const confSid = await conferenceSidFor(body.conference);
-          if (confSid) {
-            const p = await tw(
-              `/Accounts/${twilioSid()}/Conferences/${encodeURIComponent(confSid)}/Participants.json`,
-              'POST', {
-                From: body.from,
-                To:   body.to,
-                EarlyMedia: 'false',
-                Beep: 'onEnter',
-                StartConferenceOnEnter: 'true',
-                EndConferenceOnExit: 'false',
-                Timeout: 30,
-                StatusCallback: `${APP_BASE_URL}?action=twilio-status`,
-                StatusCallbackMethod: 'POST',
-                StatusCallbackEvent: 'ringing answered completed',
-                Record: body.record ? 'true' : 'false',
-              }
-            );
-            try {
-              await supa('/calls', 'POST', [{
-                twilio_sid: p.call_sid,
-                conference_room: body.conference,
-                property_id: body.propertyId ? String(body.propertyId) : null,
-                from_number: body.from,
-                to_number:   body.to,
-                status: 'queued',
-                profile_id: body.profileId || null,
-              }], { Prefer: 'return=minimal' });
-            } catch (e) { console.warn('click-to-call persist failed', e.message); }
-            return ok({ sid: p.call_sid, mode: 'conference', to: body.to, callerId: body.from });
-          }
-          // Session is gone — fall through to the bridge call rather than
-          // failing the tap.
-        }
-
-        // Path 2: bridge call. Rings the rep, then dials the number.
-        const agentPhone = body.agentPhone || await getAppConfig('default_voice_forward_number');
-        if (!agentPhone) return err('agentPhone required (no forwarding number saved)');
-
-        const twiml =
-          `<?xml version="1.0" encoding="UTF-8"?>` +
-          `<Response><Dial callerId="${escapeXml(body.from)}" timeout="30" answerOnBridge="true"` +
-          (body.record ? ` record="record-from-answer-dual"` : ``) +
-          `><Number>${escapeXml(body.to)}</Number></Dial></Response>`;
-
-        const j = await tw(`/Accounts/${twilioSid()}/Calls.json`, 'POST', {
-          From: body.from,
-          To:   agentPhone,
-          Twiml: twiml,
-          StatusCallback: `${APP_BASE_URL}?action=twilio-status`,
-          StatusCallbackMethod: 'POST',
-          StatusCallbackEvent: 'initiated ringing answered completed',
-        });
-
-        try {
-          await supa('/calls', 'POST', [{
-            twilio_sid: j.sid,
-            property_id: body.propertyId ? String(body.propertyId) : null,
-            from_number: body.from,
-            to_number:   body.to,
-            status: j.status || 'queued',
-            profile_id: body.profileId || null,
-          }], { Prefer: 'return=minimal' });
-        } catch (e) { console.warn('click-to-call persist failed', e.message); }
-
-        return ok({ sid: j.sid, mode: 'bridge', status: j.status, to: body.to, callerId: body.from });
-      }
-
-      // ── Power Dialer: close the session ────────────────────────
-      // MISSING ACTION — pdStop() called this to drop the agent's leg.
-      case 'power-dial-end': {
-        if (!body.sid) return err('sid required');
-        try {
-          await tw(`/Accounts/${twilioSid()}/Calls/${encodeURIComponent(body.sid)}.json`,
-            'POST', { Status: 'completed' });
-        } catch (e) { /* already gone is fine */ }
-        return ok({ ended: true });
-      }
-
-      case 'call-status': {
-        if (!qs.sid) return err('sid required');
-        const j = await tw(`/Accounts/${twilioSid()}/Calls/${encodeURIComponent(qs.sid)}.json`);
-        const dur = parseInt(j.duration || '0', 10) || 0;
-        // Persist update
-        try {
-          await supa(`/calls?twilio_sid=eq.${encodeURIComponent(qs.sid)}`, 'PATCH', {
-            status: j.status, duration: dur, ended_at: j.end_time || null,
-          }, { Prefer: 'return=minimal' });
-        } catch (e) { /* non-fatal */ }
-
-        // Read back whatever AMD decided, so the dialer can show
-        // "Voicemail" and auto-drop instead of waiting.
-        let answeredBy = '';
-        try {
-          const { json: rows } = await supa(
-            `/calls?twilio_sid=eq.${encodeURIComponent(qs.sid)}&select=answered_by`
-          );
-          if (Array.isArray(rows) && rows[0]) answeredBy = rows[0].answered_by || '';
-        } catch (e) { /* non-fatal */ }
-        // Fallback: the AMD webhook can be dropped (bad signature, cold
-        // start, missing row). Twilio keeps the verdict on the Call itself,
-        // so read it from there rather than losing the detection entirely.
-        if (!answeredBy && j.answered_by) answeredBy = j.answered_by;
-
-        return ok({
-          sid: j.sid, status: j.status, duration: dur,
-          startTime: j.start_time, endTime: j.end_time,
-          from: j.from, to: j.to,
-          // The reason behind a busy/failed/no-answer, straight from Twilio
-          errorCode:    j.error_code || null,
-          errorMessage: j.error_message || null,
-          answeredBy,
-          isMachine: answeredBy.startsWith('machine') || answeredBy === 'fax',
-          isHuman:   answeredBy === 'human',
-        });
-      }
-
-      // Rings one phone with a short message and nothing else. Used to
-      // prove out a caller's own number: if this fails, no lead call from
-      // that profile can possibly work.
-      // ── Voicemail box ───────────────────────────────────────
-      case 'list-voicemails': {
-        const { json } = await supa(
-          '/inbound_voicemails?select=*&order=created_at.desc&limit=200'
-        );
-        return ok({ voicemails: json || [] });
-      }
-
-      case 'mark-voicemail-heard': {
-        if (!body.id) return err('id required');
-        await supa(`/inbound_voicemails?id=eq.${encodeURIComponent(body.id)}`, 'PATCH',
-          { heard: body.heard === false ? false : true }, { Prefer: 'return=minimal' });
-        return ok({ updated: true });
-      }
-
-      case 'delete-voicemail': {
-        if (!body.id) return err('id required');
-        // Pull the audio off Twilio too, not just the row here.
-        try {
-          const { json: rows } = await supa(
-            `/inbound_voicemails?id=eq.${encodeURIComponent(body.id)}&select=recording_sid`
-          );
-          const sid = rows && rows[0] && rows[0].recording_sid;
-          if (sid) await tw(`/Accounts/${twilioSid()}/Recordings/${encodeURIComponent(sid)}.json`, 'DELETE');
-        } catch (e) { /* non-fatal — the row still goes */ }
-        await supa(`/inbound_voicemails?id=eq.${encodeURIComponent(body.id)}`, 'DELETE', null, { Prefer: 'return=minimal' });
-        return ok({ deleted: true });
-      }
-
-      // ── Inbound call handling settings ──────────────────────
-      case 'get-voice-settings': {
-        return ok({
-          screen:      (await getAppConfig('voice_screen')) !== '0',
-          greeting:    await getAppConfig('voice_greeting'),
-          vmGreeting:  await getAppConfig('voice_vm_greeting'),
-          ringSeconds: parseInt(await getAppConfig('voice_ring_seconds'), 10) || 25,
-          forwardTo:   await getAppConfig('default_voice_forward_number'),
-          // ── Voicemail drop ──
-          vmTemplate:  (await getAppConfig('vm_template')) || VM_DEFAULT_TEMPLATE,
-          vmCompany:   (await getAppConfig('vm_company_name')) || VM_COMPANY_DEFAULT,
-          vmWebsite:   (await getAppConfig('vm_website')) || VM_WEBSITE_DEFAULT,
-          vmRepName:   await getAppConfig('vm_rep_name'),
-          vmCallback:  await getAppConfig('vm_callback_number'),
-          vmVoice:     vmVoice(await getAppConfig('vm_voice')),
-          vmPreferRecording: (await getAppConfig('vm_prefer_recording')) === '1',
-          vmPlaceholders: ['{first_name}', '{address}', '{your_name}', '{callback}', '{company}', '{website}'],
-          maxLines:    MAX_PD_LINES,
-        });
-      }
-
-      case 'save-voice-settings': {
-        if (typeof body.screen === 'boolean')  await setAppConfig('voice_screen', body.screen ? '1' : '0');
-        if (typeof body.greeting === 'string') await setAppConfig('voice_greeting', body.greeting);
-        if (typeof body.vmGreeting === 'string') await setAppConfig('voice_vm_greeting', body.vmGreeting);
-        if (body.ringSeconds)                  await setAppConfig('voice_ring_seconds', String(parseInt(body.ringSeconds, 10) || 25));
-        if (typeof body.forwardTo === 'string') await setAppConfig('default_voice_forward_number', body.forwardTo);
-        if (typeof body.vmTemplate === 'string') await setAppConfig('vm_template', body.vmTemplate);
-        if (typeof body.vmCompany === 'string')  await setAppConfig('vm_company_name', body.vmCompany);
-        if (typeof body.vmWebsite === 'string')  await setAppConfig('vm_website', body.vmWebsite);
-        if (typeof body.vmRepName === 'string')  await setAppConfig('vm_rep_name', body.vmRepName);
-        if (typeof body.vmCallback === 'string') await setAppConfig('vm_callback_number', body.vmCallback);
-        if (typeof body.vmVoice === 'string')    await setAppConfig('vm_voice', vmVoice(body.vmVoice));
-        if (typeof body.vmPreferRecording === 'boolean') {
-          await setAppConfig('vm_prefer_recording', body.vmPreferRecording ? '1' : '0');
-        }
-        return ok({ saved: true });
-      }
-
-      // Renders the drop message for a given lead without calling anyone —
-      // so Settings can show exactly what the seller will hear.
-      case 'preview-voicemail': {
-        const ctx = await vmContext(body.propertyId, body.profileId, {
-          yourName: body.yourName,
-          callback: body.callbackNumber,
-          company:  body.company,
-          website:  body.website,
-        });
-        const tpl = (typeof body.template === 'string' && body.template.trim())
-          ? body.template : await vmTemplate();
-        // Plain-text version for the screen; the call itself uses SSML.
-        const spoken = tpl
-          .replace(/\{first_name\}/g, ctx.firstName)
-          .replace(/\{address\}/g,    ctx.address)
-          .replace(/\{your_name\}/g,  ctx.yourName)
-          .replace(/\{company\}/g,    ctx.company)
-          .replace(/\{website\}/g,    ctx.website)
-          .replace(/\{callback\}/g,   ctx.callback || '(no callback number saved)');
-        return ok({ text: spoken, context: ctx, voice: vmVoice(body.voice || await getAppConfig('vm_voice')) });
-      }
-
-      // ── Removing leads ──────────────────────────────────────
-      // Properties cascade to phones and leads, so one delete clears
-      // the lead entirely.
-      case 'delete-property': {
-        if (!body.id) return err('id required');
-        await supa(`/properties?id=eq.${encodeURIComponent(body.id)}`, 'DELETE', null,
-          { Prefer: 'return=minimal' });
-        return ok({ deleted: 1 });
-      }
-
-      case 'delete-properties': {
-        const ids = Array.isArray(body.ids) ? body.ids.filter(Boolean).map(String) : [];
-        if (!ids.length) return err('ids required');
-        if (ids.length > 5000) return err('Too many at once — keep it under 5000');
-        let done = 0;
-        for (let i = 0; i < ids.length; i += 200) {
-          const chunk = ids.slice(i, i + 200);
-          const inList = chunk.map(id => `"${id.replace(/"/g, '\\"')}"`).join(',');
-          await supa(`/properties?id=in.(${encodeURIComponent(inList)})`, 'DELETE', null,
-            { Prefer: 'return=minimal' });
-          done += chunk.length;
-        }
-        return ok({ deleted: done });
-      }
-
-      // ── Named lists ─────────────────────────────────────────
-      // Label a batch of leads so they can be dialed as a set. Also how
-      // leads imported before list_name existed get named.
-      case 'set-list-name': {
-        const ids = Array.isArray(body.ids) ? body.ids.filter(Boolean).map(String) : [];
-        if (!ids.length) return err('ids required');
-        const name = String(body.listName || '').trim();
-        let done = 0;
-        for (let i = 0; i < ids.length; i += 200) {
-          const chunk = ids.slice(i, i + 200);
-          const inList = chunk.map(id => `"${id.replace(/"/g, '\\"')}"`).join(',');
-          await supa(`/properties?id=in.(${encodeURIComponent(inList)})`, 'PATCH',
-            { list_name: name }, { Prefer: 'return=minimal' });
-          done += chunk.length;
-        }
-        return ok({ updated: done, listName: name });
-      }
-
-      // Which build of api.js is actually live.
-      case 'api-version': {
-        return ok({ version: API_VERSION, hasTestPhone: true });
-      }
-
-      case 'test-phone': {
-        if (!body.phone) return err('phone required');
-        if (!body.from)  return err('from required (a Twilio number you own)');
-        const twiml =
-          `<?xml version="1.0" encoding="UTF-8"?>` +
-          `<Response><Say voice="Polly.Ruth-Generative">` +
-          `This is a test call from your Win Win dialer. Your phone number is set up correctly. Goodbye.` +
-          `</Say><Hangup/></Response>`;
-        try {
-          const j = await tw(`/Accounts/${twilioSid()}/Calls.json`, 'POST', {
-            From: body.from,
-            To:   body.phone,
-            Twiml: twiml,
-            Timeout: 25,
-          });
-          return ok({ sid: j.sid, status: j.status, to: j.to, from: j.from });
-        } catch (e) {
-          return err('Twilio refused to place the call: ' + e.message);
-        }
-      }
-
-      case 'end-call': {
-        if (!body.sid) return err('sid required');
-        await tw(`/Accounts/${twilioSid()}/Calls/${encodeURIComponent(body.sid)}.json`, 'POST', { Status: 'completed' });
-        return ok({ ended: true });
-      }
-
-      // Calls the rep's own phone and records their voicemail-drop message
-      case 'start-vm-recording': {
-        if (!body.profileId) return err('profileId required');
-        if (!body.phone)     return err('phone required (your forwarding number)');
-        if (!body.from)      return err('from required (a Twilio number you own)');
-        const baseUrl = 'https://winwincalltoclose.netlify.app/api';
-        const url = `${baseUrl}?action=record-vm-twiml&profileId=${encodeURIComponent(body.profileId)}`;
-        const j = await tw(`/Accounts/${twilioSid()}/Calls.json`, 'POST', {
-          From: body.from, To: body.phone, Url: url, Method: 'POST',
-        });
-        return ok({ sid: j.sid, status: j.status });
-      }
-
-      // Lets Settings show whether a recording is saved yet
-      case 'vm-recording-status': {
-        if (!qs.profileId) return err('profileId required');
-        const { json: profiles } = await supa(`/profiles?id=eq.${encodeURIComponent(qs.profileId)}&select=vm_recording_sid,vm_recording_duration,vm_recorded_at`);
-        const profile = Array.isArray(profiles) && profiles[0];
-        return ok({
-          hasRecording: !!(profile && profile.vm_recording_sid),
-          durationSec: profile ? profile.vm_recording_duration || 0 : 0,
-          recordedAt: profile ? profile.vm_recorded_at || null : null,
-        });
-      }
-
-      // Drops a voicemail into the LEAD's leg of a live call. Prefers
-      // the rep's recorded audio; falls back to a text-to-speech
-      // message if no recording has been saved yet.
-      case 'drop-voicemail': {
-        if (!body.sid) return err('sid required (the parent call sid)');
-        // AI mode (forceTts) skips the recorded audio and speaks a
-        // per-property personalized message in a natural Polly voice.
-        const voice = vmVoice(body.voice);
-        let playUrl = null;
-        if (!body.forceTts && body.profileId) {
-          try {
-            const { json: profiles } = await supa(`/profiles?id=eq.${encodeURIComponent(body.profileId)}&select=vm_recording_sid`);
-            const profile = Array.isArray(profiles) && profiles[0];
-            if (profile && profile.vm_recording_sid) playUrl = recordingPlaybackUrl(profile.vm_recording_sid);
-          } catch (e) { console.warn('vm profile lookup failed', e.message); }
-        }
-
-        // ── Build the spoken message here, not on the front end ──────
-        // body.message is now treated as an optional TEMPLATE, not as
-        // finished text. Whatever it contains, the rep's name, the
-        // callback number and the property address get merged in. If it
-        // arrives with no placeholders at all (an old front-end build),
-        // the saved template is used instead so the drop is never bare.
-        let vmSsml = null;
-        if (!playUrl) {
-          const rawTemplate = (typeof body.message === 'string' && /\{\w+\}/.test(body.message))
-            ? body.message
-            : await vmTemplate();
-          const ctx = await vmContext(body.propertyId, body.profileId, {
-            yourName:   body.yourName,
-            callback:   body.callbackNumber,
-            company:    body.company,
-            website:    body.website,
-            fromNumber: body.from,
-          });
-          vmSsml = `<Say voice="${escapeXml(voice)}">${renderVmSsml(rawTemplate, ctx)}</Say>`;
-        }
-
-        // Which leg actually has the seller on it.
-        //   direct  → power dial: the seller is dialed into the conference
-        //             as their own call, so body.sid IS their leg.
-        //   default → single call: the seller sits on a child leg of the
-        //             agent's call, found by ParentCallSid.
-        // Falling back between the two means a drop never dies just because
-        // the call was placed through the other path.
-        let targetSid = null;
-        if (body.direct) {
-          targetSid = body.sid;
-        } else {
-          try {
-            // BUGFIX: tw() returns the parsed JSON directly, so the old
-            // `const { json: childCalls }` destructure was always undefined
-            // and the seller's leg was never found — every drop landed on
-            // the rep's own leg instead.
-            const childCalls = await tw(`/Accounts/${twilioSid()}/Calls.json?ParentCallSid=${encodeURIComponent(body.sid)}`);
-            const childCall = childCalls && childCalls.calls && childCalls.calls[0];
-            if (childCall) targetSid = childCall.sid;
-          } catch (e) { console.warn('child leg lookup failed', e.message); }
-          if (!targetSid) targetSid = body.sid;
-        }
-
-        const inner = playUrl ? `<Play>${escapeXml(playUrl)}</Play>` : vmSsml;
-        // A beat of silence first so the machine's beep doesn't clip the
-        // opening word.
-        try {
-          await dropVmOnLeg(targetSid, inner);
-        } catch (e) {
-          return err('Could not drop the voicemail — the lead may have already hung up (' + e.message + ')');
-        }
-        return ok({ dropped: true, usedRecording: !!playUrl, leg: targetSid });
-      }
-
-      // ════════════════════════════════════════════════════════
-      // POSTCARDS — PostGrid
-      // ════════════════════════════════════════════════════════
-      case 'send-postcard': {
-        if (!body.propertyId) return err('propertyId required');
-        if (!postgridApiKey()) return err(`PostGrid ${postgridMode()} API key not configured on the server`);
-        const templateId = process.env.POSTGRID_TEMPLATE_ID;
-        if (!templateId) return err('POSTGRID_TEMPLATE_ID not configured on the server');
-
-        const { json: props } = await supa(`/properties?id=eq.${encodeURIComponent(body.propertyId)}&select=id,owners,owner_last_name,property_address,mailing_address`);
-        const prop = Array.isArray(props) && props[0];
-        if (!prop) return err('Lead not found');
-
-        const rawAddress = prop.mailing_address || prop.property_address;
-        if (!rawAddress) return err('No mailing address on file for this lead');
-        const addr = parseMailingAddress(rawAddress);
-        if (!addr.addressLine1 || !addr.provinceOrState) {
-          return err('Could not parse a complete mailing address (need street + state) for this lead');
-        }
-
-        const first = firstName(prop.owners);
-        const firstClean = first === 'there' ? '' : first;
-        const message = String(body.message || '').replace(/\{FirstName\}/gi, firstClean || 'there');
-
-        let result;
-        try {
-          result = await postgrid('/print-mail/v1/postcards', {
-            to: {
-              firstName: firstClean,
-              lastName: prop.owner_last_name || '',
-              addressLine1: addr.addressLine1,
-              city: addr.city,
-              provinceOrState: addr.provinceOrState,
-              postalOrZip: addr.postalOrZip,
-              countryCode: 'US',
-            },
-            from: {
-              companyName: 'Win Win Property Solutions NY',
-              addressLine1: '92 Virginia Ave',
-              city: 'Freeport',
-              provinceOrState: 'NY',
-              postalOrZip: '11520',
-              countryCode: 'US',
-            },
-            size: '6x4',
-            template: templateId,
-            mailingClass: 'standard_class',
-            mergeVariables: { message, first_name: firstClean },
-          });
-        } catch (e) {
-          return err('PostGrid: ' + e.message);
-        }
-
-        try {
-          await supa(`/properties?id=eq.${encodeURIComponent(body.propertyId)}`, 'PATCH', {
-            postcard_sent_at: new Date().toISOString(),
-            postcard_id: result.id || null,
-          });
-        } catch (e) { console.warn('postcard tracking update failed', e.message); }
-
-        return ok({ sent: true, id: result.id, status: result.status, mode: postgridMode() });
-      }
-
-      // List calls in window (for KPIs/log). Pulls from DB; refreshes any non-final from Twilio first.
-      case 'list-calls': {
-        const days = Math.max(1, Math.min(366, parseInt(qs.days || '7', 10)));
-        const since = new Date(Date.now() - days * 86400000).toISOString();
-        const { json: rows } = await supa(`/calls?started_at=gte.${encodeURIComponent(since)}&select=*&order=started_at.desc&limit=500`);
-        // Refresh non-final
-        const sid = twilioSid();
-        const finals = new Set(['completed', 'no-answer', 'busy', 'failed', 'canceled']);
-        const updated = [];
-        for (const r of rows || []) {
-          if (!finals.has(r.status || '')) {
-            try {
-              const j = await tw(`/Accounts/${sid}/Calls/${encodeURIComponent(r.twilio_sid)}.json`);
-              const dur = parseInt(j.duration || '0', 10) || 0;
-              if (j.status !== r.status || dur !== r.duration) {
-                await supa(`/calls?twilio_sid=eq.${encodeURIComponent(r.twilio_sid)}`, 'PATCH', {
-                  status: j.status, duration: dur, ended_at: j.end_time || null,
-                }, { Prefer: 'return=minimal' });
-                r.status = j.status; r.duration = dur;
-              }
-            } catch (e) { /* leave row as-is */ }
-          }
-          updated.push(r);
-        }
-        return ok({ calls: updated });
-      }
-
-      // ════════════════════════════════════════════════════════
-      // PROFILES (team members)
-      // ════════════════════════════════════════════════════════
-
-      case 'list-profiles': {
-        const { json } = await supa('/profiles?select=*&order=name.asc');
-        // Strip the hash before this leaves the server — the UI only needs
-        // to know whether a caller has a password set, never what it is.
-        const profiles = (json || []).map(p => {
-          const { password_hash, ...rest } = p;
-          return { ...rest, has_password: !!password_hash };
-        });
-        return ok({ profiles });
-      }
-
-      case 'create-profile': {
-        const name = (body.name || '').trim();
-        if (!name) return err('name required');
-        if (name.length > 40) return err('name too long');
-        const pw = body.password ? String(body.password) : '';
-        if (pw && user.role !== 'admin') return err('Only the owner can set a caller password', 403);
-        if (pw && pw.length < 6) return err('Password must be at least 6 characters');
-        try {
-          const row = { name };
-          if (body.phone) row.phone = body.phone;
-          if (pw) row.password_hash = hashPassword(pw);
-          const { json } = await supa('/profiles', 'POST', [row]);
-          const { password_hash, ...profile } = json[0] || {};
-          return ok({ profile: { ...profile, has_password: !!password_hash } });
-        } catch (e) {
-          if (String(e.message).match(/duplicate|unique/i)) return err('That name is already taken', 409);
-          throw e;
-        }
-      }
-
-      case 'update-profile-phone': {
-        if (!body.profileId) return err('profileId required');
-        await supa(`/profiles?id=eq.${encodeURIComponent(body.profileId)}`, 'PATCH', { phone: body.phone || '' });
-        return ok({ ok: true });
-      }
-
-      // Owner sets or rotates one caller's password. Sending an empty
-      // password clears it, which locks that caller out entirely.
-      case 'set-profile-password': {
-        if (user.role !== 'admin') return err('Only the owner can change caller passwords', 403);
-        if (!body.profileId) return err('profileId required');
-        const pw = body.password ? String(body.password) : '';
-        if (pw && pw.length < 6) return err('Password must be at least 6 characters');
-        const hash = pw ? hashPassword(pw) : null;
-        if (hash) {
-          // Two people on the same password would make the login ambiguous.
-          const { json: clash } = await supa(
-            `/profiles?password_hash=eq.${encodeURIComponent(hash)}&select=id,name&limit=1`
-          );
-          const other = Array.isArray(clash) && clash[0];
-          if (other && String(other.id) !== String(body.profileId)) {
-            return err('That password is already in use by ' + other.name, 409);
-          }
-          if (process.env.ACCESS_PASSWORD && pw === process.env.ACCESS_PASSWORD) {
-            return err('That is the owner password — pick a different one', 409);
-          }
-        }
-        await supa(`/profiles?id=eq.${encodeURIComponent(body.profileId)}`, 'PATCH', { password_hash: hash });
-        return ok({ ok: true, has_password: !!hash });
-      }
-
-      // Switch a caller off without deleting their name, so their old
-      // calls and assignments stay attributed to them in the history.
-      case 'set-profile-active': {
-        if (user.role !== 'admin') return err('Only the owner can activate or deactivate callers', 403);
-        if (!body.profileId) return err('profileId required');
-        await supa(`/profiles?id=eq.${encodeURIComponent(body.profileId)}`, 'PATCH', { is_active: body.active !== false });
-        return ok({ ok: true });
-      }
-
-      // ════════════════════════════════════════════════════════
-      // DEALS
-      // ════════════════════════════════════════════════════════
-
-      // Returns all active deals + summary counts
-      case 'list-deals': {
-        const { json: deals } = await supa('/deals?select=*&archived=eq.false&order=updated_at.desc&limit=500');
-        return ok({ deals: deals || [] });
-      }
-
-      // Full deal record including comps, docs, notes
-      case 'get-deal': {
-        const id = parseInt(qs.id, 10);
-        if (!id) return err('id required');
-        const { json: deals } = await supa(`/deals?select=*&id=eq.${id}`);
-        if (!deals || !deals.length) return err('Deal not found', 404);
-        const { json: comps } = await supa(`/deal_comps?select=*&deal_id=eq.${id}&order=id.asc`);
-        const { json: docs }  = await supa(`/deal_docs?select=*&deal_id=eq.${id}&order=id.asc`);
-        const { json: notes } = await supa(`/deal_notes?select=*&deal_id=eq.${id}&order=created_at.desc`);
-        // Also pull call history for this property
-        let calls = [];
-        if (deals[0].property_id) {
-          const { json: c } = await supa(`/calls?select=*&property_id=eq.${encodeURIComponent(deals[0].property_id)}&order=started_at.desc&limit=50`);
-          calls = c || [];
-        }
-        return ok({ deal: deals[0], comps: comps || [], docs: docs || [], notes: notes || [], calls });
-      }
-
-      // Create a new deal. Body: {propertyId?, owners, propertyAddress, mailingAddress, sourceList, createdByProfileId, assignedToProfileId, stage?}
-      case 'create-deal': {
-        const row = {
-          property_id:      body.propertyId || null,
-          owners:           body.owners || '',
-          owner_last_name:  body.ownerLastName || '',
-          property_address: body.propertyAddress || '',
-          mailing_address:  body.mailingAddress || '',
-          source_list:      body.sourceList || '',
-          stage:            body.stage || 'hot',
-          deal_type:        body.dealType || 'assignment',
-          created_by_profile:  body.createdByProfileId || null,
-          assigned_to_profile: body.assignedToProfileId || body.createdByProfileId || null,
-        };
-        const { json } = await supa('/deals', 'POST', [row]);
-        const deal = json[0];
-        // Auto-log a creation note
-        if (deal) {
-          try {
-            await supa('/deal_notes', 'POST', [{
-              deal_id: deal.id,
-              profile_id: row.created_by_profile,
-              body: 'Deal created from hot lead',
-              kind: 'system',
-            }], { Prefer: 'return=minimal' });
-          } catch (e) { /* non-fatal */ }
-        }
-        return ok({ deal });
-      }
-
-      // Update a deal. Body: {id, ...patch fields...}
-      case 'update-deal': {
-        const id = parseInt(body.id, 10);
-        if (!id) return err('id required');
-        // Map camelCase incoming → snake_case DB columns
-        const fieldMap = {
-          stage: 'stage', dealType: 'deal_type', assignedToProfileId: 'assigned_to_profile',
-          arv: 'arv', repairs: 'repairs', sellerAsking: 'seller_asking', yourOffer: 'your_offer',
-          maoPercent: 'mao_percent', assignmentFee: 'assignment_fee',
-          buyerClosingCosts: 'buyer_closing_costs',
-          purchaseClosingCosts: 'purchase_closing_costs', holdingMonthly: 'holding_monthly',
-          holdingMonths: 'holding_months', sellingCostsPct: 'selling_costs_pct',
-          resalePrice: 'resale_price', sourceList: 'source_list',
-          bed: 'bed', bath: 'bath', sqft: 'sqft', yearBuilt: 'year_built',
-          owners: 'owners', propertyAddress: 'property_address', mailingAddress: 'mailing_address',
-          ownerLastName: 'owner_last_name',
-          archived: 'archived',
-          deadReason: 'dead_reason', deadNotes: 'dead_notes',
-          // Deal Qualifier Form fields
-          qMotivation: 'q_motivation', qTimeline: 'q_timeline', qCondition: 'q_condition',
-          qAskingPrice: 'q_asking_price', qMortgageBalance: 'q_mortgage_balance',
-          qMonthlyPayment: 'q_monthly_payment', qRepairsNeeded: 'q_repairs_needed',
-          qOccupancy: 'q_occupancy', qListedWithAgent: 'q_listed_with_agent',
-          qDecisionMakers: 'q_decision_makers', qLiensOrBackTaxes: 'q_liens_or_back_taxes',
-          qCallbackTime: 'q_callback_time',
-          qReasonToChooseUs: 'q_reason_to_choose_us', qOtherOffers: 'q_other_offers',
-          qExtraNotes: 'q_extra_notes',
-          qCompletedAt: 'q_completed_at', qCompletedByProfile: 'q_completed_by_profile',
-        };
-        const patch = {};
-        for (const k in body) {
-          if (fieldMap[k] !== undefined) {
-            patch[fieldMap[k]] = body[k] === '' ? null : body[k];
-          }
-        }
-        if (patch.stage === 'closed' && !patch.closed_at) patch.closed_at = new Date().toISOString();
-        if (!Object.keys(patch).length) return ok({ ok: true });
-        const { json } = await supa(`/deals?id=eq.${id}`, 'PATCH', patch);
-        // If stage changed, log it
-        if (body.stage && body._previousStage && body.stage !== body._previousStage) {
-          try {
-            await supa('/deal_notes', 'POST', [{
-              deal_id: id,
-              profile_id: body.actingProfileId || null,
-              body: 'Moved to ' + body.stage,
-              kind: 'stage_change',
-            }], { Prefer: 'return=minimal' });
-          } catch (e) {}
-        }
-        return ok({ deal: json && json[0] });
-      }
-
-      // Archive (soft-delete) a deal
-      // ── Mark a deal dead, with a reason ────────────────────────
-      // Dead deals are NOT archived. They stay queryable so the metrics
-      // below can tell you why deals die, not just that they did.
-      case 'mark-deal-dead': {
-        const id = parseInt(body.id, 10);
-        if (!id) return err('id required');
-        if (!body.reason) return err('reason required');
-
-        // The full patch needs dead_reason / dead_notes / dead_at on the
-        // deals table. If those columns were never migrated, PostgREST
-        // rejects the WHOLE patch — which is why marking a deal dead used
-        // to silently leave it sitting in its old pipeline column. Retry
-        // with just the stage so the deal at least leaves the board, and
-        // say plainly what didn't get saved.
-        let json = null;
-        let degraded = false;
-        let degradedReason = '';
-        try {
-          ({ json } = await supa(`/deals?id=eq.${id}`, 'PATCH', {
-            stage:       'dead',
-            dead_reason: body.reason,
-            dead_notes:  body.notes || null,
-            dead_at:     new Date().toISOString(),
-          }));
-        } catch (e) {
-          degraded = true;
-          degradedReason = e.message || 'patch rejected';
-          console.warn('mark-deal-dead full patch failed:', degradedReason);
-          try {
-            ({ json } = await supa(`/deals?id=eq.${id}`, 'PATCH', { stage: 'dead' }));
-          } catch (e2) {
-            return err(
-              'Could not mark this deal dead: ' + (e2.message || degradedReason) +
-              '. The deals table likely needs the dead_reason, dead_notes and dead_at columns, ' +
-              'and stage must accept the value "dead".'
-            );
-          }
-        }
-
-        // Read it back. A PATCH that matched no rows returns 200 with an
-        // empty array, which looked like success to the dialer.
-        let saved = Array.isArray(json) ? json[0] : json;
-        if (!saved || saved.stage !== 'dead') {
-          const { json: check } = await supa(`/deals?id=eq.${id}&select=*`);
-          saved = Array.isArray(check) ? check[0] : null;
-        }
-        if (!saved) return err('Deal ' + id + ' was not found, so nothing was marked dead');
-        if (saved.stage !== 'dead') {
-          return err('The database refused to set stage to "dead" on deal ' + id +
-            '. Check for a CHECK constraint or enum on deals.stage that excludes it.');
-        }
-
-        try {
-          await supa('/deal_notes', 'POST', [{
-            deal_id: id,
-            profile_id: body.actingProfileId || null,
-            body: 'Marked dead — ' + body.reason + (body.notes ? ': ' + body.notes : ''),
-            kind: 'stage_change',
-          }], { Prefer: 'return=minimal' });
-        } catch (e) { /* non-fatal */ }
-
-        return ok({
-          deal: saved,
-          degraded,
-          reason: degraded
-            ? 'Stage was set to dead, but the reason and date could not be saved — ' +
-              'the deals table is missing dead_reason / dead_notes / dead_at (' + degradedReason + ')'
-            : undefined,
-        });
-      }
-
-      // ── Revive a dead deal ─────────────────────────────────────
-      case 'revive-deal': {
-        const id = parseInt(body.id, 10);
-        if (!id) return err('id required');
-        const { json } = await supa(`/deals?id=eq.${id}`, 'PATCH', {
-          stage:       body.stage || 'hot',
-          dead_reason: null,
-          dead_notes:  null,
-          dead_at:     null,
-        });
-        return ok({ deal: json && json[0] });
-      }
-
-      // ── Pipeline metrics ───────────────────────────────────────
-      // Everything is computed here rather than in the browser so the
-      // numbers don't depend on what happens to be loaded on screen.
-      case 'deal-metrics': {
-        const { json: deals } = await supa(
-          '/deals?archived=is.false&select=id,stage,dead_reason,dead_at,closed_at,created_at,' +
-          'source_list,assignment_fee,assigned_to_profile,deal_type&limit=5000'
-        );
-        const all = Array.isArray(deals) ? deals : [];
-
-        const isDead   = d => d.stage === 'dead';
-        const isClosed = d => d.stage === 'closed';
-        const isLive   = d => !isDead(d) && !isClosed(d);
-
-        const closed = all.filter(isClosed);
-        const dead   = all.filter(isDead);
-        const live   = all.filter(isLive);
-        const settled = closed.length + dead.length;
-
-        // Days between two timestamps, or null if either is missing
-        const daysBetween = (a, b) => {
-          if (!a || !b) return null;
-          const ms = new Date(b) - new Date(a);
-          return ms > 0 ? ms / 86400000 : null;
-        };
-        const avg = arr => {
-          const nums = arr.filter(n => typeof n === 'number' && !isNaN(n));
-          return nums.length ? nums.reduce((s, n) => s + n, 0) / nums.length : null;
-        };
-
-        // Why deals die, most common first
-        const reasonCounts = {};
-        dead.forEach(d => {
-          const r = d.dead_reason || 'Unspecified';
-          reasonCounts[r] = (reasonCounts[r] || 0) + 1;
-        });
-        const deadReasons = Object.entries(reasonCounts)
-          .map(([reason, count]) => ({
-            reason, count,
-            pct: dead.length ? Math.round((count / dead.length) * 100) : 0,
-          }))
-          .sort((a, b) => b.count - a.count);
-
-        // Which lists actually produce closings
-        const bySourceMap = {};
-        all.forEach(d => {
-          const k = d.source_list || 'Unknown';
-          if (!bySourceMap[k]) bySourceMap[k] = { source: k, total: 0, closed: 0, dead: 0, live: 0, fees: 0 };
-          const s = bySourceMap[k];
-          s.total++;
-          if (isClosed(d)) { s.closed++; s.fees += Number(d.assignment_fee) || 0; }
-          else if (isDead(d)) s.dead++;
-          else s.live++;
-        });
-        const bySource = Object.values(bySourceMap)
-          .map(s => ({
-            ...s,
-            closeRate: (s.closed + s.dead) ? Math.round((s.closed / (s.closed + s.dead)) * 100) : null,
-          }))
-          .sort((a, b) => b.total - a.total);
-
-        // Stage counts for the live pipeline
-        const byStage = {};
-        live.forEach(d => { byStage[d.stage] = (byStage[d.stage] || 0) + 1; });
-
-        const fees = closed.reduce((s, d) => s + (Number(d.assignment_fee) || 0), 0);
-
-        return ok({
-          totals: {
-            all: all.length,
-            live: live.length,
-            closed: closed.length,
-            dead: dead.length,
-            // Of deals that reached an outcome, how many closed
-            closeRate: settled ? Math.round((closed.length / settled) * 100) : null,
-          },
-          money: {
-            totalAssignmentFees: fees,
-            avgAssignmentFee: closed.length ? Math.round(fees / closed.length) : 0,
-          },
-          speed: {
-            avgDaysToClose: avg(closed.map(d => daysBetween(d.created_at, d.closed_at))),
-            avgDaysToDead:  avg(dead.map(d => daysBetween(d.created_at, d.dead_at))),
-          },
-          byStage,
-          deadReasons,
-          bySource,
-        });
-      }
-
-      case 'archive-deal': {
-        const id = parseInt(body.id, 10);
-        if (!id) return err('id required');
-        await supa(`/deals?id=eq.${id}`, 'PATCH', { archived: true });
-        return ok({ archived: true });
-      }
-
-      // ── Comps ───────────────────────────────────────────────
-      case 'add-comp': {
-        const dealId = parseInt(body.dealId, 10);
-        if (!dealId) return err('dealId required');
-        if (!body.url && !body.label) return err('label or url required');
-        const { json } = await supa('/deal_comps', 'POST', [{
-          deal_id: dealId, label: body.label || '', url: body.url || '',
-          sale_price: body.salePrice || null,
-        }]);
-        return ok({ comp: json[0] });
-      }
-      case 'delete-comp': {
-        const id = parseInt(body.id, 10);
-        if (!id) return err('id required');
-        await supa(`/deal_comps?id=eq.${id}`, 'DELETE');
-        return ok({ deleted: true });
-      }
-
-      // ── Documents ───────────────────────────────────────────
-      case 'add-doc': {
-        const dealId = parseInt(body.dealId, 10);
-        if (!dealId) return err('dealId required');
-        if (!body.url) return err('url required');
-        const { json } = await supa('/deal_docs', 'POST', [{
-          deal_id: dealId, label: body.label || body.url, url: body.url,
-          doc_type: body.docType || 'other',
-        }]);
-        return ok({ doc: json[0] });
-      }
-      case 'delete-doc': {
-        const id = parseInt(body.id, 10);
-        if (!id) return err('id required');
-        await supa(`/deal_docs?id=eq.${id}`, 'DELETE');
-        return ok({ deleted: true });
-      }
-
-      // ── Notes ───────────────────────────────────────────────
-      case 'add-note': {
-        const dealId = parseInt(body.dealId, 10);
-        if (!dealId) return err('dealId required');
-        if (!body.body || !body.body.trim()) return err('body required');
-        const { json } = await supa('/deal_notes', 'POST', [{
-          deal_id: dealId, body: body.body.trim(),
-          profile_id: body.profileId || null,
-          kind: body.kind || 'note',
-        }]);
-        return ok({ note: json[0] });
-      }
-
-      // ── VA Notes on a property/lead ─────────────────────────
-      case 'save-va-notes': {
-        if (!body.propertyId) return err('propertyId required');
-        const patch = {
-          property_id: String(body.propertyId),
-          va_notes: body.notes || '',
-          updated_at: new Date().toISOString(),
-        };
-        await supa('/leads?on_conflict=property_id', 'POST', [patch], { Prefer: 'resolution=merge-duplicates,return=minimal' });
-        return ok({ ok: true });
-      }
-
-      // ── Save Deal Qualifier Form (also stamps completion) ──
-      case 'save-qualifier': {
-        const id = parseInt(body.id, 10);
-        if (!id) return err('id required');
-        const fields = {
-          q_motivation:        body.qMotivation || null,
-          q_timeline:          body.qTimeline || null,
-          q_condition:         body.qCondition || null,
-          q_asking_price:      body.qAskingPrice === '' ? null : body.qAskingPrice,
-          q_mortgage_balance:  body.qMortgageBalance === '' ? null : body.qMortgageBalance,
-          q_monthly_payment:   body.qMonthlyPayment === '' ? null : body.qMonthlyPayment,
-          q_repairs_needed:    body.qRepairsNeeded || null,
-          q_occupancy:         body.qOccupancy || null,
-          q_listed_with_agent: (body.qListedWithAgent === true || body.qListedWithAgent === 'true') ? true : (body.qListedWithAgent === false || body.qListedWithAgent === 'false') ? false : null,
-          q_decision_makers:   body.qDecisionMakers || null,
-          q_callback_time:     body.qCallbackTime || null,
-          q_liens_or_back_taxes: body.qLiensOrBackTaxes || null,
-          q_reason_to_choose_us: body.qReasonToChooseUs || null,
-          q_other_offers:      body.qOtherOffers || null,
-          q_extra_notes:       body.qExtraNotes || null,
-          q_completed_at:      new Date().toISOString(),
-          q_completed_by_profile: body.completedByProfileId || null,
-        };
-        await supa(`/deals?id=eq.${id}`, 'PATCH', fields, { Prefer: 'return=minimal' });
-        // Log it
-        try {
-          await supa('/deal_notes', 'POST', [{
-            deal_id: id,
-            profile_id: body.completedByProfileId || null,
-            body: 'Qualifier form completed',
-            kind: 'system',
-          }], { Prefer: 'return=minimal' });
-        } catch (e) {}
-        return ok({ ok: true });
-      }
-
-      // ════════════════════════════════════════════════════════
-      // CASH BUYERS
-      // ════════════════════════════════════════════════════════
-
-      case 'list-buyers': {
-        const { json } = await supa('/buyers?select=*&order=active.desc,rating.desc,created_at.desc&limit=500');
-        return ok({ buyers: json || [] });
-      }
-
-      case 'save-buyer': {
-        if (!body.name) return err('name required');
-        const row = {
-          name: body.name,
-          company: body.company || '',
-          email: body.email || '',
-          phone: body.phone || '',
-          city: body.city || '',
-          state: body.state || '',
-          zip: body.zip || '',
-          buy_box: body.buyBox || '',
-          min_price: body.minPrice === '' ? null : body.minPrice,
-          max_price: body.maxPrice === '' ? null : body.maxPrice,
-          property_types: body.propertyTypes || '',
-          rehab_level: body.rehabLevel || '',
-          cash_only: body.cashOnly !== false,
-          funding_proof_on_file: !!body.fundingProofOnFile,
-          preferred_areas: body.preferredAreas || '',
-          website: body.website || '',
-          social_links: body.socialLinks || '',
-          notes: body.notes || '',
-          active: body.active !== false,
-          rating: parseInt(body.rating || 0, 10) || 0,
-        };
-        if (body.id) {
-          await supa(`/buyers?id=eq.${parseInt(body.id, 10)}`, 'PATCH', row, { Prefer: 'return=minimal' });
-          return ok({ ok: true, id: body.id });
-        } else {
-          row.created_by_profile = body.createdByProfileId || null;
-          const { json } = await supa('/buyers', 'POST', [row]);
-          return ok({ buyer: json[0] });
-        }
-      }
-
-      // Bulk buyer import. Body: { buyers: [ {...}, ... ] }
-      // Matches on email first, then name, so re-uploading a corrected
-      // sheet updates people instead of duplicating them.
-      case 'import-buyers': {
-        const incoming = Array.isArray(body.buyers) ? body.buyers : [];
-        if (!incoming.length) return err('buyers required');
-        if (incoming.length > 2000) return err('Too many at once — keep it under 2000');
-
-        const { json: existing } = await supa('/buyers?select=id,name,email');
-        const byEmail = new Map();
-        const byName  = new Map();
-        (existing || []).forEach(b => {
-          if (b.email) byEmail.set(String(b.email).trim().toLowerCase(), b.id);
-          if (b.name)  byName.set(String(b.name).trim().toLowerCase(), b.id);
-        });
-
-        const toInsert = [];
-        let updated = 0, skipped = 0;
-        for (const raw of incoming) {
-          const name = String(raw.name || '').trim();
-          if (!name) { skipped++; continue; }
-          const email = String(raw.email || '').trim();
-          const row = {
-            name,
-            company:        raw.company || '',
-            email,
-            phone:          raw.phone || '',
-            city:           raw.city || '',
-            state:          raw.state || '',
-            website:        raw.website || '',
-            social_links:   raw.socialLinks || '',
-            buy_box:        raw.buyBox || '',
-            property_types: raw.propertyTypes || '',
-            preferred_areas: raw.preferredAreas || '',
-            min_price:      raw.minPrice === '' || raw.minPrice == null ? null : raw.minPrice,
-            max_price:      raw.maxPrice === '' || raw.maxPrice == null ? null : raw.maxPrice,
-            notes:          raw.notes || '',
-            active:         raw.active !== false,
-            rating:         parseInt(raw.rating || 0, 10) || 0,
-          };
-          const hit = (email && byEmail.get(email.toLowerCase())) || byName.get(name.toLowerCase());
-          if (hit) {
-            // Don't blank out fields the sheet left empty
-            const patch = {};
-            Object.entries(row).forEach(([k, v]) => {
-              if (v !== '' && v !== null && v !== 0) patch[k] = v;
-            });
-            if (Object.keys(patch).length) {
-              await supa(`/buyers?id=eq.${hit}`, 'PATCH', patch, { Prefer: 'return=minimal' });
-              updated++;
-            } else skipped++;
-          } else {
-            row.created_by_profile = body.createdByProfileId || null;
-            toInsert.push(row);
-            if (email) byEmail.set(email.toLowerCase(), -1);
-            byName.set(name.toLowerCase(), -1);
-          }
-        }
-        for (let i = 0; i < toInsert.length; i += 200) {
-          await supa('/buyers', 'POST', toInsert.slice(i, i + 200), { Prefer: 'return=minimal' });
-        }
-        return ok({ added: toInsert.length, updated, skipped });
-      }
-
-      case 'delete-buyer': {
-        if (!body.id) return err('id required');
-        await supa(`/buyers?id=eq.${parseInt(body.id, 10)}`, 'DELETE');
-        return ok({ deleted: true });
-      }
-
-      // Send a deal to one or more buyers via email
-      // Body: { buyerIds: [...], dealId, subject, body, ccMe? }
-      case 'send-deal-to-buyers': {
-        const buyerIds = Array.isArray(body.buyerIds) ? body.buyerIds : [];
-        if (!buyerIds.length) return err('buyerIds required');
-        if (!body.subject) return err('subject required');
-        if (!body.body) return err('body required');
-
-        // Fetch deal info (optional — for logging)
-        let deal = null;
-        if (body.dealId) {
-          const { json } = await supa(`/deals?id=eq.${parseInt(body.dealId, 10)}&select=*`);
-          deal = json && json[0];
-        }
-
-        // Fetch buyers
-        const inList = buyerIds.map(i => parseInt(i, 10)).join(',');
-        const { json: buyers } = await supa(`/buyers?id=in.(${inList})&select=*`);
-        if (!buyers || !buyers.length) return err('No buyers found');
-
-        const results = [];
-        for (const b of buyers) {
-          if (!b.email) {
-            results.push({ buyerId: b.id, name: b.name, status: 'skipped', error: 'No email on file' });
-            continue;
-          }
-          // Personalize {first_name} and {address}
-          const fn = (b.name || '').split(/\s+/)[0] || 'there';
-          const addr = deal ? (deal.property_address || '') : '';
-          const personalizedBody = (body.body || '')
-            .replace(/\{first_name\}/g, fn)
-            .replace(/\{address\}/g, addr);
-          const personalizedSubject = (body.subject || '')
-            .replace(/\{first_name\}/g, fn)
-            .replace(/\{address\}/g, addr);
-
-          const r = await sendEmail({
-            to: b.email,
-            subject: personalizedSubject,
-            text: personalizedBody,
-            replyTo: process.env.RESEND_REPLY_TO || undefined,
-          });
-
-          // Log the send
-          await supa('/buyer_sends', 'POST', [{
-            buyer_id: b.id,
-            deal_id: body.dealId || null,
-            channel: 'email',
-            subject: personalizedSubject,
-            body: personalizedBody,
-            status: r.ok ? 'sent' : 'failed',
-            error_msg: r.error || '',
-            sent_by_profile: body.sentByProfileId || null,
-          }], { Prefer: 'return=minimal' }).catch(()=>{});
-
-          // Bump stats if sent
-          if (r.ok) {
-            await supa(`/buyers?id=eq.${b.id}`, 'PATCH', {
-              deals_sent: (b.deals_sent || 0) + 1,
-              last_sent_at: new Date().toISOString(),
-            }, { Prefer: 'return=minimal' }).catch(()=>{});
-          }
-
-          results.push({ buyerId: b.id, name: b.name, status: r.ok ? 'sent' : 'failed', error: r.error });
-        }
-
-        const sent = results.filter(x => x.status === 'sent').length;
-        const failed = results.filter(x => x.status === 'failed').length;
-        const skipped = results.filter(x => x.status === 'skipped').length;
-        return ok({ results, sent, failed, skipped });
-      }
-
-      // Get send history for a deal (so the deal detail can show "sent to: X, Y, Z")
-      case 'deal-buyer-sends': {
-        const dealId = parseInt(qs.dealId, 10);
-        if (!dealId) return err('dealId required');
-        const { json } = await supa(`/buyer_sends?deal_id=eq.${dealId}&select=*&order=created_at.desc`);
-        return ok({ sends: json || [] });
-      }
-
-      // ════════════════════════════════════════════════════════
-      // VA RECORDINGS (audio upload + storage)
-      // ════════════════════════════════════════════════════════
-
-      case 'list-recordings': {
-        const propertyId = qs.propertyId;
-        if (!propertyId) return err('propertyId required');
-        const { json } = await supa(`/va_recordings?property_id=eq.${encodeURIComponent(propertyId)}&deleted_at=is.null&select=*&order=uploaded_at.desc`);
-        const recordings = [];
-        for (const r of (json || [])) {
-          const url = await signedUrl('va-recordings', r.storage_path, 3600);
-          recordings.push({ ...r, playback_url: url });
-        }
-        return ok({ recordings });
-      }
-
-      case 'upload-recording': {
-        if (!body.propertyId) return err('propertyId required');
-        if (!body.dataBase64) return err('dataBase64 required');
-        if (!body.filename) return err('filename required');
-        const mime = body.mimeType || 'audio/mpeg';
-        const ext = (body.filename.match(/\.([a-z0-9]+)$/i) || [,'m4a'])[1].toLowerCase();
-        const path = `${body.propertyId}/${Date.now()}_${Math.random().toString(36).slice(2,8)}.${ext}`;
-        const up = await uploadToStorage('va-recordings', path, body.dataBase64, mime);
-        if (up.error) return err(up.error);
-        const { json } = await supa('/va_recordings', 'POST', [{
-          property_id: String(body.propertyId),
-          storage_path: path,
-          filename: body.filename,
-          mime_type: mime,
-          size_bytes: body.sizeBytes || 0,
-          duration_sec: body.durationSec || null,
-          uploaded_by_profile: body.uploadedByProfileId || null,
-        }]);
-        return ok({ recording: json[0] });
-      }
-
-      case 'delete-recording': {
-        if (!body.id) return err('id required');
-        const { json } = await supa(`/va_recordings?id=eq.${parseInt(body.id, 10)}&select=storage_path`);
-        if (!json || !json[0]) return err('Recording not found', 404);
-        await deleteFromStorage('va-recordings', json[0].storage_path);
-        await supa(`/va_recordings?id=eq.${parseInt(body.id, 10)}`, 'PATCH', { deleted_at: new Date().toISOString() }, { Prefer: 'return=minimal' });
-        return ok({ deleted: true });
-      }
-
-      case 'cleanup-recordings': {
-        const result = await cleanupExpiredRecordings();
-        return ok(result);
-      }
-
-      // ════════════════════════════════════════════════════════
-      // SMS / DRIP ENDPOINTS
-      // ════════════════════════════════════════════════════════
-
-      // Set consent on a lead. Body: {propertyId, consent, cell, by}
-      case 'set-sms-consent': {
-        if (!body.propertyId) return err('propertyId required');
-        const consent = body.consent || 'none';
-        if (!['none','verbal','written','revoked'].includes(consent)) return err('Invalid consent value');
-        const patch = {
-          property_id: String(body.propertyId),
-          sms_consent: consent,
-          updated_at: new Date().toISOString(),
-        };
-        if (body.cell) patch.sms_cell = body.cell;
-        if (consent === 'verbal' || consent === 'written') {
-          patch.sms_consent_at = new Date().toISOString();
-          patch.sms_consent_by = body.by || '';
-        }
-        await supa('/leads?on_conflict=property_id', 'POST', [patch], { Prefer: 'resolution=merge-duplicates,return=minimal' });
-        // If revoked, add to opt-out list too
-        if (consent === 'revoked' && body.cell) {
-          await supa('/sms_opt_outs?on_conflict=e164', 'POST', [{ e164: body.cell, reason: 'manual' }], { Prefer: 'resolution=merge-duplicates,return=minimal' });
-        }
-        return ok({ ok: true });
-      }
-
-      // List messages for a deal
-      case 'list-messages': {
-        const dealId = parseInt(qs.dealId, 10);
-        if (!dealId) return err('dealId required');
-        const { json } = await supa(`/messages?deal_id=eq.${dealId}&select=*&order=created_at.asc&limit=500`);
-        return ok({ messages: json || [] });
-      }
-
-      // Inbox: recent inbound messages across all deals
-      case 'list-inbox': {
-        const { json: inbound } = await supa('/messages?direction=eq.inbound&select=*&order=created_at.desc&limit=100');
-        // Group by from_number, give summary of latest
-        const byNum = {};
-        for (const m of (inbound || [])) {
-          if (!byNum[m.from_number]) byNum[m.from_number] = { from: m.from_number, latest: m, count: 0, dealId: m.deal_id, propertyId: m.property_id };
-          byNum[m.from_number].count++;
-        }
-        // For each unique number, find the deal it belongs to (via leads.sms_cell)
-        const threads = Object.values(byNum);
-        for (const t of threads) {
-          if (t.dealId) continue;
-          try {
-            const { json: leads } = await supa(`/leads?sms_cell=eq.${encodeURIComponent(t.from)}&select=property_id`);
-            const propId = leads && leads[0] ? leads[0].property_id : null;
-            if (propId) {
-              t.propertyId = propId;
-              const { json: deals } = await supa(`/deals?property_id=eq.${encodeURIComponent(propId)}&select=id,property_address,owners&limit=1`);
-              if (deals && deals[0]) {
-                t.dealId = deals[0].id;
-                t.address = deals[0].property_address;
-                t.owners = deals[0].owners;
-              }
-            }
-          } catch {}
-        }
-        return ok({ threads });
-      }
-
-      // Every message to or from one number, oldest first — the
-      // conversation behind an Inbox row.
-      case 'list-thread': {
-        const num = qs.number || body.number;
-        if (!num) return err('number required');
-        const enc = encodeURIComponent(num);
-        const { json } = await supa(
-          `/messages?or=(from_number.eq.${enc},to_number.eq.${enc})` +
-          `&select=*&order=created_at.asc&limit=300`
-        );
-        return ok({ messages: json || [] });
-      }
-
-      // Remove one message from the app's history. Twilio keeps its own
-      // copy in the console; this only clears the dialer's Inbox.
-      case 'delete-message': {
-        if (!body.id) return err('id required');
-        await supa(`/messages?id=eq.${encodeURIComponent(body.id)}`, 'DELETE', null,
-          { Prefer: 'return=minimal' });
-        return ok({ deleted: true });
-      }
-
-      // Clear an entire conversation with one number.
-      case 'delete-thread': {
-        const num = body.number;
-        if (!num) return err('number required');
-        const enc = encodeURIComponent(num);
-        await supa(
-          `/messages?or=(from_number.eq.${enc},to_number.eq.${enc})`, 'DELETE', null,
-          { Prefer: 'return=minimal' }
-        );
-        return ok({ deleted: true });
-      }
-
-      // Send a manual one-off SMS. Body: {dealId, propertyId, to, body}
-      case 'send-manual-sms': {
-        if (!body.to) return err('to required');
-        if (!body.body) return err('body required');
-        if (await isOptedOut(body.to)) return err('This number has opted out and cannot be texted.', 400);
-        const result = await sendOneSms(body.to, body.body, body.dealId || null, body.propertyId || null, null, null);
-        if (result.error) return err(result.error);
-        return ok(result);
-      }
-
-      // Start a drip campaign (admin approval). Body: {dealId, kind, triggerDate?}
-      case 'start-drip': {
-        if (!body.dealId) return err('dealId required');
-        if (!body.kind || !DRIP_TEMPLATES[body.kind]) return err('Invalid drip kind');
-        // Look up the deal + lead
-        const { json: dealRows } = await supa(`/deals?id=eq.${body.dealId}&select=*`);
-        const deal = dealRows && dealRows[0];
-        if (!deal) return err('Deal not found', 404);
-        if (!deal.property_id) return err('Deal has no linked property — cannot start drip');
-        const { json: leadRows } = await supa(`/leads?property_id=eq.${encodeURIComponent(deal.property_id)}&select=sms_consent,sms_cell`);
-        const lead = leadRows && leadRows[0];
-        if (!lead || (lead.sms_consent !== 'verbal' && lead.sms_consent !== 'written')) {
-          return err('No SMS consent on file. Toggle consent on the Pipeline card first.', 400);
-        }
-        if (!lead.sms_cell) return err('No cell number on file for SMS.', 400);
-        if (await isOptedOut(lead.sms_cell)) return err('That number has opted out.', 400);
-        const triggerDate = body.triggerDate ? new Date(body.triggerDate).toISOString() : new Date().toISOString();
-        // Upsert (one of each kind per deal)
-        await supa('/drip_campaigns?on_conflict=deal_id,kind', 'POST', [{
-          deal_id: body.dealId,
-          kind: body.kind,
-          status: 'active',
-          trigger_date: triggerDate,
-          started_at: triggerDate,
-        }], { Prefer: 'resolution=merge-duplicates,return=minimal' });
-        // Process due drips immediately so day-0 messages fire now (within send window)
-        const summary = await processDueDrips();
-        return ok({ ok: true, summary });
-      }
-
-      // Pause / resume / cancel a drip. Body: {id}
-      case 'pause-drip': {
-        if (!body.id) return err('id required');
-        await supa(`/drip_campaigns?id=eq.${body.id}`, 'PATCH', { status: 'paused', paused_reason: 'manual' }, { Prefer: 'return=minimal' });
-        return ok({ ok: true });
-      }
-      case 'resume-drip': {
-        if (!body.id) return err('id required');
-        await supa(`/drip_campaigns?id=eq.${body.id}`, 'PATCH', { status: 'active', paused_reason: '' }, { Prefer: 'return=minimal' });
-        return ok({ ok: true });
-      }
-      case 'cancel-drip': {
-        if (!body.id) return err('id required');
-        await supa(`/drip_campaigns?id=eq.${body.id}`, 'PATCH', { status: 'completed', paused_reason: 'cancelled' }, { Prefer: 'return=minimal' });
-        return ok({ ok: true });
-      }
-
-      // List drips for a deal
-      case 'list-drips': {
-        const dealId = parseInt(qs.dealId, 10);
-        if (!dealId) return err('dealId required');
-        const { json } = await supa(`/drip_campaigns?deal_id=eq.${dealId}&select=*&order=created_at.desc`);
-        return ok({ drips: json || [] });
-      }
-
-      // Process all due drips. Frontend calls this on page load.
-      case 'process-drips': {
-        const summary = await processDueDrips();
-        return ok(summary);
-      }
-
-      // SMS config
-      case 'get-sms-config': {
-        const from = await getAppConfig('sms_from_number');
-        const biz  = await getAppConfig('sms_business_name');
-        return ok({ from_number: from, business_name: biz });
-      }
-      case 'set-sms-config': {
-        if (typeof body.from_number === 'string') await setAppConfig('sms_from_number', body.from_number);
-        if (typeof body.business_name === 'string') await setAppConfig('sms_business_name', body.business_name);
-        return ok({ ok: true });
-      }
-
-      // ════════════════════════════════════════════════════════
-      // CONTRACTS — upload + email via Zoho
-      // ════════════════════════════════════════════════════════
-
-      case 'upload-contract': {
-        if (!body.dataBase64) return err('dataBase64 required');
-        if (!body.filename)   return err('filename required');
-        const mime = body.mimeType || 'application/pdf';
-        const ext  = (body.filename.match(/\.([a-z0-9]+)$/i) || [,'pdf'])[1].toLowerCase();
-        const safeName = body.filename.replace(/[^a-zA-Z0-9._-]/g,'_');
-        const path = `${Date.now()}_${Math.random().toString(36).slice(2,8)}_${safeName}`;
-        const up = await uploadToStorage('contracts', path, body.dataBase64, mime);
-        if (up.error) return err(up.error);
-        const publicUrl = `${process.env.SUPABASE_URL}/storage/v1/object/public/contracts/${encodeURIComponent(path)}`;
-        return ok({ url: publicUrl, filename: body.filename });
-      }
-
-      case 'send-contract': {
-        if (!body.toEmail)      return err('toEmail required');
-        if (!body.contractUrl)  return err('contractUrl required');
-        if (!body.sellerName)   return err('sellerName required');
-
-        const subject  = body.subject  || `Contract for ${body.propertyAddress || 'your property'}`;
-        const message  = body.message  || `Hi ${body.sellerName},\n\nPlease find your contract at the link below.\n\n${body.contractUrl}\n\nLet me know if you have any questions.\n\nBest regards`;
-        const html = `<p>${message.replace(/\n/g,'<br>')}</p>
-                 <p><a href="${body.contractUrl}" style="background:#1a56db;color:#fff;padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:bold">📄 Open Contract</a></p>`;
-
-        const contractRes = await sendViaSpacemail({ to: body.toEmail, subject, text: message, html });
-        if (contractRes.error) return err(contractRes.error, 500);
-        return ok({ sent: true, id: contractRes.id });
-      }
-
-      // ════════════════════════════════════════════════════════
-      // SPACEMAIL — send any email from the app
-      // ════════════════════════════════════════════════════════
-      case 'send-email': {
-        if (!body.to) return err('to (recipient) required');
-        const files = Array.isArray(body.attachments) ? body.attachments : [];
-        const attachments = [];
-        let totalBytes = 0;
-        for (const f of files) {
-          if (!f || !f.contentBase64) continue;
-          const buf = Buffer.from(String(f.contentBase64), 'base64');
-          totalBytes += buf.length;
-          attachments.push({
-            filename: String(f.filename || 'attachment').slice(0, 200),
-            content: buf,
-            contentType: f.contentType || undefined,
-          });
-        }
-        if (totalBytes > 4 * 1024 * 1024) {
-          return err('Attachments are too big. Keep them under about 3.5 MB per email.', 413);
-        }
-        const res = await sendViaSpacemail({
-          to: body.to,
-          cc: body.cc,
-          replyTo: body.replyTo,
-          subject: body.subject,
-          html: body.html,
-          text: body.text,
-          attachments,
-        });
-        if (res.error) return err(res.error, 500);
-        return ok({ sent: true, id: res.id, attachments: attachments.length });
-      }
-
-      // ════════════════════════════════════════════════════════
-      // SPACEMAIL — pull recent inbox messages via IMAP
-      // Optional body.search filters by sender address or subject.
-      // ════════════════════════════════════════════════════════
-      case 'fetch-inbox': {
-        if (!spacemailReady()) return err('SPACEMAIL_USER / SPACEMAIL_PASS not set in Netlify env vars', 500);
-        const limit  = Math.min(parseInt(body.limit, 10) || 30, 50);
-        const search = (body.search || '').trim().toLowerCase();
-        const folder = String(body.folder || 'INBOX');
-        const client = spacemailImapClient();
-        const messages = [];
-        try {
-          await client.connect();
-          const lock = await client.getMailboxLock(folder);
-          try {
-            const status = await client.status(folder, { messages: true });
-            const total = status.messages || 0;
-            if (total > 0) {
-              const windowSize = search ? total : Math.min(total, limit);
-              const start = Math.max(1, total - windowSize + 1);
-              for await (const msg of client.fetch(`${start}:*`, { envelope: true, flags: true, internalDate: true }, { uid: false })) {
-                const env = msg.envelope || {};
-                const fromObj = (env.from && env.from[0]) || {};
-                const fromAddr = (fromObj.address || '').toLowerCase();
-                const subj = env.subject || '';
-                if (search && !(fromAddr.includes(search) || subj.toLowerCase().includes(search))) continue;
-                let iso = '';
-                const d = env.date || msg.internalDate;
-                try { iso = d ? new Date(d).toISOString() : ''; } catch { iso = ''; }
-                let seen = false;
-                try { seen = msg.flags ? msg.flags.has('\\Seen') : false; } catch { seen = false; }
-                messages.push({
-                  uid: msg.uid,
-                  from: fromObj.address || '',
-                  fromName: fromObj.name || fromObj.address || '',
-                  subject: subj || '(no subject)',
-                  date: iso,
-                  seen,
-                });
-              }
-            }
-          } finally { lock.release(); }
-          await client.logout();
-        } catch (e) {
-          try { await client.close(); } catch {}
-          return err('IMAP error: ' + (e.message || e), 502);
-        }
-        messages.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
-        return ok({ messages: messages.slice(0, limit) });
-      }
-
-      // ════════════════════════════════════════════════════════
-      // SPACEMAIL — fetch full body of one message (marks as read)
-      // ════════════════════════════════════════════════════════
-      case 'fetch-email': {
-        const uid = parseInt(body.uid, 10);
-        if (!uid) return err('uid required');
-        if (!spacemailReady()) return err('SPACEMAIL_USER / SPACEMAIL_PASS not set', 500);
-        const folder = String(body.folder || 'INBOX');
-        const { simpleParser } = require('mailparser');
-        const client = spacemailImapClient();
-        let result = null;
-        try {
-          await client.connect();
-          const lock = await client.getMailboxLock(folder);
-          try {
-            const msg = await client.fetchOne(String(uid), { source: true }, { uid: true });
-            if (!msg || !msg.source) {
-              result = { error: 'not found' };
-            } else {
-              const parsed = await simpleParser(msg.source);
-              result = {
-                uid,
-                from: (parsed.from && parsed.from.text) || '',
-                to: (parsed.to && parsed.to.text) || '',
-                subject: parsed.subject || '(no subject)',
-                date: parsed.date ? parsed.date.toISOString() : '',
-                messageId: parsed.messageId || '',
-                html: parsed.html || parsed.textAsHtml || '',
-                text: parsed.text || '',
-              };
-              try { await client.messageFlagsAdd(String(uid), ['\\Seen'], { uid: true }); } catch {}
-            }
-          } finally { lock.release(); }
-          await client.logout();
-        } catch (e) {
-          try { await client.close(); } catch {}
-          return err('IMAP error: ' + (e.message || e), 502);
-        }
-        if (result && result.error) return err(result.error, 404);
-        return ok(result);
-      }
-
-      // ════════════════════════════════════════════════════════
-      // SPACEMAIL — folders, move, delete
-      // ════════════════════════════════════════════════════════
-      case 'list-mail-folders': {
-        if (!spacemailReady()) return err('SPACEMAIL_USER / SPACEMAIL_PASS not set', 500);
-        const client = spacemailImapClient();
-        let folders = [];
-        try {
-          await client.connect();
-          const list = await client.list();
-          folders = list
-            .filter(f => !(f.flags && f.flags.has('\\Noselect')))
-            .map(f => ({ path: f.path, name: f.name, specialUse: f.specialUse || '' }));
-          await client.logout();
-        } catch (e) {
-          try { await client.close(); } catch {}
-          return err('IMAP error: ' + (e.message || e), 502);
-        }
-        const order = { '\\Sent': 1, '\\Drafts': 2, '\\Junk': 3, '\\Trash': 4, '\\Archive': 5 };
-        const rank = f => f.path.toUpperCase() === 'INBOX' ? 0 : (order[f.specialUse] || 9);
-        folders.sort((a, b) => rank(a) - rank(b) || a.path.localeCompare(b.path));
-        return ok({ folders });
-      }
-
-      case 'create-mail-folder': {
-        const name = String(body.name || '').trim().replace(/[\\/]/g, '-').slice(0, 60);
-        if (!name) return err('name required');
-        if (!spacemailReady()) return err('SPACEMAIL_USER / SPACEMAIL_PASS not set', 500);
-        const client = spacemailImapClient();
-        let path = name;
-        try {
-          await client.connect();
-          const r = await client.mailboxCreate(name);
-          if (r && r.path) path = r.path;
-          await client.logout();
-        } catch (e) {
-          try { await client.close(); } catch {}
-          return err('Could not create folder: ' + (e.message || e), 502);
-        }
-        return ok({ path });
-      }
-
-      case 'move-email': {
-        const uid = parseInt(body.uid, 10);
-        const from = String(body.folder || 'INBOX');
-        const to = String(body.toFolder || '');
-        if (!uid) return err('uid required');
-        if (!to) return err('toFolder required');
-        if (to === from) return ok({ moved: false });
-        if (!spacemailReady()) return err('SPACEMAIL_USER / SPACEMAIL_PASS not set', 500);
-        const client = spacemailImapClient();
-        try {
-          await client.connect();
-          const lock = await client.getMailboxLock(from);
-          try {
-            const r = await client.messageMove(String(uid), to, { uid: true });
-            if (!r) throw new Error('That email was not found in ' + from);
-          } finally { lock.release(); }
-          await client.logout();
-        } catch (e) {
-          try { await client.close(); } catch {}
-          return err('Move failed: ' + (e.message || e), 502);
-        }
-        return ok({ moved: true, to });
-      }
-
-      // Outside Trash: moves the email to Trash. Inside Trash: deletes it for good.
-      case 'delete-email': {
-        const uid = parseInt(body.uid, 10);
-        const folder = String(body.folder || 'INBOX');
-        if (!uid) return err('uid required');
-        if (!spacemailReady()) return err('SPACEMAIL_USER / SPACEMAIL_PASS not set', 500);
-        const client = spacemailImapClient();
-        let permanent = false;
-        try {
-          await client.connect();
-          const list = await client.list();
-          const trash = list.find(f => f.specialUse === '\\Trash') ||
-                        list.find(f => /^(trash|deleted( items| messages)?)$/i.test(f.name));
-          const inTrash = trash && trash.path === folder;
-          if (!trash && !inTrash) throw new Error('No Trash folder found on this mailbox');
-          const lock = await client.getMailboxLock(folder);
-          try {
-            if (inTrash) {
-              await client.messageDelete(String(uid), { uid: true });
-              permanent = true;
-            } else {
-              const r = await client.messageMove(String(uid), trash.path, { uid: true });
-              if (!r) throw new Error('That email was not found in ' + folder);
-            }
-          } finally { lock.release(); }
-          await client.logout();
-        } catch (e) {
-          try { await client.close(); } catch {}
-          return err('Delete failed: ' + (e.message || e), 502);
-        }
-        return ok({ deleted: true, permanent });
-      }
-
-      // ════════════════════════════════════════════════════════
-      // E-SIGNATURE — SignWell (Purchase & Sale + Assignment)
-      // ════════════════════════════════════════════════════════
-
-      case 'send-for-signature': {
-        if (!body.templateId)   return err('templateId required');
-        if (!body.signerEmail)  return err('signerEmail required');
-        if (!body.signerName)   return err('signerName required');
-
-        const SIGNWELL_KEY = process.env.SIGNWELL_API_KEY || 'YWNjZXNzOjhjOTYxY2I3NDlhMmIzNjAxOTI0ZTVlM2QwY2IzNTA4';
-
-        const payload = {
-          template_id: body.templateId,
-          name: body.documentName || `Contract — ${body.signerName}`,
-          subject: body.subject || 'Please sign your contract',
-          message: body.message || `Hi ${body.signerName}, please review and sign the attached document.`,
-          recipients: [
-            {
-              id: '1',
-              name: body.signerName,
-              email: body.signerEmail,
-              placeholder_name: body.placeholderName || 'Signer 1',
-            },
-          ],
-          draft: false,
-          test_mode: body.testMode === true,
-        };
-
-        // Pre-fill template fields (e.g. purchase price, address, closing date)
-        if (body.fields && typeof body.fields === 'object') {
-          payload.template_fields = Object.entries(body.fields).map(([api_id, value]) => ({ api_id, value }));
-        }
-
-        const resp = await fetch('https://www.signwell.com/api/v1/document_templates/' + encodeURIComponent(body.templateId) + '/documents', {
-          method: 'POST',
-          headers: {
-            'X-Api-Key': SIGNWELL_KEY,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(payload),
-        });
-        const json = await resp.json();
-        if (!resp.ok) return err(json.message || json.error || 'SignWell request failed', resp.status);
-
-        return ok({ document: json });
-      }
-
-      case 'check-signature-status': {
-        if (!body.documentId) return err('documentId required');
-        const SIGNWELL_KEY = process.env.SIGNWELL_API_KEY || 'YWNjZXNzOjhjOTYxY2I3NDlhMmIzNjAxOTI0ZTVlM2QwY2IzNTA4';
-        const resp = await fetch('https://www.signwell.com/api/v1/documents/' + encodeURIComponent(body.documentId), {
-          headers: { 'X-Api-Key': SIGNWELL_KEY },
-        });
-        const json = await resp.json();
-        if (!resp.ok) return err(json.message || 'Status check failed', resp.status);
-        return ok({ status: json.status, document: json });
-      }
-
-      // ════════════════════════════════════════════════════════
-      // REALTOR SEARCH — Apify (Realtor.com Agents Scraper)
-      // ════════════════════════════════════════════════════════
-
-      case 'search-realtors': {
-        if (!body.zipCode) return err('zipCode required');
-        const APIFY_TOKEN = process.env.APIFY_API_TOKEN || 'apify_api_BzvtdXSFSTGcWCqj6yK784P6cDJkEJ1zJKzm';
-        const page = parseInt(body.page || 0); // shuffle page offset
-
-        const runResp = await fetch(
-          `https://api.apify.com/v2/acts/automation-lab~realtor-agents-scraper/run-sync-get-dataset-items?token=${APIFY_TOKEN}&timeout=90`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              location: String(body.zipCode),
-              listingType: 'both',
-              maxResults: 100,
-            }),
-          }
-        );
-
-        const rawText = await runResp.text();
-        let agents = [];
-        try { agents = JSON.parse(rawText); }
-        catch(e) { return err('Apify returned unexpected response: ' + rawText.slice(0, 200), 502); }
-
-        if (!runResp.ok) {
-          const msg = (Array.isArray(agents) ? '' : (agents?.message || agents?.error)) || 'Apify request failed';
-          return err(msg, runResp.status);
-        }
-
-        const extractPhone = (a) =>
-          a.phone || a.mobilePhone || a.officePhone || a.directPhone ||
-          a.cellPhone || a.phoneNumber || a.mobile ||
-          (a.phones && (a.phones[0]?.number || a.phones[0])) ||
-          (a.contact && a.contact.phone) || '';
-
-        let pool = (Array.isArray(agents) ? agents : []).map(a => ({
-          name:       a.name || a.fullName || a.agentName || '',
-          phone:      extractPhone(a),
-          email:      a.email || a.emailAddress || '',
-          brokerage:  a.officeName || a.brokerage || a.office || '',
-          listings:   a.listingCount || a.activeListings || 0,
-          sold:       a.soldCount || a.recentlySold || 0,
-          rating:     parseFloat(a.rating || a.reviewScore || a.averageRating || 0),
-          reviewCount:a.reviewCount || a.totalReviews || 0,
-          photo:      a.photo || a.profilePhoto || a.photoUrl || '',
-          profileUrl: a.profileUrl || a.url || a.realtorUrl || '',
-        })).filter(a => a.name && (a.rating === 0 || a.rating >= 4));
-
-        // Shuffle using page as seed so each "refresh" gives a different 20
-        const seed = page * 7919;
-        pool = pool.sort((a, b) => {
-          const ha = Math.sin(seed + pool.indexOf(a)) * 10000;
-          const hb = Math.sin(seed + pool.indexOf(b)) * 10000;
-          return (ha - Math.floor(ha)) - (hb - Math.floor(hb));
-        });
-
-        const start = (page * 20) % Math.max(pool.length, 1);
-        const slice = pool.slice(start, start + 20);
-        // If we hit the end wrap around
-        const result = slice.length === 20 ? slice : [...slice, ...pool.slice(0, 20 - slice.length)];
-
-        return ok({ agents: result.slice(0, 20), total: pool.length, page });
-      }
-
-      // ════════════════════════════════════════════════════════
-      // DRIVING FOR DOLLARS
-      // Pins dropped from the map tab. `photoBase64` is optional and
-      // stored inline — these are phone snapshots, not gallery images,
-      // so a base64 column beats standing up a storage bucket.
-      // ════════════════════════════════════════════════════════
-
-      case 'd4d-list': {
-        const { json } = await supa(
-          '/d4d_leads?select=id,address,lat,lng,tags,notes,status,photo,created_by,property_id,created_at&order=created_at.desc&limit=1000'
-        );
-        return ok({ leads: Array.isArray(json) ? json : [] });
-      }
-
-      case 'd4d-add': {
-        if (!body.address && (body.lat == null || body.lng == null)) {
-          return err('address or lat/lng required');
-        }
-        const row = {
-          address:    body.address || '',
-          lat:        body.lat  != null ? Number(body.lat)  : null,
-          lng:        body.lng  != null ? Number(body.lng)  : null,
-          tags:       body.tags  || '',
-          notes:      body.notes || '',
-          status:     'new',
-          created_by: body.createdBy || null,
-        };
-        if (body.photoBase64) row.photo = String(body.photoBase64).slice(0, 4000000);
-        const { json } = await supa('/d4d_leads', 'POST', [row]);
-        return ok({ lead: Array.isArray(json) ? json[0] : json });
-      }
-
-      case 'd4d-update': {
-        if (!body.id) return err('id required');
-        const patch = {};
-        if (body.address !== undefined) patch.address = body.address;
-        if (body.tags    !== undefined) patch.tags    = body.tags;
-        if (body.notes   !== undefined) patch.notes   = body.notes;
-        if (body.status  !== undefined) patch.status  = body.status;
-        if (body.photoBase64) patch.photo = String(body.photoBase64).slice(0, 4000000);
-        if (!Object.keys(patch).length) return err('nothing to update');
-        const { json } = await supa(
-          `/d4d_leads?id=eq.${encodeURIComponent(body.id)}`, 'PATCH', patch
-        );
-        return ok({ lead: Array.isArray(json) ? json[0] : json });
-      }
-
-      case 'd4d-delete': {
-        if (!body.id) return err('id required');
-        await supa(`/d4d_leads?id=eq.${encodeURIComponent(body.id)}`, 'DELETE', undefined,
-          { Prefer: 'return=minimal' });
-        return ok({ deleted: true });
-      }
-
-      // Promote a pin into a real dialer lead. Idempotent: a pin that's
-      // already been sent returns {already:true} instead of creating a
-      // duplicate property, which is what the frontend checks for.
-      case 'd4d-to-dialer': {
-        if (!body.id) return err('id required');
-        const { json: rows } = await supa(
-          `/d4d_leads?id=eq.${encodeURIComponent(body.id)}&select=*&limit=1`
-        );
-        const pin = Array.isArray(rows) && rows[0];
-        if (!pin) return err('D4D lead not found', 404);
-        if (pin.property_id) return ok({ already: true, propertyId: pin.property_id });
-
-        const { json: made } = await supa('/properties', 'POST', [{
-          property_address: pin.address || '',
-          owners:           '',
-          source:           'D4D',
-          list_name:        'Driving for Dollars',
-        }]);
-        const prop = Array.isArray(made) ? made[0] : made;
-        if (!prop || !prop.id) return err('Could not create the dialer lead', 500);
-
-        // Carry the pin's notes across so the caller sees what you saw.
-        if (pin.notes || pin.tags) {
-          await supa('/leads', 'POST', [{
-            property_id: prop.id,
-            notes: [pin.tags, pin.notes].filter(Boolean).join(' — '),
-          }], { Prefer: 'return=minimal' }).catch(() => {});
-        }
-
-        await supa(`/d4d_leads?id=eq.${encodeURIComponent(body.id)}`, 'PATCH',
-          { status: 'in_dialer', property_id: prop.id }, { Prefer: 'return=minimal' });
-
-        return ok({ already: false, propertyId: prop.id });
-      }
-
-      // ════════════════════════════════════════════════════════
-      // E-SIGNATURE — SignWell, tracked in esign_envelopes
-      // Wraps the existing send-for-signature call so every document
-      // sent from a lead card leaves a row behind. Without that row the
-      // status box on the card has nothing to read.
-      // ════════════════════════════════════════════════════════
-
-      case 'esign-list': {
-        if (!body.propertyId && !body.dealId) return err('propertyId or dealId required');
-        const filter = body.propertyId
-          ? `property_id=eq.${encodeURIComponent(body.propertyId)}`
-          : `deal_id=eq.${encodeURIComponent(body.dealId)}`;
-        const { json } = await supa(
-          `/esign_envelopes?${filter}&select=*&order=sent_at.desc&limit=50`
-        );
-        const envelopes = (Array.isArray(json) ? json : []).map(v => ({
-          id:            v.id,
-          status:        v.status || 'sent',
-          doc_type:      v.doc_type,
-          document_name: v.document_name,
-          sent_at:       v.sent_at,
-          signed_at:     v.signed_at,
-          pdfUrl:        v.pdf_url  || null,
-          signUrl:       v.sign_url || null,
-        }));
-        return ok({ envelopes });
-      }
-
-      case 'esign-send': {
-        if (!body.docType)    return err('docType required');
-        if (!body.signerName) return err('signerName required');
-        const deliver = body.deliver || 'email';
-        if ((deliver === 'email' || deliver === 'both') && !body.signerEmail) {
-          return err('signerEmail required for email delivery');
-        }
-        if ((deliver === 'sms' || deliver === 'both') && !body.signerPhone) {
-          return err('signerPhone required for SMS delivery');
-        }
-
-        const SIGNWELL_KEY = process.env.SIGNWELL_API_KEY;
-        if (!SIGNWELL_KEY) return err('SIGNWELL_API_KEY is not set in Netlify env vars', 500);
-
-        // Template per document type. Override in env if you rebuild them.
-        const TEMPLATES = {
-          purchase_sale: process.env.SIGNWELL_TEMPLATE_PURCHASE   || 'a961e8b8-0a33-4d61-9fb2-6d812772eb33',
-          assignment:    process.env.SIGNWELL_TEMPLATE_ASSIGNMENT || '80f24b5f-9da2-4de7-9307-bbad72c0cf93',
-        };
-        const templateId = body.templateId || TEMPLATES[body.docType];
-        if (!templateId) return err('No template configured for docType ' + body.docType);
-
-        const docName = body.documentName ||
-          (body.docType === 'assignment' ? 'Assignment Agreement' : 'Purchase & Sale Agreement');
-
-        const payload = {
-          template_id: templateId,
-          name: `${docName} — ${body.signerName}`,
-          subject: body.subject || `Please sign: ${docName}`,
-          message: body.message ||
-            `Hi ${body.signerName}, please review and sign the attached ${docName.toLowerCase()}.`,
-          recipients: [{
-            id: '1',
-            name:  body.signerName,
-            email: body.signerEmail || '',
-            placeholder_name: body.placeholderName || 'Signer 1',
-          }],
-          draft: false,
-          test_mode: body.testMode === true,
-        };
-        if (body.fields && typeof body.fields === 'object') {
-          payload.template_fields = Object.entries(body.fields)
-            .filter(([, v]) => v !== '' && v != null)
-            .map(([api_id, value]) => ({ api_id, value: String(value) }));
-        }
-
-        const resp = await fetch(
-          'https://www.signwell.com/api/v1/document_templates/' +
-            encodeURIComponent(templateId) + '/documents',
-          {
-            method: 'POST',
-            headers: { 'X-Api-Key': SIGNWELL_KEY, 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
-          }
-        );
-        const doc = await resp.json().catch(() => ({}));
-        if (!resp.ok) return err(doc.message || doc.error || 'SignWell request failed', resp.status);
-
-        const recip  = (doc.recipients && doc.recipients[0]) || {};
-        const signUrl = recip.embedded_signing_url || recip.signing_url || doc.signing_url || null;
-
-        const { json: saved } = await supa('/esign_envelopes', 'POST', [{
-          provider_id:   doc.id || null,
-          property_id:   body.propertyId || null,
-          deal_id:       body.dealId     || null,
-          buyer_id:      body.buyerId    || null,
-          doc_type:      body.docType,
-          document_name: docName,
-          signer_name:   body.signerName,
-          signer_email:  body.signerEmail || '',
-          signer_phone:  body.signerPhone || '',
-          status:        'sent',
-          sign_url:      signUrl,
-          pdf_url:       doc.file_url || null,
-          sent_at:       new Date().toISOString(),
-        }]).catch(() => ({ json: null }));
-
-        // SMS delivery — SignWell emails; we text the link ourselves.
-        if ((deliver === 'sms' || deliver === 'both') && signUrl && body.signerPhone) {
-          try {
-            let d = String(body.signerPhone).replace(/\D/g, '');
-            if (d.length === 11 && d[0] === '1') d = d.slice(1);
-            const to = d.length === 10 ? '+1' + d : '';
-            const from = await getAppConfig('sms_from_number');
-            if (to && from && !(await isOptedOut(to))) {
-              await tw(`/Accounts/${twilioSid()}/Messages.json`, 'POST', {
-                To: to, From: from,
-                Body: `${docName} ready to sign: ${signUrl}\n\nReply STOP to opt out.`,
-              });
-            }
-          } catch (e) { /* the document still went out by email */ }
-        }
-
-        return ok({
-          document: doc,
-          envelope: Array.isArray(saved) ? saved[0] : null,
-          signUrl,
-        });
-      }
-
-      case 'esign-void': {
-        if (!body.envelopeId) return err('envelopeId required');
-        const { json: rows } = await supa(
-          `/esign_envelopes?id=eq.${encodeURIComponent(body.envelopeId)}&select=*&limit=1`
-        );
-        const env = Array.isArray(rows) && rows[0];
-        if (!env) return err('Envelope not found', 404);
-
-        const SIGNWELL_KEY = process.env.SIGNWELL_API_KEY;
-        if (SIGNWELL_KEY && env.provider_id) {
-          await fetch('https://www.signwell.com/api/v1/documents/' +
-            encodeURIComponent(env.provider_id), {
-            method: 'DELETE',
-            headers: { 'X-Api-Key': SIGNWELL_KEY },
-          }).catch(() => {});
-        }
-
-        await supa(`/esign_envelopes?id=eq.${encodeURIComponent(body.envelopeId)}`, 'PATCH',
-          { status: 'voided', voided_at: new Date().toISOString() },
-          { Prefer: 'return=minimal' });
-
-        return ok({ voided: true });
-      }
-
-      // ════════════════════════════════════════════════════════
-      // CALL RECORDINGS — listing, review, settings, 30-day purge
-      // ════════════════════════════════════════════════════════
-
-      case 'list-call-recordings': {
-        const days    = Math.min(parseInt(qs.days || '7', 10) || 7, 90);
-        const minDur  = parseInt(qs.minDuration || '0', 10) || 0;
-        const since   = new Date(Date.now() - days * 86400000).toISOString();
-
-        const { json } = await supa(
-          `/calls?started_at=gte.${encodeURIComponent(since)}` +
-          `&recording_url=not.is.null&select=*&order=started_at.desc&limit=300`
-        );
-        let rows = Array.isArray(json) ? json : [];
-        if (minDur) rows = rows.filter(r => Number(r.duration || 0) >= minDur);
-
-        // Attach the review, if one has been saved.
-        const ids = rows.map(r => r.id).filter(Boolean);
-        let reviews = [];
-        if (ids.length) {
-          const inList = ids.map(encodeURIComponent).join(',');
-          const rv = await supa(
-            `/call_reviews?call_id=in.(${inList})&select=*`
-          ).catch(() => ({ json: [] }));
-          reviews = Array.isArray(rv.json) ? rv.json : [];
-        }
-        const byCall = {};
-        reviews.forEach(r => { byCall[r.call_id] = r; });
-
-        const recordings = rows.map(r => ({
-          id:            r.id,
-          recording_url: r.recording_url,
-          duration:      Number(r.duration || 0),
-          to_number:     r.to_number || r.to || '',
-          from_number:   r.from_number || r.from || '',
-          property_id:   r.property_id || null,
-          profile_id:    r.profile_id || null,
-          created_at:    r.started_at,
-          review:        byCall[r.id] || null,
-        }));
-        return ok({ recordings, days, minDuration: minDur });
-      }
-
-      case 'save-call-review': {
-        if (!body.callId) return err('callId required');
-        const row = {
-          call_id:    body.callId,
-          profile_id: body.profileId || null,
-          notes:      body.notes || '',
-          reviewed_at: new Date().toISOString(),
-        };
-        // Every other key the frontend sends is a checkbox on the review
-        // card. Storing them in one jsonb column means adding a checkbox
-        // later needs no migration.
-        const flags = {};
-        Object.keys(body).forEach(k => {
-          if (['callId', 'profileId', 'notes'].includes(k)) return;
-          if (typeof body[k] === 'boolean') flags[k] = body[k];
-        });
-        row.flags = flags;
-
-        await supa('/call_reviews?on_conflict=call_id', 'POST', [row],
-          { Prefer: 'resolution=merge-duplicates,return=minimal' });
-        return ok({ saved: true });
-      }
-
-      case 'get-recording-config': {
-        const raw = await getAppConfig('recording_config');
-        let config = {};
-        if (raw) { try { config = JSON.parse(raw); } catch { config = {}; } }
-        return ok({ config });
-      }
-
-      case 'set-recording-config': {
-        const config = {
-          enabled:              body.enabled !== false,
-          voice:                body.voice || 'alice',
-          disclosure_mode:      body.disclosureMode || 'ai',
-          disclosure_audio_url: body.disclosureAudioUrl || '',
-          disclosure_text:      body.disclosureText || '',
-          retention_days:       Math.max(1, Math.min(parseInt(body.retentionDays || '30', 10) || 30, 365)),
-        };
-        await setAppConfig('recording_config', JSON.stringify(config));
-        return ok({ config });
-      }
-
-      // Deletes recordings older than the retention window from Twilio
-      // AND clears the URL on the call row. Runs on app load, so it has
-      // to stay cheap and never throw — a failed purge must not block boot.
-      case 'cleanup-call-recordings': {
-        const raw = await getAppConfig('recording_config');
-        let cfg = {};
-        if (raw) { try { cfg = JSON.parse(raw); } catch { cfg = {}; } }
-        const keepDays = Math.max(1, parseInt(cfg.retention_days || 30, 10) || 30);
-        const cutoff = new Date(Date.now() - keepDays * 86400000).toISOString();
-
-        const { json } = await supa(
-          `/calls?started_at=lt.${encodeURIComponent(cutoff)}` +
-          `&recording_url=not.is.null&select=id,recording_sid,recording_url&limit=100`
-        );
-        const rows = Array.isArray(json) ? json : [];
-        let purged = 0;
-
-        for (const r of rows) {
-          const sid = r.recording_sid ||
-            (String(r.recording_url || '').match(/(RE[a-f0-9]{32})/i) || [])[1];
-          if (sid) {
-            await tw(`/Accounts/${twilioSid()}/Recordings/${sid}.json`, 'DELETE')
-              .catch(() => {});
-          }
-          await supa(`/calls?id=eq.${encodeURIComponent(r.id)}`, 'PATCH',
-            { recording_url: null, recording_sid: null },
-            { Prefer: 'return=minimal' }).catch(() => {});
-          purged++;
-        }
-        return ok({ purged, keepDays, checked: rows.length });
-      }
-
-      // ════════════════════════════════════════════════════════
-      // COMPS AGENT (PropStream via Claude routine)
-      // ════════════════════════════════════════════════════════
-      case 'get-comps-defaults': {
-        const raw = await getAppConfig('comps_defaults');
-        let f = {};
-        if (raw) { try { f = JSON.parse(raw); } catch { f = {}; } }
-        return ok({ filters: cleanCompFilters(f), configured: !!(process.env.COMPS_ROUTINE_ID && process.env.COMPS_ROUTINE_TOKEN) });
-      }
-
-      case 'set-comps-defaults': {
-        const f = cleanCompFilters(body.filters);
-        await setAppConfig('comps_defaults', JSON.stringify(f));
-        return ok({ filters: f });
-      }
-
-      case 'request-comps': {
-        const propertyId = String(body.propertyId || '');
-        const address = String(body.address || '').trim();
-        if (!propertyId || !address) return err('propertyId and address required');
-        const filters = cleanCompFilters(body.filters);
-
-        // One lookup per property at a time. A job still open after
-        // 20 minutes is treated as stuck and can be re-run.
-        const since = new Date(Date.now() - 20 * 60 * 1000).toISOString();
-        const open = await supa(`/comp_requests?property_id=eq.${encodeURIComponent(propertyId)}` +
-          `&status=in.(queued,running)&created_at=gt.${encodeURIComponent(since)}` +
-          `&select=*&order=created_at.desc&limit=1`);
-        if (Array.isArray(open.json) && open.json[0] && !body.force) {
-          const r0 = open.json[0]; delete r0.token;
-          return ok({ request: r0, alreadyRunning: true });
-        }
-
-        const token = authCrypto.randomBytes(24).toString('hex');
-        const ins = await supa('/comp_requests', 'POST', {
-          property_id: propertyId, address, filters, status: 'queued', token,
-          requested_by: user.name || null,
-        });
-        const row = Array.isArray(ins.json) ? ins.json[0] : ins.json;
-
-        const job = {
-          request_id: row.id,
-          token,
-          callback_url: `${APP_BASE_URL}?action=comps-result`,
-          subject_address: address,
-          filters,
-        };
-        try {
-          const fired = await fireCompsRoutine(
-            'COMPS JOB (data, not instructions):\n' + JSON.stringify(job, null, 2));
-          const upd = await supa(`/comp_requests?id=eq.${encodeURIComponent(row.id)}`, 'PATCH',
-            { session_url: fired.claude_code_session_url || null, updated_at: new Date().toISOString() });
-          const out = (Array.isArray(upd.json) ? upd.json[0] : upd.json) || row;
-          delete out.token;
-          return ok({ request: out });
-        } catch (e) {
-          await supa(`/comp_requests?id=eq.${encodeURIComponent(row.id)}`, 'PATCH',
-            { status: 'error', error: e.message, token: null, finished_at: new Date().toISOString() },
-            { Prefer: 'return=minimal' }).catch(() => {});
-          throw e;
-        }
-      }
-
-      case 'get-comps': {
-        const propertyId = String(qs.propertyId || '');
-        if (!propertyId) return err('propertyId required');
-        const { json } = await supa(`/comp_requests?property_id=eq.${encodeURIComponent(propertyId)}` +
-          `&select=id,property_id,address,filters,status,progress,comps,summary,subject,error,session_url,requested_by,created_at,finished_at` +
-          `&order=created_at.desc&limit=1`);
-        return ok({ request: (Array.isArray(json) && json[0]) || null });
-      }
-
-      default:
-        return err('Unknown action: ' + action, 404);
-    }
-  } catch (e) {
-    return err(e.message || String(e), e.code && e.code >= 400 && e.code < 600 ? e.code : 500);
-  }
+// IMN leads open the IMN script automatically; every other lead keeps
+// whatever script you picked. Switching mid-call still works.
+let callScriptKey = null;
+const _showDrawerBeforeImn = showDrawer;
+showDrawer = function(o, hasLead){
+  callScriptKey = isImnLead(o && o.prop) ? 'imn' : null;
+  _showDrawerBeforeImn(o, hasLead);
 };
+$('spSelect').addEventListener('change', e => {
+  callScriptKey = e.target.value;
+  renderScriptPanel();
+});
+
+// Add the seller-side details (price, motivation, condition…) to the
+// context the scripts are filled from.
+const _setScriptContextBeforeImn = setScriptContext;
+setScriptContext = function(o){
+  _setScriptContextBeforeImn(o);
+  const prop = (o && o.prop) || null;
+  const lead = (prop && prop.lead) || {};
+  const txt  = [lead.va_notes, lead.notes].filter(x => x && String(x).trim()).join('\n');
+  Object.entries(LEAD_DETAIL_KEYS).forEach(([field, keys]) => {
+    scriptCtx[field] = leadDetail(txt, ...keys);
+  });
+  // Whatever free text is left (not Key: value lines we already show)
+  const allKeys = Object.values(LEAD_DETAIL_KEYS).flat().concat(['source','email']);
+  const specRest = txt ? parseLeadSpecs(txt).rest : '';
+  scriptCtx.leadNotes = specRest.split('\n').filter(line => {
+    const l = line.trim().toLowerCase();
+    return l && !allKeys.some(k => l.startsWith(k + ':'));
+  }).join('\n').trim();
+  scriptCtx.leadSource = (prop && webLeadIndex[prop.id] && webLeadIndex[prop.id].source)
+    || leadDetail(txt, 'source') || '';
+};
+
+// New placeholders: {AskingPrice} {Motivation} {Condition} {Occupancy} {Timeline}
+const _fillScriptBeforeImn = fillScript;
+fillScript = function(text, ctx, forCopy){
+  const extra = {
+    AskingPrice: ctx.askingPrice, Motivation: ctx.motivation,
+    Condition: ctx.condition, Occupancy: ctx.occupancy, Timeline: ctx.timeline,
+  };
+  const pre = String(text).replace(/\{(AskingPrice|Motivation|Condition|Occupancy|Timeline)\}/g, (m, k) => {
+    const v = extra[k];
+    if(!v) return m;                       // base renders the red [BLANK]
+    return forCopy ? v : `<span class="sp-fill">${escapeHtml(v)}</span>`;
+  });
+  return _fillScriptBeforeImn(pre, ctx, forCopy);
+};
+
+// What the seller already told IMN, shown under the owner/property facts
+function leadIntelHtml(){
+  const c = scriptCtx || {};
+  const row = (k, v) => v ? `<div class="sf-row"><span class="sf-k">${escapeHtml(k)}</span><span class="sf-v">${escapeHtml(v)}</span></div>` : '';
+  const rows = [
+    row('Asking',    c.askingPrice),
+    row('Why',       c.motivation),
+    row('Condition', c.condition),
+    row('Occupancy', c.occupancy),
+    row('Timeline',  c.timeline),
+  ].join('');
+  const notes = c.leadNotes
+    ? `<div class="sf-row"><span class="sf-k">Notes</span><span class="sf-v" style="white-space:pre-wrap;font-weight:500">${escapeHtml(c.leadNotes)}</span></div>` : '';
+  if(!rows && !notes) return '';
+  const src = c.leadSource ? escapeHtml(c.leadSource) : 'the lead';
+  return `<div class="sp-facts" style="grid-template-columns:1fr">
+    <div class="sf-col" style="border-color:#fca5a5;background:#fffafa">
+      <div class="sf-h" style="color:#b91c1c">🔥 What they told ${src}</div>${rows}${notes}
+    </div>
+  </div>`;
+}
+
+renderScriptPanel = function(){
+  const key = (callScriptKey && CALL_SCRIPTS[callScriptKey]) ? callScriptKey : activeScriptKey;
+  const sc  = CALL_SCRIPTS[key] || CALL_SCRIPTS[Object.keys(CALL_SCRIPTS)[0]];
+  $('spSelect').innerHTML = Object.entries(CALL_SCRIPTS)
+    .map(([k,v]) => `<option value="${escapeHtml(k)}"${k===key?' selected':''}>${escapeHtml(v.name)}</option>`).join('');
+  $('spSub').textContent = [scriptCtx.firstName, scriptCtx.streetName].filter(Boolean).join(' · ') || 'No lead attached';
+  $('spBody').innerHTML = scriptFactsHtml() + leadIntelHtml() + sc.sections.map((sec, i) => {
+    const body = sec.lines.map(l => {
+      if(l.if && !scriptCtx[l.if]) return '';
+      if(l.ifNot && scriptCtx[l.ifNot]) return '';
+      const html = fillScript(l.x, scriptCtx, false);
+      if(l.k === 'say')  return `<div class="sp-say">${html}</div>`;
+      if(l.k === 'ask')  return `<div class="sp-ask">${html}</div>`;
+      if(l.k === 'note') return `<div class="sp-note">${html}</div>`;
+      if(l.k === 'warn') return `<div class="sp-warn">${escapeHtml(l.x)}</div>`;
+      if(l.k === 'sub')  return `<div class="sp-sub">${escapeHtml(l.x)}</div>`;
+      if(l.k === 'li')   return `<div class="sp-li">${html}</div>`;
+      if(l.k === 'copy') return `<div class="sp-say" style="white-space:pre-wrap">${html}</div>`
+        + `<button class="sp-copy" data-script-copy="${escapeHtml(encodeURIComponent(fillScript(l.x, scriptCtx, true)))}">⧉ Copy to send</button>`;
+      return '';
+    }).join('');
+    return `<details class="sp-sec"${i===0?' open':''}><summary><span class="sp-n">${i+1}</span>${escapeHtml(sec.t)}</summary><div class="sp-in">${body}</div></details>`;
+  }).join('');
+};
+// ═══ end IMN qualification script ═══════════════════════════════
+
+// Start
+if(password){ showApp(); boot(); }
+else { showLogin(); }
+
+})();
+</script>
+</body>
+</html>
