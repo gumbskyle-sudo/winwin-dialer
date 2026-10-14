@@ -2177,7 +2177,7 @@ const DEFAULT_WEBSITE = 'winwinproperties.net';
 const companyName = () => localStorage.getItem(LS.company) || DEFAULT_COMPANY;
 const companySite = () => localStorage.getItem(LS.website) || DEFAULT_WEBSITE;
 // Bump this on every deploy so you can see which build is actually live
-const BUILD_ID = 'build 2026-10-13-deadfix';
+const BUILD_ID = 'build 2026-10-14-compsworker';
 const DEFAULT_VM_MESSAGE = "Hi {FirstName}, we are calling from Win Win Properties to give you a quick offer on your property at {Address}. Give us a call back at {CallbackNumber}, or find us online at win win properties dot net. That's W W W dot winwinproperties dot net. Thanks, and have a great day.";
 let backend  = localStorage.getItem(LS.backend) || '/api';
 let password = localStorage.getItem(LS.pwd) || '';
@@ -2221,12 +2221,14 @@ const compsState  = {};          // pid -> latest request row (or null)
 const compsPolls  = {};          // pid -> interval id
 let compsDefaults = null;
 let compsConfigured = true;
+let compsMode = 'worker';
+let compsWorkerSeen = null;   // last time the laptop worker checked in
 
 async function loadCompsDefaults(){
   if(compsDefaults) return compsDefaults;
   try{
     const j = await api('get-comps-defaults');
-    compsDefaults = j.filters; compsConfigured = !!j.configured;
+    compsDefaults = j.filters; compsConfigured = !!j.configured; compsMode = j.mode || 'worker';
   }catch(e){ compsDefaults = {radius_miles:0.5,months_back:6,sqft_pct:20,beds_plus_minus:1,baths_plus_minus:1,year_built_plus_minus:15,same_property_type:true,sold_only:true,max_comps:10,notes:''}; }
   return compsDefaults;
 }
@@ -2270,13 +2272,21 @@ function readCompsForm(pid){
 function compsPanelHtml(pid){
   const r = compsState[pid];
   const f = (r && r.filters) || compsDefaults || {};
-  const setupNote = compsConfigured ? '' : `<div class="cp-err">The comps agent isn't connected yet. Add COMPS_ROUTINE_ID and COMPS_ROUTINE_TOKEN in Netlify.</div>`;
+  const setupNote = compsConfigured ? '' : (compsMode === 'routine'
+    ? `<div class="cp-err">The comps agent isn't connected yet. Add COMPS_ROUTINE_ID and COMPS_ROUTINE_TOKEN in Netlify.</div>`
+    : `<div class="cp-err">The comps worker isn't set up yet: AGENT_KEY is missing in Netlify.</div>`);
+  const workerAge = compsWorkerSeen ? (Date.now() - new Date(compsWorkerSeen).getTime()) : Infinity;
+  const workerOffline = compsMode !== 'routine' && workerAge > 60*1000;
   if(r === undefined) return `<div class="cp-status"><span class="cp-spin"></span> Loading…</div>`;
   const watch = r && r.session_url ? ` · <a href="${escapeHtml(r.session_url)}" target="_blank" rel="noopener">watch the agent</a>` : '';
   if(r && (r.status === 'queued' || r.status === 'running')){
-    const msg = r.progress || (r.status === 'queued' ? 'Starting the agent on your computer…' : 'Pulling comps in PropStream…');
-    return `<div class="cp-status"><span class="cp-spin"></span> ${escapeHtml(msg)}</div>
-      <div class="cp-meta">Usually 1–3 minutes. Keep your computer on with Chrome open${watch}.</div>`;
+    const msg = r.progress || (r.status === 'queued'
+      ? (compsMode === 'routine' ? 'Starting the agent on your computer…' : 'Waiting for the comps worker on your computer…')
+      : 'Pulling comps in PropStream…');
+    const offline = (r.status === 'queued' && workerOffline)
+      ? `<div class="cp-err">The comps worker on your laptop isn't running. Double-click <b>Start Comps Worker</b> on the laptop (Chrome open, signed in to PropStream). This job will start as soon as it's on.</div>` : '';
+    return `<div class="cp-status"><span class="cp-spin"></span> ${escapeHtml(msg)}</div>${offline}
+      <div class="cp-meta">Usually 2–5 minutes. Keep the laptop on with Chrome open and the worker window running${watch}.</div>`;
   }
   let head = '';
   if(r && r.status === 'error'){
@@ -2317,7 +2327,7 @@ function startCompsPoll(pid){
   compsPolls[pid] = setInterval(async () => {
     try{
       const j = await api('get-comps&propertyId=' + encodeURIComponent(pid));
-      compsState[pid] = j.request;
+      compsState[pid] = j.request; if(j.workerSeenAt !== undefined) compsWorkerSeen = j.workerSeenAt;
       paintCompsPanel(pid);
       const st = j.request && j.request.status;
       if(st === 'done' || st === 'error' || Date.now() - started > 20*60*1000){
@@ -2338,7 +2348,7 @@ async function toggleCompsPanel(pid){
   await loadCompsDefaults();
   try{
     const j = await api('get-comps&propertyId=' + encodeURIComponent(pid));
-    compsState[pid] = j.request;
+    compsState[pid] = j.request; if(j.workerSeenAt !== undefined) compsWorkerSeen = j.workerSeenAt;
   }catch(e){ compsState[pid] = null; toast(e.message,'err'); }
   paintCompsPanel(pid);
   const st = compsState[pid] && compsState[pid].status;
@@ -2355,7 +2365,7 @@ async function runComps(pid){
   paintCompsPanel(pid);
   try{
     const j = await api('request-comps', {method:'POST', body:{propertyId:pid, address, filters}});
-    compsState[pid] = j.request;
+    compsState[pid] = j.request; if(j.workerSeenAt !== undefined) compsWorkerSeen = j.workerSeenAt;
     if(j.alreadyRunning) toast('Comps for this property are already running','ok');
     paintCompsPanel(pid);
     startCompsPoll(pid);
